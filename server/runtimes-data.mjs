@@ -118,18 +118,26 @@ export function createRuntimePoller({endpoints,tokens,fetcher=fetch,intervalMs=D
   return s.successAt?'stale':'error';
  }
  const status=id=>{const s=states.get(id);return {state:stateOf(s),detectedKind:s?.detected||s?.result?.kind||null,lastAttemptAt:iso(s?.attemptAt),lastSuccessAt:iso(s?.successAt),lastError:s?.error||null,lastErrorAt:iso(s?.errorAt)};};
+ const kindOf=e=>{const s=states.get(e.id);return s?.result?.kind||s?.detected||(e.kind==='auto'?null:e.kind);};
+ // The runtime id each endpoint has in home.runtimes: its kind, and the port after it when another endpoint
+ // of the same machine has that kind already (in list order). The request history uses the same ids.
+ function runtimeIds(list){
+  const ids=new Map(),taken=new Map();
+  for(const e of list){const base=kindOf(e)||'runtime',used=taken.get(e.machine)||new Set();taken.set(e.machine,used);
+   const id=used.has(base)?`${base}-${new URL(e.url).port||'80'}`:base;used.add(id);ids.set(e.id,id);}
+  return ids;
+ }
  // home.runtimes: {machineId: {source, observedAt, runtimes[]}} for the endpoints read at least once.
  async function report(){
   if(await enabled()===false)return {};
-  const list=await endpoints(),out={};
+  const list=await endpoints(),out={},ids=runtimeIds(list);
   for(const e of list){
    const s=states.get(e.id);if(!s?.attemptAt)continue;
-   const st=stateOf(s),r=s.result,kind=r?.kind||s.detected||(e.kind==='auto'?null:e.kind);
+   const st=stateOf(s),r=s.result,kind=kindOf(e);
    const fresh=st==='ok';
    const entry=out[e.machine]??={source:'přímo z runtimu',observedAt:null,runtimes:[]};
    const seen=new Date(s.attemptAt).toISOString();if(!entry.observedAt||seen<entry.observedAt)entry.observedAt=seen;
-   const base=kind||'runtime';let id=base;
-   if(entry.runtimes.some(x=>x.id===id))id=`${base}-${new URL(e.url).port||'80'}`;
+   const id=ids.get(e.id);
    entry.runtimes.push({id,name:e.name||KIND_NAMES[kind]||new URL(e.url).host,kind:kind||'',source:'přímo z runtimu',observedAt:seen,
     // Refused: the runtime is not running, so nothing it had is in memory. Any other failure says nothing.
     status:fresh?'running':st==='off'?'stopped':'unknown',url:e.url,version:r?.version||null,
@@ -140,6 +148,8 @@ export function createRuntimePoller({endpoints,tokens,fetcher=fetch,intervalMs=D
  }
  return {
   poll,report,status,states,
+  // endpoint id → runtime id, for the current endpoints.
+  runtimeIds:async()=>runtimeIds(await endpoints()),
   start(){if(timer)return;void poll({force:true});timer=setInterval(()=>void poll({force:true}),intervalMs);timer.unref?.();},
   stop(){clearInterval(timer);timer=null;},
  };

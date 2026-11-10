@@ -49,6 +49,8 @@ export function inCidrs(ip,cidrs){
 export const RUNTIME_KINDS=Object.freeze(['auto','llama-swap','ollama','lmstudio','llama-cpp','vllm','sglang','omlx','mlx-serve','openai']);
 export const RUNTIME_ENDPOINT_ID=/^[a-z][a-z0-9-]{1,47}$/;
 export const RUNTIME_ENDPOINT_LIMIT=40;
+export const RUNTIME_CLIENT_FAMILY=/^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$/;
+export const RUNTIME_CLIENT_LIMIT=60;
 const PRIVATE_NETS=['10.0.0.0/8','172.16.0.0/12','192.168.0.0/16'].map(parseCidr);
 const loopback=host=>host==='localhost'||host==='[::1]'||(ipv4(host)!==null&&host.startsWith('127.'));
 // → {id, machine, kind, url, name} or throws Error(message) naming the field. where: the field's path.
@@ -94,7 +96,7 @@ function machine(raw,i){
  return {id:raw.id,name:str(raw.name??raw.id,60,`${where}.name`,{empty:false}),hostname:str(raw.hostname??'',253,`${where}.hostname`),ip,role,picture,thermoId,hardware,ssh,stack};
 }
 export function validateSite(raw={}){
- keys(raw,['$comment','siteName','lanCidrs','timeZone','defaultLanguage','publicOrigin','machines','inventory','tracker','security','router','runtimes','strings','plugins'],'the file');
+ keys(raw,['$comment','siteName','lanCidrs','timeZone','defaultLanguage','publicOrigin','machines','inventory','tracker','security','router','runtimes','runtimeClients','strings','plugins'],'the file');
  const lanCidrs=list(raw.lanCidrs??[],16,'lanCidrs').map((c,i)=>parseCidr(c)?.text??fail(`lanCidrs[${i}] must be an IPv4 network such as 10.0.0.0/24`));
  const timeZone=raw.timeZone??null;
  if(timeZone!==null){try{new Intl.DateTimeFormat('en',{timeZone});}catch{fail('timeZone must be an IANA zone such as Europe/Berlin, or null');}}
@@ -131,6 +133,16 @@ export function validateSite(raw={}){
   if(!ids.includes(e.machine))fail(`runtimes[${i}].machine is not a machine id of this file`);return e;});
  if(new Set(runtimes.map(r=>r.id)).size!==runtimes.length)fail('runtimes have duplicate ids');
  if(new Set(runtimes.map(r=>r.url)).size!==runtimes.length)fail('runtimes list one URL twice');
+ // Who a User-Agent family is in this household, for the runtimes' request history: {"<family>": "<client>"},
+ // the family being the first word of the User-Agent ("claude-cli", "deno"). Wins over the generic names
+ // in server/runtime-history.mjs; matched without regard to case.
+ const runtimeClients={};
+ if(raw.runtimeClients!==undefined){if(!plain(raw.runtimeClients))fail('runtimeClients must be an object: {"<User-Agent family>": "<client name>"}');
+  const entries=Object.entries(raw.runtimeClients);if(entries.length>RUNTIME_CLIENT_LIMIT)fail(`runtimeClients may name at most ${RUNTIME_CLIENT_LIMIT} families`);
+  for(const [family,name] of entries){
+   if(!RUNTIME_CLIENT_FAMILY.test(family))fail(`runtimeClients key "${family.slice(0,40)}" must be a User-Agent family: letters, digits, . _ + -, at most 40`);
+   if(Object.keys(runtimeClients).some(k=>k.toLowerCase()===family.toLowerCase()))fail(`runtimeClients names the family "${family}" twice`);
+   runtimeClients[family]=str(name,60,`runtimeClients.${family}`,{empty:false}).trim();}}
  if(raw.plugins!==undefined&&!plain(raw.plugins))fail('plugins must be an object keyed by plugin id');
  // Translations of the site's own labels (the UI's source language is Czech): {"en": {"source text": "translation"}}.
  const strings={};
@@ -138,7 +150,7 @@ export function validateSite(raw={}){
  return deepFreeze({siteName:str(raw.siteName??'',60,'siteName'),lanCidrs,timeZone,defaultLanguage,publicOrigin,machines,
   inventory:{places,secretStores},tracker:{projects},
   security:{gitHost:security.gitHost?str(security.gitHost,253,'security.gitHost'):null,gitUrl:security.gitUrl?str(security.gitUrl,300,'security.gitUrl'):null,certificates,order},
-  router,runtimes,strings,plugins:raw.plugins??{}});
+  router,runtimes,runtimeClients,strings,plugins:raw.plugins??{}});
 }
 function deepFreeze(v){if(v&&typeof v==='object'&&!Object.isFrozen(v)){Object.freeze(v);for(const x of Object.values(v))deepFreeze(x);}return v;}
 export const EMPTY_SITE=validateSite({});

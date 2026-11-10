@@ -46,6 +46,7 @@ the field. `HOME_HUB_SITE_CONFIG=/path/to/file.json` selects another file; `none
 | `tracker.projects[]` | `{id, key, name, type}`: projects a brand-new tracker starts with | The tracker starts with no projects |
 | `security` | `gitHost` / `gitUrl` of a Forgejo the SSH-key collector should read, `certificates[]` (`{match, label}` names for TLS key files), `order[]` (machine order in the key list) | No git server is queried; TLS keys are labelled generically |
 | `runtimes[]` | `{id?, machine, kind, url, name?}`: local LLM runtimes the hub reads directly (core module `runtimes`). `machine` is a machine of this file; `kind` is `auto` (detected) or one of `llama-swap`, `ollama`, `lmstudio`, `llama-cpp`, `vllm`, `sglang`, `omlx`, `mlx-serve`, `openai`; `url` is an origin only (`http://127.0.0.1:11434`): no path, no user or password, an IP address on loopback or inside `lanCidrs` (any private range when `lanCidrs` is empty). `id` defaults to `<machine>-<port>`. At most 40, each URL once. Entries added through the API live in `state/runtimes-config.json`; these are read-only there | No direct reads; a plugin may still provide `home.runtimes` |
+| `runtimeClients` | `{"<User-Agent family>": "<client name>"}`: what the runtime request history calls a client, by the first word of its User-Agent (`deno`, `python-httpx`, …), matched without regard to case. Wins over the generic names in `server/runtime-history.mjs` (`claude-cli` → Claude Code, `codex` → Codex, …). At most 60; a family is letters, digits and `._+-` (≤ 40), a name ≤ 60 characters. Applies to stored history too: the name is looked up when the history is read | The generic names; an unknown family is shown as itself |
 | `router` | `{adapter, host, site}`: the router feed. `adapter` is `unifi` (included) or the id of an adapter a plugin provides; `host` is the gateway the included collector reads (default: the machine with role `router`); `site` its UniFi site name | No router feed: the router tile and page say what to set up |
 | `strings.en` | English for your own labels (the UI's source language is Czech): `{"source text": "translation"}` | Your labels show as written |
 | `plugins.<id>` | Free-form settings for a plugin; core does not look inside | — |
@@ -226,7 +227,7 @@ fine).
 | `home.snapshots` | `{machineId: {snapshot, bridge}}` — what an agent on the machine reports: `snapshot.services[]`, `memory`, `uptimeSeconds`, `collectedAt` | Overview tiles and the machine page stack |
 | `home.services` | `{machineId: services[]}` — reachability probes for a machine without an agent (role `nas`) | The NAS tile's online state and service list |
 | `home.runtimes` | `{machineId: {source, observedAt, runtimes: [{id, name, kind, status: running\|stopped\|unknown, url, version, source?, models: [{id, state, sizeGb, contextTokens, ttlRemainingSeconds}], stats: [{label, value}]}]}}` — local LLM runtimes on a machine (llama-swap, Ollama, LM Studio, llama.cpp, vLLM, …). Core provides it too, from the runtimes it reads directly, and joins every provider's report per machine (below). Core bounds it (20 runtimes, 30 models, 12 stats each). A model's `state` is `loaded`, `loading` or anything else for "not in memory"; the first of `stats` is the figure a card prints large; `label` and `source` go through the plugin's `strings` | The "Local LLM runtimes" section of a machine page, one card per runtime. The telemetry agent does not report runtimes: a machine that neither a provider nor a direct endpoint reports on has no such section. Report `runtimes: []` only when you watch the machine and it runs none. A machine with runtimes shows its GPU on its tile's small chart, any other its CPU |
-| `runtimes.requests` | `{id, read({from, to, limit}) → Promise<items[]>}` — request history of local model runtimes. An item: `{machine, runtime, model, at, path, inputTokens, outputTokens, promptTps, generationTps, durationMs, client, clientMachine?, clientAddress?}`. `path` is the URL path or a kind (`chat`, `embeddings`, `images`, `audio`); `model` is the name the client asked for (a gateway alias is fine); `client` is who sent it when the provider can tell, else empty ("Unattributed"); `clientMachine` is a machine id, only when the provider knows it; `clientAddress` is the address the request came from (a site machine's `ip` names that machine, loopback names none). Core de-duplicates items two providers both report | The LLM & Diffusion page: requests, tokens and tok/s over time, the clients table and the traffic in the wiring diagram. Without a provider the page shows live state only |
+| `runtimes.requests` | `{id, read({from, to, limit}) → Promise<items[]>}` — request history of local model runtimes. An item: `{machine, runtime, model, at, path, inputTokens, outputTokens, promptTps, generationTps, durationMs, client, clientMachine?, clientAddress?, metricId?}`; `metricId` is the runtime's own record id, when it has one. `path` is the URL path or a kind (`chat`, `embeddings`, `images`, `audio`); `model` is the name the client asked for (a gateway alias is fine); `client` is who sent it when the provider can tell, else empty ("Unattributed"); `clientMachine` is a machine id, only when the provider knows it; `clientAddress` is the address the request came from (a site machine's `ip` names that machine, loopback names none). Core provides it too, from the history it keeps of the llama-swaps it reads (below). Core de-duplicates items two providers both report: by `machine`, `runtime`, `metricId` and `at` when `metricId` is given (the copy that names a client is kept), else by the whole item | The LLM & Diffusion page: requests, tokens and tok/s over time, the clients table and the traffic in the wiring diagram. Without a provider the page shows live state only |
 | `inventory.writer` | `{put(change, by), edit(input)}` or `null` — where inventory edits go instead of the local file. Optional: `remove(change)` and `bulk(change, {by, user})`; without them delete and bulk upsert answer `501` | Inventory map and services catalog |
 | `router.adapter` | `{id, title, read(context)}` — another router's census and health. `read` resolves to an observation `{status, observedAt, model, firmware, routerMac, devices[], hardware[]}` or `null`; core validates and bounds it (`server/router-data.mjs`). Optional `staleAfterSeconds` | `GET /api/router`, the router tile and page |
 
@@ -263,6 +264,26 @@ joins the two (`mergeRuntimeReports` in `server/home-data.mjs`):
   (one that only filled gaps does not count).
 
 So a plugin needs to do nothing to coexist with the direct reads: report your runtimes with their real `url`.
+
+#### `runtimes.requests` from core
+
+The same module keeps a request history of every endpoint that is llama-swap (`server/runtime-history.mjs`) and
+provides it as `runtimes.requests` (id `runtimes-history`) once there is one: a llama-swap endpoint is
+configured, or history is on disk. Each poll interval it reads `GET /api/metrics/activity?page=<n>&limit=200`
+from page 1 until a page holds a record it already has (at most 10 pages; the first read after a start takes
+the whole buffer), and it holds `GET /logs/stream/http?no-history` open, reconnecting after 5 s and up to a
+minute. Those two are the only history reads (`HISTORY_READS`), separate from the adapters' `READ_PATHS` and
+refused before a request for any other path or query. A record is joined to the access-log line with the same
+path and status, a duration within 1.5 s or 10 %, that arrived from 10 s before its time to 15 s after it
+ended; while the stream is connected, a record that ended less than 15 s ago waits for the next read.
+
+Stored per machine in `<state>/runtimes/<machine>/requests-YYYY-MM.jsonl` (UTC months, files 0600, 13 months
+kept, pruned once a month): `{machine, runtime, model, at, metricId, path, status, inputTokens, outputTokens,
+cacheTokens, promptTps, generationTps, durationMs, client, uaFamily?, clientMachine?, clientAddress?}`. The
+runtime id is the one `home.runtimes` gives the endpoint. Records are de-duplicated by `metricKey` (machine,
+runtime, `metricId`, `at`) over the last 35 days (at most 200 000 keys); a record older than that is not taken
+from a runtime. `scripts/import-runtime-history.mjs` adds older history from a local file (this format, or v1's
+`history-YYYY-MM.jsonl`), de-duplicated over every month it touches.
 A runtime may carry its own `source` (a source-language label, like the machine's).
 When no host agent reports a service, a runtime with the same `id` as a stack block's `service` fills that
 block (state and models), as a bridge's service does.
@@ -326,6 +347,11 @@ Every toggle, test and settings change is a line in the access audit (`integrati
 it. Settings changes name the keys, never a value.
 
 Core's own LLM-runtime reader declares `runtimes.endpoints` (kind `llm-runtimes`), one item per runtime endpoint.
+A llama-swap item's summary adds when a record was last added, how many arrived today (on the site's clock) and
+whether the access-log stream is connected; the same, as `history` (`{lastSyncAt, lastIngestedAt, recordsToday,
+stream: connected | connecting | reconnecting | off, lastError?}`), is on that endpoint in
+`GET /api/runtimes/endpoints`. Off, the module reads nothing, closes the access-log streams at once and provides
+no `runtimes.requests`.
 
 ### The router adapter
 

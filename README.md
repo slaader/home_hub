@@ -295,6 +295,39 @@ models of the runtimes above them, once something reports that machine's runtime
 3. **A telemetry agent (later).** The telemetry agent does not report runtimes today. If it ever does, it
    becomes one more provider of the same shape.
 
+### Usage history on the LLM & Diffusion page
+
+The **LLM & Diffusion** page (`#models`) charts requests, tokens and tokens per second over time, lists the
+clients that sent them and draws the traffic on its wiring diagram. For a llama-swap the hub reads directly,
+the hub keeps that history itself:
+
+- Every 30 seconds it reads llama-swap's request log (`GET /api/metrics/activity`, 200 records a page, at most
+  10 pages, stopping at the first record it already has). Reading does not empty that log. The first read
+  takes the whole log, so the page has history from the first minute.
+- It also keeps llama-swap's access log open (`GET /logs/stream/http?no-history`). It matches each request to
+  its log line by path, status, time and duration, and names the client from the first word of the line's
+  User-Agent: `claude-cli` is Claude Code, `codex` Codex, `python-httpx` Python, and so on. Name your own in
+  `site.json`:
+
+  ```json
+  "runtimeClients": {"deno": "Memory service", "node": "AI gateway"}
+  ```
+
+  Without the stream, or for a request whose line never came, the client is "Unattributed". A request from
+  `127.0.0.1` names no machine (it may be this one or anything tunnelled into it). A request from a site
+  machine's `ip` names that machine.
+- It stores request fields only, never a prompt or a body: one JSON line per request in
+  `data/state/runtimes/<machine>/requests-YYYY-MM.jsonl`. It keeps 13 months and de-duplicates by llama-swap's
+  record id together with its time, so a restarted llama-swap (whose ids start at 1 again) neither loses nor
+  repeats a request.
+- `node scripts/import-runtime-history.mjs --machine <id> <file.jsonl>` adds older history from a file on
+  this machine (the store's own format, or a v1 hub's `history-YYYY-MM.jsonl`). Running it twice adds nothing.
+- Turning **LLM runtimes** off on the integrations page stops the reads and closes the stream. Each
+  llama-swap endpoint's line there shows when a record was last added and how many came in today.
+
+A plugin can supply history from elsewhere (`runtimes.requests`, [docs/plugins.md](docs/plugins.md)). When two
+sources report the same request, it is counted once, and the copy that names a client is kept.
+
 ## Collectors (optional)
 
 Collectors are scripts you run from a scheduler. They look at your machines over SSH, read only, and write

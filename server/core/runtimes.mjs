@@ -7,15 +7,20 @@
 // (stored in <state>/runtimes-config.json); a bearer token, when a runtime needs one, is stored server-side
 // and never returned. Every read is a GET on an allowlisted path (server/runtime-adapters.mjs).
 //
-// It also declares itself as an integration (id runtimes.endpoints) for the integrations page: status() and
+// It also keeps its own request history of the llama-swap endpoints (server/runtime-history.mjs: the activity
+// buffer, joined to the access-log stream for the client) under <state>/runtimes/<machine>/, and provides it
+// as runtimes.requests for the LLM & Diffusion page.
+//
+// It declares itself as an integration (id runtimes.endpoints) for the integrations page: status() and
 // test() return {state, summary, lastSuccessAt, lastError, configuredBy, items}; while hub.integrationEnabled
-// says it is off, nothing is read and nothing is provided.
+// says it is off, nothing is read (no poll, no history read, no stream held open) and nothing is provided.
 import path from 'node:path';
 import {toolError} from '../mcp.mjs';
 import {RUNTIME_KINDS,RUNTIME_ENDPOINT_ID,RUNTIME_ENDPOINT_LIMIT} from '../site-config.mjs';
 import {KIND_NAMES,READ_PATHS} from '../runtime-adapters.mjs';
 import {createEndpointStore,createTokenStore,createRuntimePoller,allEndpoints,checkEndpoint,DEFAULT_INTERVAL_MS} from '../runtimes-data.mjs';
-import {tx,field} from '../text.mjs';
+import {createRequestHistory,createHistoryCollector,HISTORY_READS} from '../runtime-history.mjs';
+import {tx,sentences} from '../text.mjs';
 
 export const INTEGRATION_ID='runtimes.endpoints';
 const isEnabled=async hub=>typeof hub.integrationEnabled!=='function'||(await hub.integrationEnabled(INTEGRATION_ID))!==false;
@@ -40,10 +45,11 @@ const idOf=input=>{if(typeof input.id!=='string'||!RUNTIME_ENDPOINT_ID.test(inpu
 // Wait a little for the first read of a new endpoint, so the answer can say whether it works.
 const settle=(p,ms)=>Promise.race([p,new Promise(r=>setTimeout(r,ms).unref?.())]).catch(()=>{});
 
-async function listEndpoints(state){
+async function listEndpoints(state,hub=null){
  const tokenIds=new Set(await state.tokens.ids());
- const endpoints=(await state.endpoints()).map(e=>({...e,hasToken:tokenIds.has(e.id),...state.poller.status(e.id)}));
- return {endpoints,kinds:[...RUNTIME_KINDS],readPaths:[...READ_PATHS],limits:{endpoints:RUNTIME_ENDPOINT_LIMIT},intervalSeconds:Math.round(state.intervalMs/1000)};
+ const endpoints=await Promise.all((await state.endpoints()).map(async e=>{const h=hub?await historyOf(state,hub,e):null;
+  return {...e,hasToken:tokenIds.has(e.id),...state.poller.status(e.id),...(h?{history:(({sentence,...x})=>x)(h)}:{})};}));
+ return {endpoints,kinds:[...RUNTIME_KINDS],readPaths:[...READ_PATHS],historyReadPaths:[...HISTORY_READS],limits:{endpoints:RUNTIME_ENDPOINT_LIMIT},intervalSeconds:Math.round(state.intervalMs/1000)};
 }
 async function upsertEndpoint(state,hub,input,principal){
  only(input,['endpoint']);
@@ -73,22 +79,42 @@ function itemOf(e,st,result){
  else if(st.state==='waiting')summary=tx('čeká na první čtení');
  else if(st.state==='stale')summary=tx('stará data, poslední chyba: {error}',{error:st.lastError||'—'});
  else summary=tx('chyba: {error}',{error:st.lastError||'—'});
- return {id:e.id,label,state:st.state==='waiting'?'stale':st.state,...field('summary',summary),...(st.lastSuccessAt?{lastSuccessAt:st.lastSuccessAt}:{}),
+ return {id:e.id,label,state:st.state==='waiting'?'stale':st.state,summary,...(st.lastSuccessAt?{lastSuccessAt:st.lastSuccessAt}:{}),
   ...(st.lastError?{lastError:st.lastError}:{}),machine:e.machine,url:e.url,kind:e.kind,detectedKind:st.detectedKind};
+}
+// The start of today on the site's clock, and a time as HH:MM there (with the date when it is not today).
+function siteClock(timeZone,now){
+ const zone=timeZone||'UTC';let parts;
+ try{parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:zone,hourCycle:'h23',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}).formatToParts(now).map(x=>[x.type,x.value]));}
+ catch{return siteClock('UTC',now);}
+ const off=Date.UTC(+parts.year,+parts.month-1,+parts.day,+parts.hour%24,+parts.minute,+parts.second)-Math.floor(now/1000)*1000;
+ const since=Math.floor((now+off)/86400000)*86400000-off;
+ const label=iso=>{const ms=Date.parse(iso),local=new Date(ms+off).toISOString();return ms>=since?local.slice(11,16):`${local.slice(0,10)} ${local.slice(11,16)}`;};
+ return {since,label};
+}
+// "historie: naposledy 14:05, dnes 12 záznamů" for an endpoint whose history the hub keeps.
+async function historyOf(state,hub,e,now=Date.now()){
+ const h=state.history.status(e.id);if(!h)return null;
+ const clock=siteClock(hub.site?.timeZone,now),s=await state.requests.summary(e.machine,{since:clock.since,now}).catch(()=>null);
+ const out={lastSyncAt:h.lastSyncAt,lastIngestedAt:s?.lastAddedAt||null,recordsToday:s?.recordsToday??0,stream:h.stream.state,...(h.lastError?{lastError:h.lastError}:{})};
+ const when=out.lastIngestedAt?clock.label(out.lastIngestedAt):'—';
+ const stream=h.stream.state==='connected'?tx('· klienti z logu'):tx('· log klientů nedostupný');
+ return {...out,sentence:sentences(tx('· historie: naposledy přibyla {time}, dnes záznamů {n}',{time:when,n:out.recordsToday}),stream)};
 }
 export async function integrationStatus(state,hub){
  const list=await state.endpoints();
  const configuredBy=[];
  for(const e of list){const who=e.source==='site'?{source:'site',name:'site.json'}:{source:e.source,name:e.addedBy||'—'};
   if(!configuredBy.some(x=>x.source===who.source&&x.name===who.name))configuredBy.push(who);}
- if(!await isEnabled(hub))return {state:'disabled',...field('summary',tx('Vypnuto: endpointy se nečtou.')),configuredBy,
+ if(!await isEnabled(hub))return {state:'disabled',summary:tx('Vypnuto: endpointy se nečtou.'),configuredBy,
   items:list.map(e=>({id:e.id,label:`${e.name||KIND_NAMES[e.kind]||'runtime'} · ${e.machine} · ${hostOf(e.url)}`,state:'disabled',summary:''}))};
- if(!list.length)return {state:'not-configured',...field('summary',tx('Žádný endpoint: přidej ho v site.json → runtimes, přes API nebo nástrojem runtime_endpoint_upsert.')),configuredBy,items:[]};
- const items=list.map(e=>itemOf(e,state.poller.status(e.id),state.poller.states.get(e.id)?.result));
+ if(!list.length)return {state:'not-configured',summary:tx('Žádný endpoint: přidej ho v site.json → runtimes, přes API nebo nástrojem runtime_endpoint_upsert.'),configuredBy,items:[]};
+ const items=await Promise.all(list.map(async e=>{const item=itemOf(e,state.poller.status(e.id),state.poller.states.get(e.id)?.result),h=await historyOf(state,hub,e);
+  return h?{...item,summary:sentences(item.summary,h.sentence)}:item;}));
  const count=s=>items.filter(i=>i.state===s).length,ok=count('ok'),off=count('off'),bad=count('error'),old=count('stale');
  const overall=ok===items.length?'ok':bad&&!ok&&!old?'error':bad||old?'stale':ok?'ok':'off';
  const successes=items.map(i=>i.lastSuccessAt).filter(Boolean).sort(),errors=items.filter(i=>i.lastError);
- return {state:overall,...field('summary',tx(items.length===1?'{ok} z {n} endpointu odpovídá':'{ok} z {n} endpointů odpovídá',{ok,n:items.length})),
+ return {state:overall,summary:tx(items.length===1?'{ok} z {n} endpointu odpovídá':'{ok} z {n} endpointů odpovídá',{ok,n:items.length}),
   ...(successes.length?{lastSuccessAt:successes.at(-1)}:{}),...(errors.length?{lastError:`${errors[0].id}: ${errors[0].lastError}`}:{}),configuredBy,items};
 }
 
@@ -122,10 +148,27 @@ export default {
   const intervalMs=options.runtimeIntervalMs||(Number.isFinite(seconds)&&seconds>=10&&seconds<=600?seconds*1000:DEFAULT_INTERVAL_MS);
   const endpoints=()=>allEndpoints(site,store);
   const poller=options.runtimePoller||createRuntimePoller({endpoints,tokens,fetcher:options.runtimeFetch||fetch,intervalMs,enabled:()=>isEnabled(hub),onRequest:options.runtimeOnRequest||null});
-  return {store,tokens,poller,endpoints,intervalMs};
+  const requests=options.runtimeHistory||createRequestHistory(stateDirectory,{clients:()=>site.runtimeClients});
+  const history=createHistoryCollector({store:requests,endpoints,tokens,fetcher:options.runtimeFetch||fetch,streamFetcher:options.runtimeStreamFetch||options.runtimeFetch||fetch,
+   runtimeIdOf:async id=>(await poller.runtimeIds()).get(id),kindOf:id=>poller.status(id).detectedKind,machines:()=>site.machines,clients:()=>site.runtimeClients,
+   enabled:()=>isEnabled(hub),onRequest:options.runtimeOnRequest||null,...(options.runtimeStreamWatch?{watch:options.runtimeStreamWatch}:{})});
+  return {store,tokens,poller,endpoints,intervalMs,requests,history,historyTimer:null,unsubscribe:null};
  },
- pollers:[{id:'runtimes',start:state=>state.poller.start(),stop:state=>state.poller.stop()}],
- provides:{'home.runtimes':state=>state.poller.report()},
+ pollers:[{id:'runtimes',start:state=>state.poller.start(),stop:state=>state.poller.stop()},
+  // The request history: after each poll interval, and at once when the integration is switched back on;
+  // switching it off closes the streams at once.
+  {id:'runtimes-history',start:(state,hub)=>{
+   if(state.historyTimer)return;
+   const tick=()=>void state.history.tick().catch(()=>{});
+   state.historyTimer=setInterval(tick,state.intervalMs);state.historyTimer.unref?.();setTimeout(tick,2000).unref?.();
+   if(typeof hub.onIntegrationChange==='function')state.unsubscribe=hub.onIntegrationChange(e=>{if(e.id!==INTEGRATION_ID)return;if(e.enabled)tick();else state.history.stopAll();});
+  },stop:state=>{clearInterval(state.historyTimer);state.historyTimer=null;state.unsubscribe?.();state.unsubscribe=null;state.history.stopAll();}}],
+ provides:{'home.runtimes':state=>state.poller.report(),
+  // The history, once there is one to keep or one was kept: an endpoint that is llama-swap, or files on disk.
+  'runtimes.requests':async(state,hub)=>{
+   if(!await isEnabled(hub))return null;
+   const keeps=(await state.endpoints()).some(e=>state.history.isLlamaSwap(e))||(await state.requests.machines()).length>0;
+   return keeps?state.requests.provider:null;}},
  integrations:[{id:INTEGRATION_ID,title:'LLM runtimes',kind:'llm-runtimes',toggle:true,
   status:(state,hub)=>integrationStatus(state,hub),
   test:async(state,hub)=>{if(await isEnabled(hub))await state.poller.poll({force:true});return integrationStatus(state,hub);}}],
@@ -137,7 +180,7 @@ export default {
   {name:'runtime_endpoints_list',scope:'read',title:'LLM runtimes: list endpoints',
    description:'The local LLM runtime endpoints the hub reads directly over HTTP: those from the site configuration (source "site", read-only) and those added through the API (source "ui" / "agent"). Each with its machine, kind, the detected kind, whether a bearer token is stored (never the token), and the last read: state ok | stale | error | off (nothing listens) | waiting, lastSuccessAt, lastError. Also the kinds and the exact read-only paths the adapters may request.',
    inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true,openWorldHint:false},
-   run:(args,{state})=>tool(async()=>{only(args,[]);return listEndpoints(state);})},
+   run:(args,{state,hub})=>tool(async()=>{only(args,[]);return listEndpoints(state,hub);})},
   {name:'runtime_endpoint_upsert',scope:'home:write',title:'LLM runtimes: add or replace an endpoint',
    description:'Add a local LLM runtime the hub should read directly, or replace one added before (same id). The URL is an origin only (http://127.0.0.1:11434, http://10.0.0.5:1234): loopback, or an address inside the site networks; never a host name, path, user or password. kind auto detects the runtime with read-only GET requests; name it when you know it. The hub reads it at once and every 30 s, and the answer includes the first read\'s state. Reads are GET-only on fixed paths: the hub never loads, unloads or prompts a model. A runtime that needs a bearer token gets it in the web UI (password sign-in), never through MCP.',
    inputSchema:{type:'object',properties:{endpoint:ENDPOINT_SCHEMA},required:['endpoint'],additionalProperties:false},
@@ -150,7 +193,7 @@ export default {
    run:(args,{state})=>tool(()=>removeEndpoint(state,args))},
  ],
  routes:[
-  {method:'GET',path:'/api/runtimes/endpoints',handler:async({json,state})=>json(200,await listEndpoints(state))},
+  {method:'GET',path:'/api/runtimes/endpoints',handler:async({json,state,hub})=>json(200,await listEndpoints(state,hub))},
   {method:'POST',path:'/api/runtimes/endpoints',scope:'home:write',handler:routeErrors(async c=>{
    c.subject=typeof c.input?.endpoint?.id==='string'&&RUNTIME_ENDPOINT_ID.test(c.input.endpoint.id)?c.input.endpoint.id:null;
    const r=await upsertEndpoint(c.state,c.hub,c.input,c.principal);return c.json(r.created?201:200,r);})},

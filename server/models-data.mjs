@@ -128,7 +128,8 @@ export function cleanRequest(r){
  const address=text(r.clientAddress,64).replace(/^ip:/,'');
  return {machine,runtime:text(r.runtime,60)||'unknown',model:text(r.model,160)||'unknown',at,kind:requestKind(r.kind||r.path),
   inputTokens:num(r.inputTokens)??0,outputTokens:num(r.outputTokens)??0,promptTps:num(r.promptTps,1e7),generationTps:num(r.generationTps,1e7),durationMs:num(r.durationMs,1e9),
-  client:text(r.client,60)||UNATTRIBUTED,clientMachine:MACHINE.test(text(r.clientMachine,32))?text(r.clientMachine,32):null,clientAddress:address||null};
+  client:text(r.client,60)||UNATTRIBUTED,clientMachine:MACHINE.test(text(r.clientMachine,32))?text(r.clientMachine,32):null,clientAddress:address||null,
+  metricId:Number.isSafeInteger(r.metricId)&&r.metricId>=0?r.metricId:null};
 }
 // Where a client ran: what the provider says, else the site machine whose address sent it. A loopback
 // address names no machine: it is this machine or anything tunnelled into it (an SSH forward looks the same).
@@ -148,6 +149,9 @@ export function metricsToRequests(items,{machine,runtime='llama-swap'}={}){
   return r&&{...r,metricId:Number.isSafeInteger(m.id)?m.id:null};}).filter(Boolean);
 }
 export const metricKey=r=>`${r.machine}\u0000${r.runtime}\u0000${r.metricId}\u0000${r.at}`;
+// The identity of one request across providers: metricKey when the provider carries the runtime's record id,
+// else what the request says about itself.
+export const requestKey=r=>r.metricId!=null?metricKey(r):`${r.machine}\u0000${r.runtime}\u0000${r.at}\u0000${r.model}\u0000${r.outputTokens}\u0000${r.client}`;
 
 // Which placement a request reached. A request names a runtime (a gateway or an engine) and the model name it
 // asked for (perhaps a gateway alias); null when no live placement matches (an unloaded or removed model).

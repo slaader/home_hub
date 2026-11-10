@@ -322,7 +322,9 @@ test('endpoints over HTTP and MCP: add, list with the last read, machine page, t
  const integration=h.handler.registry.integrations.find(g=>g.id==='runtimes.endpoints');
  assert.deepEqual({kind:integration.kind,toggle:integration.toggle,title:integration.title},{kind:'llm-runtimes',toggle:true,title:'LLM runtimes'});
  const st=await integration.status(h.handler.hub.state('runtimes'),h.handler.hub);
- assert.equal(st.state,'ok');assert.match(st.summary,/2 z 3 endpointů odpovídá/);assert.ok(st.summaryT);
+ assert.equal(st.state,'ok');assert.match(st.summary.text,/2 z 3 endpointů odpovídá/);assert.ok(st.summary.parts.length);
+ const {normalizeStatus}=await import('../server/integrations.mjs');
+ const shown=normalizeStatus(st);assert.equal(shown.summary,'2 z 3 endpointů odpovídá');assert.ok(shown.summaryT&&shown.items.every(i=>i.summaryT),'translatable on the page, items too');
  assert.deepEqual(st.items.map(i=>[i.id,i.state]),[['studio-8081','ok'],['studio-omlx','ok'],['studio-11434','off']]);
  assert.deepEqual(st.configuredBy,[{source:'agent',name:'agent-rt'}]);
  assert.ok(st.lastSuccessAt&&st.lastError==='studio-11434: refused');

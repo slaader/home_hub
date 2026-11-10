@@ -6,7 +6,7 @@
 //   runtimes.requests  (state, hub) => {id, read({from, to, limit}) → Promise<items[]>}  request history
 // and the stacks the site configuration and runtime_publish describe. Without any provider the page says how
 // to connect one. Shaping is in server/models-data.mjs.
-import {liveState,placements,overview,modelGroups,clientsOf,buildGraph,knownTools,history,cleanRequest,MODEL_RANGES,LIMITS} from '../models-data.mjs';
+import {liveState,placements,overview,modelGroups,clientsOf,buildGraph,knownTools,history,cleanRequest,requestKey,MODEL_RANGES,LIMITS,UNATTRIBUTED} from '../models-data.mjs';
 import {provenance} from '../provenance.mjs';
 import {toolError} from '../mcp.mjs';
 
@@ -35,15 +35,21 @@ export function modelsQuery(query={}){
 export function createModels(hub){
  const cache=new Map();
  // Requests of the last 30 days from every provider, cleaned and de-duplicated (two providers may watch the
- // same runtime). Held for 20 s: the page and the tool read it together.
+ // same runtime: the hub's own history and a plugin's). One request is one metricKey where the provider
+ // carries the runtime's record id; of two copies the one that names a client stays. Held for 20 s: the
+ // page and the tool read it together.
  async function requests(now){
   const hit=cache.get('requests');if(hit&&hit.until>now)return hit.value;
-  const from=now-MODEL_RANGES['30d'].ms-86400000,sources=[],seen=new Set(),items=[];
+  const from=now-MODEL_RANGES['30d'].ms-86400000,sources=[],seen=new Map(),items=[];
   for(const p of await provided(hub,'runtimes.requests')){
+   if(p.value===null&&!p.failed)continue;// a provider with nothing to offer here
    if(!p.value||typeof p.value.read!=='function'){sources.push({module:p.module,core:p.core,id:p.value?.id||p.module,count:0,failed:Boolean(p.failed)});continue;}
    let raw=[];let failed=false;try{raw=await p.value.read({from,to:now,limit:LIMITS.requests});}catch{failed=true;}
    let n=0,last=0;
-   for(const r of (Array.isArray(raw)?raw:[]).slice(0,LIMITS.requests)){const c=cleanRequest(r);if(!c)continue;const key=`${c.machine}\u0000${c.runtime}\u0000${c.at}\u0000${c.model}\u0000${c.outputTokens}\u0000${c.client}`;if(seen.has(key))continue;seen.add(key);items.push(c);n++;last=Math.max(last,c.at);}
+   for(const r of (Array.isArray(raw)?raw:[]).slice(0,LIMITS.requests)){
+    const c=cleanRequest(r);if(!c)continue;const key=requestKey(c),at=seen.get(key);
+    if(at!==undefined){if(items[at].client===UNATTRIBUTED&&c.client!==UNATTRIBUTED)items[at]=c;continue;}
+    seen.set(key,items.length);items.push(c);n++;last=Math.max(last,c.at);}
    sources.push({module:p.module,core:p.core,id:String(p.value.id||p.module).slice(0,60),count:n,lastAt:last?new Date(last).toISOString():null,failed});
   }
   items.sort((a,b)=>a.at-b.at);

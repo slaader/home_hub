@@ -381,8 +381,13 @@ What the hub requests, and nothing else: `GET` on `/v1/models`, `/running`, `/ap
 `/api/metrics/activity`, `/api/metrics`, `/metrics`, `/api/tags`, `/api/ps`, `/api/v0/models`, `/health`, `/props`,
 `/version`, `/v1/models/status`, `/admin/api/stats` (bodies ≤ 512 KiB, 3 s timeout, no redirects). Never a model-loading
 or unload route (llama-swap's `/upstream/…`, `/unload`, `/api/models/unload`), never `/slots`, never a prompt.
+For the request history of a llama-swap endpoint, two more reads, also GET only: `/api/metrics/activity?page=<1–10>&limit=200`
+(exactly those parameters) and the access-log stream `/logs/stream/http?no-history`, held open. The history goes to
+`state/runtimes/<machine>/requests-YYYY-MM.jsonl` and feeds [LLM & Diffusion](#llm--diffusion-ui-models).
 
-- `GET /api/runtimes/endpoints` (`read`) → `{"endpoints":[…],"kinds","readPaths","limits":{"endpoints":40},"intervalSeconds"}`.
+- `GET /api/runtimes/endpoints` (`read`) → `{"endpoints":[…],"kinds","readPaths","historyReadPaths","limits":{"endpoints":40},"intervalSeconds"}`.
+  `historyReadPaths` lists the two history reads. A llama-swap endpoint also has `history`:
+  `{lastSyncAt, lastIngestedAt, recordsToday, stream: connected|connecting|reconnecting|off, lastError?}`.
   Each endpoint has the fields above plus `source`, `readOnly`, `hasToken` (never the token), `addedBy`/`addedAt` for
   stored ones, and its last read: `state` (`ok`, `stale`, `error`, `off` = nothing listens there, `waiting`),
   `detectedKind`, `lastAttemptAt`, `lastSuccessAt`, `lastError` (`refused`, `timeout`, `auth`, `http-<status>`,
@@ -400,7 +405,9 @@ or unload route (llama-swap's `/upstream/…`, `/unload`, `/api/models/unload`),
 - MCP: `runtime_endpoints_list` (`read`), `runtime_endpoint_upsert` and `runtime_endpoint_remove` (`home:write`),
   with the same arguments. Tokens never go through MCP.
 - The module declares the integration `runtimes.endpoints` (kind `llm-runtimes`): its status is `ok`, `stale`,
-  `error`, `off`, `not-configured` or `disabled`, with one item per endpoint (docs/plugins.md → Integrations).
+  `error`, `off`, `not-configured` or `disabled`, with one item per endpoint (docs/plugins.md → Integrations). A
+  llama-swap item's summary says when its history last grew and how many records came in today. Off, nothing is
+  read, the access-log streams close and no history is provided.
 
 ## Project Tracker (UI: #projects, #items, #releases)
 
@@ -638,6 +645,10 @@ providers and the machines' stacks (`docs/plugins.md` → extension points). Sco
   - `graph` = `{lanes:[{id, name}], nodes:[{id, column: client|door|engine|model, lane, label, sub, state, kind?, machine, runtime?, model?, known?, history?, requests, tokens, recent, lastAt}], edges:[{id, from, to, requests, tokens, recent, tokensRecent, cross, lastAt}], maxRequests, maxRecent, crossRequests, recentMinutes, truncated}`. Lanes are machines plus `unknown` for clients whose machine is not known; `recent` counts the last `recentMinutes` (15).
   - `known[]` = tools a machine's stack names (site configuration or `runtime_publish`) that no provider reports: `{machine, machineName, role: client|runtime, title, description, state, source, models, kind}`.
 - `GET /api/models/history?range=24h|7d|30d` → `{"schemaVersion":1,"available","range","stepMs","from","to","buckets":[ISO…],"totals":{requests,inputTokens,outputTokens,medianTps,attributed},"requests":[…],"inputTokens":[…],"outputTokens":[…],"tps":[…],"series":{"model"|"machine"|"client"|"kind":{"keys":[…],"values":{key:[…]}}},"top":{"model"|"machine"|"client"|"kind":[{key,requests,inputTokens,outputTokens,medianTps,medianDurationMs}]}}`. Buckets are hours (24h), six hours (7d) or days (30d) on the site's clock; each series keeps its eight largest keys and folds the rest into `other`. `available` is false when no provider supplies `runtimes.requests`.
+- Requests come from every `runtimes.requests` provider, the hub's own llama-swap history among them
+  ([LLM runtime endpoints](#llm-runtime-endpoints)). One request reported by two providers counts once (by machine,
+  runtime, the runtime's record id and time), and the copy that names a client is kept. A client is named from the
+  User-Agent of llama-swap's access log (`site.json → runtimeClients` for a household's own names).
 - Errors: `400 INVALID_QUERY` for another range or parameter, `503 MODELS_UNAVAILABLE`.
 
 ## Other read-only routes
