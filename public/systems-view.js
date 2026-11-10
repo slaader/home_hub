@@ -12,7 +12,7 @@ import {el} from './views.js';
 import {sessionCache,authGuard} from './session-cache.js';
 import {t,tp,locale,say} from './i18n.js';
 import {timeZone} from './site.js';
-import {pageHeader,emptyState,notInstalled,copyBlock,provenancePart} from './ui.js';
+import {pageHeader,emptyState,notInstalled,copyBlock,provenancePart,disabledNotice} from './ui.js';
 
 // --- shared pieces (also used by the inventory map, the SSH key page and the router panel) ---------
 // Replace a node's children, leaving out what is not there (the DOM would print null as text).
@@ -304,7 +304,16 @@ function hardeningPage(box,doc,sub){
 export function systemsView(mode='versions',sub=null){
  const box=el('div',{class:'col'},el('p',{class:'loading',role:'status'},t('Načítám stav strojů…')));
  const draw=async()=>{
-  try{const doc=await load();(mode==='hardening'?hardeningPage:versionsPage)(box,doc,sub);}
+  try{
+   const doc=await load();
+   // The collector turned off by an administrator: the page says so (the watch list stays editable).
+   if(doc.disabled){fill(box,pageHeader({...(mode==='hardening'?{eyebrow:t('Bezpečnost'),title:t('Ochrana strojů')}:{eyebrow:t('Inventář'),title:t('Verze a aktualizace')}),provenance:doc.provenance}),
+    disabledNotice(doc.disabled),mode==='versions'&&sub==='~watch'?watchPanel():null);return;}
+   (mode==='hardening'?hardeningPage:versionsPage)(box,doc,sub);
+   // Only the release check is off: the versions are there, the newest releases are not.
+   if(mode==='versions'&&doc.upstreamDisabled)box.querySelector('.ui-head')?.after(disabledNotice(doc.upstreamDisabled,{compact:true,
+    body:t('Nejnovější vydání se teď nečtou, takže se verze s nimi neporovnají. Nainstalované verze níže jsou ze sběru strojů a platí dál.')}));
+  }
   catch(e){
    const head=pageHeader({...(mode==='hardening'?{eyebrow:t('Bezpečnost'),title:t('Ochrana strojů')}:{eyebrow:t('Inventář'),title:t('Verze a aktualizace')}),provenance:e.provenance});
    // Without a snapshot the watch list can still be prepared (#versions/~watch).

@@ -14,6 +14,13 @@ import {toolError} from '../mcp.mjs';
 import {readRouterFor} from '../router-data.mjs';
 import {provenance,collectorSource} from '../provenance.mjs';
 import {readRun} from '../collector-run.mjs';
+import {COLLECTORS} from '../collector-state.mjs';
+import {collectorIntegrations,SYSTEMS_INTEGRATION,UPSTREAM_INTEGRATION,KEYS_INTEGRATION} from '../collector-integrations.mjs';
+
+// A collector an administrator turned off (server/collector-integrations.mjs): its file is not read, the
+// answer says who turned it off and when, and the provenance pill says "disabled".
+const offSource=(id,script)=>provenance([{kind:'collector',id,source:script,state:'disabled'}]);
+const offCollector=setup=>({...setup,state:'disabled'});
 
 // The pipeline has already checked the route's scope (security:read) for keys, people and devices alike; this
 // is the same rule once more at the door: administrators, and any role or key that holds security:read.
@@ -61,6 +68,8 @@ export default {
  routes:[
   {method:'GET',path:'/api/security',scope:'security:read',async handler(c){
     if(adminOnly(c,'Only an administrator can see the security inventory.'))return;
+    if(!c.hub.integrationEnabled(KEYS_INTEGRATION))return c.json(200,{schemaVersion:1,disabled:c.hub.integrationDisabled(KEYS_INTEGRATION),machines:[],keys:[],
+     collector:offCollector(securitySetup(c.hub.site)),provenance:offSource('security',COLLECTORS.security.script)});
     const doc=await loadSecurity(c.hub.directory);
     // provenance (server/provenance.mjs): the collector, when it last ran, from where and who started it.
     const collector=securitySetup(c.hub.site,{collectedAt:doc?.collectedAt||null});
@@ -68,7 +77,16 @@ export default {
     return c.json(200,{...doc,collector,provenance:provenance([collectorSource(collector,{id:'security',run:readRun(doc.run),host:doc.collectedFrom,count:doc.machines.filter(m=>m.reachable).length,unit:'machines'})])});}},
   {method:'GET',path:'/api/systems',scope:'security:read',async handler(c){
     if(adminOnly(c,'Only an administrator can see machine versions and protection.'))return;
-    const doc=await loadSystems(c.hub.directory,{site:c.hub.site,registryFile:c.state.watch.file});
+    if(!c.hub.integrationEnabled(SYSTEMS_INTEGRATION))return c.json(200,{schemaVersion:1,disabled:c.hub.integrationDisabled(SYSTEMS_INTEGRATION),machines:[],
+     collector:offCollector(systemsSetup(c.hub.site)),provenance:offSource('systems',COLLECTORS.systems.script)});
+    // The release check turned off: versions without "newest", and the answer says why.
+    const upstream=c.hub.integrationEnabled(UPSTREAM_INTEGRATION);
+    const doc=await loadSystems(c.hub.directory,{site:c.hub.site,registryFile:c.state.watch.file,upstream});
+    if(doc&&!upstream){
+     doc.upstreamDisabled=c.hub.integrationDisabled(UPSTREAM_INTEGRATION);
+     if(doc.collector?.upstream)doc.collector.upstream={...doc.collector.upstream,state:'disabled'};
+     if(doc.provenance?.kinds)doc.provenance={...doc.provenance,kinds:doc.provenance.kinds.map(k=>k.id==='upstream'?{...k,state:'disabled'}:k)};
+    }
     if(doc)return c.json(200,doc);
     const collector=systemsSetup(c.hub.site);
     return c.json(404,{error:{code:'SYSTEMS_MISSING',message:'No machine snapshot yet. Run node scripts/collect-systems.mjs.'},collector,provenance:provenance([collectorSource(collector,{id:'systems'})])});}},
@@ -78,12 +96,15 @@ export default {
   {method:'GET',path:'/api/collectors',scope:'security:read',async handler(c){
     if(adminOnly(c,'Only an administrator can see the state of the collectors.'))return;
     const {hub}=c,site=hub.site;
+    const on={systems:hub.integrationEnabled(SYSTEMS_INTEGRATION),upstream:hub.integrationEnabled(UPSTREAM_INTEGRATION),keys:hub.integrationEnabled(KEYS_INTEGRATION)};
     const [systems,keys,router]=await Promise.all([
-     loadSystems(hub.directory,{site,registryFile:c.state.watch.file}).catch(()=>null),loadSecurity(hub.directory).catch(()=>null),readRouterFor(hub).catch(()=>null)]);
+     on.systems?loadSystems(hub.directory,{site,registryFile:c.state.watch.file,upstream:on.upstream}).catch(()=>null):null,on.keys?loadSecurity(hub.directory).catch(()=>null):null,readRouterFor(hub).catch(()=>null)]);
     const {upstream=null,...current}=systems?.collector||systemsSetup(site);
+    // A collector that is turned off reports "disabled" (its file was not read).
+    const fact=(state,enabled)=>enabled?collectorFacts(state):{...collectorFacts(state),state:'disabled',collectedAt:null,ageSeconds:null};
     return c.json(200,{schemaVersion:1,generatedAt:new Date().toISOString(),collectors:{
-     systems:collectorFacts(current),...(upstream?{upstream:collectorFacts(upstream)}:{}),
-     security:collectorFacts(securitySetup(site,{collectedAt:keys?.collectedAt||null})),
+     systems:fact(current,on.systems),...(upstream?{upstream:fact(upstream,on.upstream)}:!on.upstream?{upstream:{state:'disabled'}}:{}),
+     security:fact(securitySetup(site,{collectedAt:keys?.collectedAt||null}),on.keys),
      router:{state:router?.status||'unavailable',collectedAt:router?.observedAt||null}}});}},
   {method:'GET',path:'/api/software-watch',scope:'software:write',async handler(c){
     if(adminOnly(c,'Only an administrator can see the software watch list.'))return;
@@ -115,6 +136,7 @@ export default {
     try{return {...await state.watch.put(args),file:fileLabel(state.watch.file,hub.root)};}
     catch(e){if(!isWatchError(e))throw e;throw toolError(`${WATCH_MESSAGES[e.code]||'The watch list cannot be changed.'}${e.details?.length?` ${e.details.join('; ')}`:''}`);}}},
  ],
+ integrations:collectorIntegrations,
  apiDocs:[{title:'Bezpečnost',routes:[
   ['GET','/api/systems','security','Verze systémů a softwaru, kandidáti na aktualizaci a ochrana strojů (snímek z collect-systems).'],
   ['GET','/api/collectors','security','Stav kolektorů (verze, upstream, SSH klíče, router) bez jejich dat; odpoví vždy 200.'],

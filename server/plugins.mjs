@@ -1,15 +1,16 @@
 // Module registry: the one contract core features and plugins both use to add to the hub.
 // A module is a plain object (docs/plugins.md):
-//   {id, scopes, routes:[{method,path|match,scope,handler,…}], mcpTools, mcpInstructions, pollers, assets, nav, strings, provides, setup}
+//   {id, scopes, routes:[{method,path|match,scope,handler,…}], mcpTools, mcpInstructions, pollers, assets, nav, strings, provides, integrations, setup}
 // Core modules live in server/core/; plugins are loaded from an overlay directory, by default
 // local/plugins/*/index.mjs (HOME_HUB_PLUGINS_DIR overrides it; "none" loads nothing). Core never
 // imports from the overlay: a plugin reaches core only through this registry.
 // Everything is validated when the registry is built, and a clash (two modules claiming one route,
-// scope, page hash, tool or asset) is a start-up error naming both modules. Nothing is merged silently.
+// scope, page hash, tool, asset or integration id) is a start-up error naming both modules. Nothing is merged silently.
 import {readdirSync,existsSync} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {repoRoot} from './edition.mjs';
+import {defineIntegrations} from './integrations.mjs';
 
 export const MODULE_ID=/^[a-z][a-z0-9-]{1,31}$/;
 const SCOPE_ID=/^[a-z][a-z0-9-]{0,31}(:[a-z][a-z0-9-]{0,31})?$/;
@@ -26,7 +27,7 @@ const bad=(id,message)=>{throw new ModuleError(`module "${id}": ${message}`);};
 // One module → a normalized, frozen copy. core:true marks modules shipped in server/core/.
 export function defineModule(raw,{core=false,directory=null}={}){
  if(!plain(raw)||typeof raw.id!=='string'||!MODULE_ID.test(raw.id))throw new ModuleError(`a module needs an id matching ${MODULE_ID} (got ${JSON.stringify(raw?.id)})`);
- const id=raw.id,known=['id','title','scopes','routes','mcpTools','mcpInstructions','pollers','assets','nav','strings','apiDocs','provides','setup'];
+ const id=raw.id,known=['id','title','scopes','routes','mcpTools','mcpInstructions','pollers','assets','nav','strings','apiDocs','provides','integrations','setup'];
  const extra=Object.keys(raw).filter(k=>!known.includes(k));if(extra.length)bad(id,`unknown field(s): ${extra.join(', ')}`);
  const scopes={};
  for(const [scope,meta] of Object.entries(raw.scopes??{})){
@@ -126,14 +127,18 @@ export function defineModule(raw,{core=false,directory=null}={}){
  const provides={};
  for(const [name,provider] of Object.entries(raw.provides??{})){if(!fn(provider))bad(id,`provides.${name} must be a function (state, hub) => value`);provides[name]=provider;}
  if(raw.setup!==undefined&&!fn(raw.setup))bad(id,'setup must be a function (hub) => state');
+ // Integrations (server/integrations.mjs, docs/plugins.md → Integrations): what this module reads from
+ // outside, its health, and whether an administrator may turn it off. Ids are "<module id>.<name>".
+ const integrations=defineIntegrations(raw.integrations,id,message=>bad(id,message));
+ for(const i of integrations)for(const name of i.provides)if(!provides[name])bad(id,`integration ${i.id} lists provides "${name}", which this module does not provide`);
  return Object.freeze({id,core,directory,title:typeof raw.title==='string'?raw.title:id,scopes:Object.freeze(scopes),routes:Object.freeze(routes),mcpTools:Object.freeze(mcpTools),mcpInstructions:Object.freeze(mcpInstructions),
-  pollers:Object.freeze(pollers),assets:Object.freeze(assets),nav:Object.freeze(nav),strings:Object.freeze(strings),apiDocs:Object.freeze(apiDocs),provides:Object.freeze(provides),setup:raw.setup??null});
+  pollers:Object.freeze(pollers),assets:Object.freeze(assets),nav:Object.freeze(nav),strings:Object.freeze(strings),apiDocs:Object.freeze(apiDocs),provides:Object.freeze(provides),integrations,setup:raw.setup??null});
 }
 
 // All modules together. Throws on any clash; the message names both sides.
 // reservedTools: MCP tool names already taken (the core tools defined in server/mcp.mjs).
 export function createRegistry(modules,{reservedTools=[]}={}){
- const byId=new Map(),scopes=new Map(),tools=new Map(),assets=new Map(),hashes=new Map(),exact=new Map(),patterns=[];
+ const byId=new Map(),scopes=new Map(),tools=new Map(),assets=new Map(),hashes=new Map(),exact=new Map(),patterns=[],integrations=new Map();
  const clash=(what,a,b)=>{throw new ModuleError(`${what} is registered twice: by module "${a}" and by module "${b}"`);};
  for(const m of modules){
   if(byId.has(m.id))clash(`module id "${m.id}"`,m.id,m.id);byId.set(m.id,m);
@@ -141,6 +146,7 @@ export function createRegistry(modules,{reservedTools=[]}={}){
   for(const t of m.mcpTools){if(reservedTools.includes(t.name))clash(`MCP tool "${t.name}"`,'core',m.id);if(tools.has(t.name))clash(`MCP tool "${t.name}"`,tools.get(t.name).module,m.id);tools.set(t.name,t);}
   for(const a of m.assets){if(assets.has(a.url))clash(`asset ${a.url}`,assets.get(a.url).module,m.id);assets.set(a.url,a);}
   for(const n of m.nav)if(n.hash){if(hashes.has(n.hash))clash(`page #${n.hash}`,hashes.get(n.hash).module,m.id);hashes.set(n.hash,n);}
+  for(const i of m.integrations??[]){if(integrations.has(i.id))clash(`integration "${i.id}"`,integrations.get(i.id).module,m.id);integrations.set(i.id,i);}
   for(const r of m.routes){
    if(r.path){const key=`${r.method} ${r.path}`;if(exact.has(key))clash(`route ${key}`,exact.get(key).module,m.id);exact.set(key,r);}
    else{const same=patterns.find(p=>p.method===r.method&&p.match.source===r.match.source&&p.match.flags===r.match.flags);if(same)clash(`route ${r.method} ${r.match}`,same.module,m.id);patterns.push(r);}
@@ -163,6 +169,8 @@ export function createRegistry(modules,{reservedTools=[]}={}){
  return Object.freeze({
   modules:[...byId.values()],module:id=>byId.get(id)||null,scopes,tools:[...tools.values()],instructions:modules.flatMap(m=>m.mcpInstructions),assets,nav,match,
   routes:modules.flatMap(m=>m.routes),pollers:modules.flatMap(m=>m.pollers),
+  // Every integration in registration order (core first); integration(id) finds one.
+  integrations:[...integrations.values()],integration:id=>integrations.get(id)||null,
   providers:name=>modules.filter(m=>m.provides[name]).map(m=>({module:m.id,provide:m.provides[name]})),
   // What the browser needs to draw the shell for this caller: pages it may open and the sidebar.
   manifest(me){

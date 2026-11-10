@@ -1,0 +1,40 @@
+{
+ "/health": {
+  "status": "ok"
+ },
+ "/v1/models": {
+  "object": "list",
+  "data": [
+   {
+    "id": "gemma-3-27b-it-Q4_K_M.gguf",
+    "object": "model",
+    "created": 1762770000,
+    "owned_by": "llamacpp",
+    "meta": {
+     "vocab_type": 1,
+     "n_vocab": 262144,
+     "n_ctx_train": 131072,
+     "n_embd": 5376,
+     "n_params": 27009346304,
+     "size": 16546365440
+    }
+   }
+  ]
+ },
+ "/props": {
+  "default_generation_settings": {
+   "n_ctx": 16384,
+   "params": {
+    "temperature": 0.8
+   }
+  },
+  "total_slots": 4,
+  "model_path": "/models/gemma-3-27b-it-Q4_K_M.gguf",
+  "chat_template": "{{ bos_token }}",
+  "build_info": "b6950-1a2b3c4d",
+  "modalities": {
+   "vision": false
+  }
+ },
+ "/metrics": "# HELP llamacpp:prompt_tokens_total Number of prompt tokens processed.\n# TYPE llamacpp:prompt_tokens_total counter\nllamacpp:prompt_tokens_total 182734\n# TYPE llamacpp:tokens_predicted_total counter\nllamacpp:tokens_predicted_total 48211\n# TYPE llamacpp:prompt_tokens_seconds gauge\nllamacpp:prompt_tokens_seconds 811.4\n# TYPE llamacpp:predicted_tokens_seconds gauge\nllamacpp:predicted_tokens_seconds 24.7\n# TYPE llamacpp:kv_cache_usage_ratio gauge\nllamacpp:kv_cache_usage_ratio 0.21\nllamacpp:requests_processing 1\nllamacpp:requests_deferred 0\n"
+}

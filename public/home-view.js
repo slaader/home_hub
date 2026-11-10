@@ -7,13 +7,13 @@
 // Text-safe DOM only: el() for HTML, svg() for drawings; colours come from the design tokens (home.css).
 import {el,date,onLeave} from './views.js';
 import {SERIES,renderCharts,disposeCharts,loadECharts,level,renderSpark,disposeSparks} from './home-charts.js';
-import {onSessionReset,sessionCache,authGuard} from './session-cache.js';
+import {onSessionReset,sessionCache,authGuard,pageAllowed} from './session-cache.js';
 import {createOrderSaver} from './home-order.js';
 import {tileDrag} from './home-drag.js';
 import {t,tp,locale,say} from './i18n.js';
 import {openAddDevice,openEditDevice,removeDevice} from './home-add-device.js';
 import {timeZone} from './site.js';
-import {emptyState,pageHeader,toast} from './ui.js';
+import {emptyState,pageHeader,toast,icon} from './ui.js';
 import {statusPill,hasReadings,tileNotice,telemetryNotice,runtimesSection} from './home-telemetry.js';
 // Adding, editing and removing devices needs write access (the server checks it again).
 let canEdit=false,canAdmin=false;
@@ -175,9 +175,39 @@ const layerName=(stack,i)=>stack.layerKeys?.[i]?t(LAYER_LABEL[stack.layerKeys[i]
 // Engine families with a colour of their own (home.css); any other column key uses the accent.
 const ENGINES=['gguf','mlx','torch','mix','edge','media','cloud','dev','share','net'];
 const engineClass=key=>ENGINES.includes(key)?` eng-${key}`:'';
+// An inference engine block (llama.cpp, MLX, …): marked engine, or standing in the layer named ENGINE. Some
+// stacks also mark a router with engine: <family>, but a block that names a live service is a server.
+export const isEngine=(stack,b)=>!b.service&&!b.hw&&(b.engine===true||(stack.layerKeys?.[b.layer]??String(stack.layers?.[b.layer]||'').toLowerCase())==='engine');
+// The runtime blocks an engine carries: those that hold models in the nearest layer above it that has any
+// block over it. Not further up: a router there lists the same models again under its own names.
+export function runtimesOn(stack,blk){
+ for(let L=blk.layer-1;L>=0;L--){const over=stack.blocks.filter(b=>b.layer===L&&overlap(b,blk));if(over.length)return over.filter(b=>b.models?.length);}
+ return [];
+}
+// What is in memory on the hardware: the runtimes of the engines standing on it, each block once.
+export function residentOn(stack,blk){
+ const engines=stack.blocks.filter(b=>b.layer===blk.layer-1&&overlap(b,blk)&&isEngine(stack,b));
+ const blocks=engines.length?[...new Map(engines.flatMap(e=>runtimesOn(stack,e)).map(b=>[b.id,b])).values()]:runtimesOn(stack,blk);
+ const held=blocks.flatMap(b=>b.models.filter(m=>m.state==='loaded'));
+ return {count:held.length,gb:Math.round(held.reduce((a,m)=>a+(m.sizeGb||0),0)*10)/10,sized:held.some(m=>m.sizeGb)};
+}
+const modelItem=m=>el('li',{class:m.state==='loaded'?'loaded':m.state==='loading'?'loading':''},
+ el('div',{},m.id,m.sizeGb?` · ${m.sizeGb} GB`:'',m.ttlRemainingSeconds?` · TTL ${Math.round(m.ttlRemainingSeconds/60)} min`:''),m.path?el('small',{},m.path):null);
+// An engine's models, grouped by the runtime that serves them: "oMLX · 6 models, 1 loaded", loaded ones listed, the rest folded.
+function engineModels(stack,blk,sec){
+ const groups=runtimesOn(stack,blk);
+ if(!groups.length)return sec(t('Modely'),el('span',{class:'hv-none'},t('žádný runtime nad ním nehlásí modely')));
+ return sec(t('Modely podle runtimu'),...groups.map(b=>{
+  const held=b.models.filter(m=>m.state==='loaded'||m.state==='loading'),rest=b.models.filter(m=>!held.includes(m));
+  const loadedCount=b.models.filter(m=>m.state==='loaded').length;
+  return el('div',{class:'hv-model-group'},
+   el('b',{},`${t(b.title)} · ${tp(b.models.length,'{n} model|{n} modely|{n} modelů')}, ${tp(loadedCount,'{n} načtený|{n} načtené|{n} načtených')}`),
+   held.length?el('ul',{class:'hv-models'},held.map(modelItem)):null,
+   rest.length?el('details',{},el('summary',{},held.length?tp(rest.length,'{n} další model|{n} další modely|{n} dalších modelů'):tp(rest.length,'{n} model|{n} modely|{n} modelů')),el('ul',{class:'hv-models'},rest.map(modelItem))):null);}));
+}
 // Detail panel beside the grid: empty hint until a block is picked, then the block's story.
 let animatePanel=false;
-function stackPanel(machine,blk){
+export function stackPanel(machine,blk){
  const still=animatePanel?'':' still';
  if(!blk)return el('aside',{class:'hv-panel empty'+still},
   el('div',{class:'hv-panel-icon','aria-hidden':'true'},el('i'),el('i'),el('i')),
@@ -189,12 +219,13 @@ function stackPanel(machine,blk){
  const models=blk.models||[];
  const chip=b=>el('button',{type:'button',class:`hv-chip ${b.state==='off'?'off':''}`,onclick:()=>selectBlock(machine,b.id)},t(b.title));
  const sec=(label,...body)=>el('div',{class:'hv-panel-sec'},el('span',{class:'hv-k'},label),...body);
+ const resident=blk.hw?residentOn(stack,blk):null;
  return el('aside',{class:`hv-panel${still}${blk.engine||blk.hw?'':engineClass(stack.cols[blk.col0])}`},
   el('div',{class:'hv-panel-head'},
    el('div',{},el('span',{class:'hv-k'},layerName(stack,blk.layer)),el('h3',{},t(blk.title))),
    el('button',{type:'button',class:'hv-close','aria-label':t('Zavřít detail'),onclick:()=>selectBlock(machine,blk.id)},'×')),
   el('div',{class:'hv-badges'},
-   blk.hw||blk.engine?null:el('span',{class:`hv-status ${blk.state==='off'?'dim':'ok'}`},el('i',{'aria-hidden':'true'}),blk.state==='off'?t('vypnuto'):t('běží')),
+   blk.hw||blk.engine||isEngine(stack,blk)?null:el('span',{class:`hv-status ${blk.state==='off'?'dim':'ok'}`},el('i',{'aria-hidden':'true'}),blk.state==='off'?t('vypnuto'):t('běží')),
    blk.port?el('span',{class:'hv-badge'},say(blk.port,blk.portT)):null,
    stack.engines?.[stack.cols[blk.col0]]&&!blk.hw?el('span',{class:'hv-badge'},t(stack.engines[stack.cols[blk.col0]])):null),
   blk.desc?el('p',{class:'hv-panel-desc'},say(blk.desc,blk.descT)):null,
@@ -202,9 +233,10 @@ function stackPanel(machine,blk){
   sec(t('Nad ním'),el('div',{class:'hv-chips'},above.length?above.map(chip):el('span',{class:'hv-none'},t('— nic')))),
   blk.stats&&blk.stats.requests!=null?sec(t('Provoz'),el('span',{class:'hv-v'},`${tp(blk.stats.requests,'{n} request|{n} requesty|{n} requestů')} · uptime ${Math.round((blk.stats.uptimeSeconds||0)/3600)} h`)):null,
   blk.pool?sec(t('Rozpočet paměti'),el('span',{class:'hv-v'},`${blk.pool.allocatedGb} / ${blk.pool.capacityGb} GB`)):null,
-  sec(t('Modely · {n}',{n:models.length}),
-   models.length?el('ul',{class:'hv-models'},models.map(m=>el('li',{class:m.state==='loaded'?'loaded':m.state==='loading'?'loading':''},
-    el('div',{},m.id,m.sizeGb?` · ${m.sizeGb} GB`:'',m.ttlRemainingSeconds?` · TTL ${Math.round(m.ttlRemainingSeconds/60)} min`:''),m.path?el('small',{},m.path):null))):el('span',{class:'hv-none'},t('žádné'))));
+  // An engine has no models of its own: it shows those of the runtimes it carries. The hardware, what they hold in memory.
+  blk.hw?sec(t('V paměti'),el('span',{class:'hv-v'},resident.count?`${tp(resident.count,'{n} načtený model|{n} načtené modely|{n} načtených modelů')}${resident.sized?` · ${resident.gb} GB`:''}`:t('žádný model není načtený')))
+  :isEngine(stack,blk)?engineModels(stack,blk,sec)
+  :sec(t('Modely · {n}',{n:models.length}),models.length?el('ul',{class:'hv-models'},models.map(modelItem)):el('span',{class:'hv-none'},t('žádné'))));
 }
 function stackGrid(machine){
  const stack=machine.stack,cols=stack.cols.length;
@@ -320,7 +352,7 @@ function renderChild(slot,machine,{repaint:again,focus}={}){
   const q=machine.quad;
   telemetry.push(el('p',{class:'hv-note'},t('Router nemá telemetrického agenta: počty klientů dodává adaptér routeru.')),q?cells([[t('Klienti'),q.clients],['Wi-Fi',q.wifi]]):null);
  }else telemetry.push(services(machine));
- slot.replaceChildren(head,
+ slot.replaceChildren(...[head,disabledBar()].filter(Boolean),
   section(t('Telemetrie'),hasReadings(machine)?t('Živá čísla a historie z agenta {name}.',{name:meta?.agent||'Thermo'}):null,telemetry),
   stackSection(machine),
   // Only where a provider reports on this machine; a machine nobody reports on has no such section.
@@ -348,6 +380,14 @@ function refreshChild(slot,machine,again){
 
 // --- overview ----------------------------------------------------------------------------------
 // A hub without machines: what belongs here and the two ways to fill it (by hand, or through an agent).
+// Integrations an administrator turned off (Administration → Integrations): one line saying their data
+// is missing on purpose, with a link for those who may change it.
+function disabledBar(){
+ const off=cache?.integrations?.disabled||[];if(!off.length)return null;
+ const names=off.map(i=>i.titleKey?t(i.titleKey):t(i.title)).join(', ');
+ return el('p',{class:'ig-disabled-note',role:'status'},icon('plug'),el('span',{},t('Vypnuté integrace: {names}. Jejich data se tu neukazují.',{names}),
+  ...(pageAllowed('integrations')?[' ',el('a',{href:'#integrations'},t('Spravovat integrace'))]:[])));
+}
 function emptyOverview(add){
  const name=cache?.telemetry?.agent||'Thermo';
  return emptyState({icon:'◇',title:t('Vítej v Home Hubu. Přehled je zatím prázdný'),
@@ -378,7 +418,7 @@ export function homeView(machineId,me){
    const saved=orderCache.get(),list=orderedMachines(cache.machines,saved?.order);
    // A hub without machines yet: say what belongs here and how to add it.
    if(!list.length){const head=pageHeader({eyebrow:t('Domov'),title:t('Přehled'),lead:t('Stroje, jejich stav a živé metriky na jednom místě.')});head.append(headActions());
-    slot.replaceChildren(head,emptyOverview(add));built=false;return;}
+    slot.replaceChildren(...[head,disabledBar(),emptyOverview(add)].filter(Boolean));built=false;return;}
    const movable=saved?.available===true&&list.length>1,ids=list.map(m=>m.id);
    const grid=slot.querySelector('.hv-tiles'),shown=grid?[...grid.children].map(n=>n.dataset.id):[];
    if(built&&grid&&movable===sortable&&shown.length===ids.length&&ids.every(id=>shown.includes(id))){
@@ -393,7 +433,7 @@ export function homeView(machineId,me){
    const head=pageHeader({eyebrow:t('Domov'),title:t('Přehled'),lead:summary(list)});head.append(headActions());
    // What a screen reader hears on a tile: how it moves. Nothing on the page has to be switched on first.
    const hint=sortable?el('p',{id:'hv-order-hint',class:'ui-sr'},t('Pořadí změníš přetažením dlaždice, na dotykové obrazovce po jejím podržení, nebo šipkami na vybrané dlaždici.')):null;
-   slot.replaceChildren(...[head,hint,g].filter(Boolean));built=true;return;
+   slot.replaceChildren(...[head,disabledBar(),hint,g].filter(Boolean));built=true;return;
   }
   const machine=cache.machines.find(m=>m.id===machineId);
   if(!machine){slot.replaceChildren(emptyState({icon:'◌',title:t('Neznámý stroj.'),body:t('Stroj s tímhle id v přehledu není. Mohl být odebrán.'),actions:[{label:t('← přehled'),href:'#overview',primary:true}]}));return;}

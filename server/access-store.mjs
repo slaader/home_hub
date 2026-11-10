@@ -100,6 +100,9 @@ export function createAccessStore(directory,credentials,{now=Date.now,ownerFile=
  const api={
   // false until the auth file holds a valid owner (first run of a fresh install).
   ownerReady,
+  // One line in the access audit for a change made elsewhere (an integration turned off, its settings):
+  // event = "integration-…", subject = {id, name}, meta = {by, detail}. Never values, only names.
+  record:(event,subject,{by,detail}={})=>audit(event,{id:subject?.id,name:subject?.name},{by,detail}),
   user:id=>{const u=lookup(id);return u&&!u.disabled?userView(u):null;},
   users:()=>[...(owner()?[owner()]:[]),...state.users].map(u=>userView(u)),
   async authenticate(username,password){

@@ -206,3 +206,35 @@ test('the page promises no runtimes from the telemetry agent, and draws the sect
   assert.doesNotMatch(text,/hv-placeholder|hv-tag/,name);}
  assert.doesNotMatch(await read('home.css'),/hv-placeholder|hv-tag/);
 });
+
+// The stack panel of a machine page: an engine has no models of its own, so it lists those of the runtime
+// blocks it carries, grouped by runtime; the hardware block says what they hold in memory.
+test('stack panel: an engine lists its runtimes\' models by runtime; the hardware block what is in memory',async()=>{
+ installDom();
+ const {stackPanel,runtimesOn,residentOn,isEngine}=await import('../public/home-view.js');
+ const models=(n,loaded=[])=>Array.from({length:n},(_,i)=>({id:`m${i}`,state:loaded.includes(i)?'loaded':'unloaded',sizeGb:loaded.includes(i)?28.8:null}));
+ // As a collected descriptor writes it: the layer named ENGINE marks the engines, nothing else does.
+ const stack={layers:['INPUT','TOOL','RUNTIME','ENGINE','HARDWARE'],cols:['gguf','mlx','mlx','mlx'],engines:{gguf:'llama.cpp',mlx:'Apple MLX'},blocks:[
+  {id:'lswap',layer:1,col0:0,col1:3,title:'llama-swap',service:'llama-swap',models:models(5,[2])},
+  {id:'lserver',layer:2,col0:0,col1:0,title:'llama-server',state:'off',models:[]},
+  {id:'omlx',layer:2,col0:1,col1:2,title:'oMLX',service:'omlx',models:models(6,[1])},
+  {id:'mlxserve',layer:2,col0:3,col1:3,title:'mlx-serve',service:'mlx-serve',models:[{id:'pack',state:'loaded',sizeGb:9.2},{id:'sfx',state:'unloaded',sizeGb:2.1}]},
+  {id:'eg',layer:3,col0:0,col1:0,title:'llama.cpp'},{id:'em',layer:3,col0:1,col1:3,title:'Apple MLX'},
+  {id:'hw',layer:4,col0:0,col1:3,title:'M5 Ultra',hw:true}]};
+ const block=id=>stack.blocks.find(b=>b.id===id);
+ assert.ok(isEngine(stack,block('em'))&&!isEngine(stack,block('omlx'))&&!isEngine(stack,block('hw')));
+ assert.ok(!isEngine(stack,{...block('lswap'),engine:'mlx'}),'a router marked with its engine family is still a server');
+ assert.deepEqual(runtimesOn(stack,block('em')).map(b=>b.id),['omlx','mlxserve'],'the runtimes on it, not the router above them');
+ assert.deepEqual(residentOn(stack,block('hw')),{count:2,gb:38,sized:true},'loaded models of the runtimes on its engines, each once');
+ const panel=stackPanel({stack},block('em'));
+ const groups=byTag(panel,'div').filter(n=>(n.getAttribute('class')||'')==='hv-model-group');
+ assert.deepEqual(groups.map(g=>byTag(g,'b')[0].textContent),['oMLX · 6 models, 1 loaded','mlx-serve · 2 models, 1 loaded']);
+ assert.deepEqual(byTag(groups[0],'summary').map(n=>n.textContent),['5 more models']);
+ assert.ok(!texts(panel,'hv-k').some(x=>/^Models · /.test(x)),'no "Models · 0 none" on an engine');
+ assert.deepEqual(texts(panel,'hv-status'),[],'an engine is not a service that runs');
+ const hw=stackPanel({stack},block('hw'));
+ assert.ok(texts(hw,'hv-v').includes('2 loaded models · 38 GB'));
+ // An engine with nothing on it that reports models, and an ordinary runtime block, as before.
+ assert.ok(texts(stackPanel({stack},block('eg')),'hv-none').includes('no runtime on it reports models'));
+ assert.ok(texts(stackPanel({stack},block('omlx')),'hv-k').includes('Models · 6'));
+});

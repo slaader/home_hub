@@ -44,8 +44,8 @@ export function sessionCache(ttlMs){
 // after sign-in, so plugin pages route like core ones. PAGES and ADMIN_PAGES are the core pages, in force
 // until then (tests/plugins.test.mjs checks they match what the server's core modules register).
 export const HOME_PAGE='overview';
-export const PAGES=Object.freeze(['security','access','versions','hardening','settings','inventory-map','services','projects','items','releases','review','search','welcome']);
-export const ADMIN_PAGES=Object.freeze(['security','versions','hardening']);
+export const PAGES=Object.freeze(['security','access','versions','hardening','settings','inventory-map','services','projects','items','releases','review','search','welcome','integrations','models']);
+export const ADMIN_PAGES=Object.freeze(['security','versions','hardening','integrations']);
 let pages=new Map(PAGES.map(hash=>[hash,{admin:ADMIN_PAGES.includes(hash)}]));
 // list: [{hash, admin}] from the manifest; null goes back to the core pages.
 export function setPages(list){pages=new Map((Array.isArray(list)?list:PAGES.map(hash=>({hash,admin:ADMIN_PAGES.includes(hash)}))).filter(p=>typeof p?.hash==='string'&&p.hash!==HOME_PAGE).map(p=>[p.hash,{admin:p.admin===true}]));}

@@ -249,9 +249,13 @@ export function createThermoPoller({hostsFile,extraHosts=async()=>[],stateDirect
  const sampleListeners=[];function onSampleLive(id,reading){for(const fn of sampleListeners)fn(id,reading);}
  let lastPollAt=null;
  let polling=null;
+ // paused: an administrator turned the integration off (server/integrations.mjs). No session is open and
+ // nothing is pulled until resume(); what was read before stays on disk.
+ let paused=false,started=false;
  // Every entry point (interval tick, ad-hoc refresh, start) shares one in-flight poll, so two
  // polls never read the same cursor, append the same minute rows or finish out of order.
  function poll(){
+  if(paused)return Promise.resolve();
   if(polling)return polling;
   polling=(async()=>{try{await Promise.all([...sessions.values()].map(pollHost));lastPollAt=Date.now();await saveCursors();}finally{polling=null;}})();
   return polling;
@@ -268,6 +272,7 @@ export function createThermoPoller({hostsFile,extraHosts=async()=>[],stateDirect
  // On-demand pull for the refresh button: at most one every 5 s, concurrent callers share it.
  let inflight=null,lastAdhoc=0;
  function refresh(){
+  if(paused)return Promise.resolve(false);
   if(inflight)return inflight;
   if(Date.now()-lastAdhoc<5000)return Promise.resolve(false);
   lastAdhoc=Date.now();
@@ -288,18 +293,31 @@ export function createThermoPoller({hostsFile,extraHosts=async()=>[],stateDirect
   }
  }
  async function start(){
+  started=true;
   await loadCursors();await restoreMinutes();await loadInterval();
+  if(!paused)await run();
+ }
+ async function run(){
   const extra=await extraHosts().catch(()=>[]);
   for(const config of [...await loadHostsConfig(hostsFile),...extra])if(!sessions.has(config.id))open(config);
-  await poll();timer=setInterval(()=>void poll(),intervalMs);timer.unref?.();
+  await poll();clearInterval(timer);timer=setInterval(()=>void poll(),intervalMs);timer.unref?.();
  }
+ // Off: stop the clock, wait for a poll in flight, close every session and forget the live readings.
+ async function pause(){
+  if(paused)return;paused=true;clearInterval(timer);timer=null;
+  await polling?.catch(()=>{});
+  for(const s of sessions.values())s.close();
+  sessions.clear();status.clear();latest.clear();seconds.clear();disks.clear();
+ }
+ // On again: the same as a start, without reading the files again (hosts are read afresh).
+ async function resume(){if(!paused)return;paused=false;if(started)await run();}
  function open(config){
   sessions.set(config.id,createThermoSession({config,onMinute:(id,row)=>{rememberMinutes(id,[row]);void persistMinutes(id,[row]);},onDisk:(id,reply)=>disks.set(id,{...reply,fetchedAt:now()}),onState:(id,state)=>status.set(id,{state,checkedAt:new Date(now()).toISOString()})}));
  }
  // A device added or removed on the Home page: start or end its session without restarting the hub.
  function addHost(config){if(sessions.has(config.id))sessions.get(config.id).close();open(config);if(timer)void poll().catch(()=>{});}
  function removeHost(id){sessions.get(id)?.close();sessions.delete(id);status.delete(id);latest.delete(id);seconds.delete(id);disks.delete(id);}
- return {start,stop:()=>{clearInterval(timer);for(const s of sessions.values())s.close();},poll,refresh,setIntervalMs,addHost,removeHost,
+ return {start,stop:()=>{clearInterval(timer);for(const s of sessions.values())s.close();},poll,refresh,setIntervalMs,addHost,removeHost,pause,resume,paused:()=>paused,
   // Host ids the poller has a login for (the hosts file plus devices connected on the overview).
   hosts:()=>[...sessions.keys()],
   interval:()=>({intervalSeconds:intervalMs/1000,lastPollAt}),

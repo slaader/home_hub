@@ -348,7 +348,8 @@ function devicesTab(status){
 // ---- audit ------------------------------------------------------------------------------------
 const EVENTS={'account-created':'Vytvořen servisní účet','account-updated':'Změněn servisní účet','account-deleted':'Smazán servisní účet','api-write':'Zápis přes API','mcp-call':'Nástroj přes MCP','user-created':'Vytvořen uživatel','user-updated':'Změněn stav uživatele','user-deleted':'Smazán uživatel','user-password-reset':'Nové heslo uživatele',
  'user-password-changed':'Uživatel si změnil heslo','owner-password-changed':'Vlastník si změnil heslo','user-role-changed':'Změněna role uživatele','role-created':'Vytvořena role','role-updated':'Změněna role','role-deleted':'Smazána role',
- 'key-created':'Vytvořen API klíč','key-revoked':'Odvolán API klíč','device-issued':'Přidáno zařízení','device-revoked':'Odebráno zařízení'};
+ 'key-created':'Vytvořen API klíč','key-revoked':'Odvolán API klíč','device-issued':'Přidáno zařízení','device-revoked':'Odebráno zařízení',
+ 'integration-enabled':'Zapnuta integrace','integration-disabled':'Vypnuta integrace','integration-tested':'Otestována integrace','integration-settings':'Změněno nastavení integrace','integration-secret-cleared':'Smazána tajná hodnota integrace'};
 const outcome=s=>s===undefined?null:s==='ok'||(s>=200&&s<300)?'ok':s===403||s===401||s==='denied'?'refused':'error';
 let auditKind='all',auditOnly='all',auditText='';
 // Which of the loaded events a filter keeps (exported for the tests).

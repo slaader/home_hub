@@ -32,8 +32,8 @@ test('MCP tools follow scopes; inventory_update is hash-checked, secret-proof an
  const h=await hub(t);
  const agent=await h.account('agent-studio',['inventory:write']),reader=await h.account('reader-mini',[]);
  const names=async hd=>(await (await rpc(h,hd,'tools/list')).json()).result.tools.map(x=>x.name).sort();
- assert.deepEqual(await names(agent.headers),['home_status','inventory_bulk_upsert','inventory_delete','inventory_describe','inventory_get','inventory_search','inventory_update','machine_list','review_get','review_list','search','ticket_attachment_get','ticket_get','ticket_search','tickets_list','whoami']);
- assert.deepEqual(await names(reader.headers),['home_status','inventory_describe','inventory_get','inventory_search','machine_list','review_get','review_list','search','ticket_attachment_get','ticket_get','ticket_search','tickets_list','whoami']);
+ assert.deepEqual(await names(agent.headers),['home_status','integrations_status','inventory_bulk_upsert','inventory_delete','inventory_describe','inventory_get','inventory_search','inventory_update','machine_list','models_overview','review_get','review_list','runtime_endpoints_list','search','ticket_attachment_get','ticket_get','ticket_search','tickets_list','whoami']);
+ assert.deepEqual(await names(reader.headers),['home_status','integrations_status','inventory_describe','inventory_get','inventory_search','machine_list','models_overview','review_get','review_list','runtime_endpoints_list','search','ticket_attachment_get','ticket_get','ticket_search','tickets_list','whoami']);
  const tools=(await (await rpc(h,agent.headers,'tools/list')).json()).result.tools;
  assert.ok(tools.every(x=>x.inputSchema?.type==='object'&&typeof x.description==='string'&&!('scope'in x)));
 
@@ -112,7 +112,7 @@ test('initialize instructions: an orientation assembled from the modules, cut to
  for(const word of ['whoami','home_status','machine_list','machine_upsert','runtime_publish','inventory_describe','inventory_search','inventory_get','inventory_update','inventory_bulk_upsert','inventory_delete','software_watch_list','software_watch_put','tickets_list','ticket_search','ticket_get','ticket_create','review_list','review_get','review_publish'])
   assert.ok(all.includes(word),word);
  assert.match(all,/inventory_describe once[^\n]*inventory_search before you add/);assert.match(all,/hash you read as base/);assert.match(all,/Never store a secret/);
- assert.ok(all.length<3200&&plain.length<1800,`short: ${all.length} / ${plain.length} characters`);
+ assert.ok(all.length<4000&&plain.length<2100,`short: ${all.length} / ${plain.length} characters`);
  // a tool the text names is a tool that exists, and one the key can call
  const named=text=>[...new Set(text.match(/\b[a-z]+(?:_[a-z]+)+\b/g))];
  for(const [key,text] of [[full,all],[reader,plain],[inv,some]]){const listed=await tools(key);for(const name of named(text))assert.ok(listed.includes(name),`${key.account.name}: ${name} is named but not listed`);}

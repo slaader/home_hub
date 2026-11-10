@@ -11,7 +11,8 @@ This repository is two things kept apart on purpose:
 
 - **Core** — everything outside `local/`. Generic: it knows no household. Sign-in, users, service accounts,
   scopes and API keys, the overview with the Thermo telemetry client, the inventory map and services catalog,
-  the tracker, review, search, the SSH-key and versions collectors, the router adapter, the MCP endpoint.
+  the tracker, review, search, the SSH-key and versions collectors, the router adapter, the integrations page
+  (what the hub reads from outside, and the switch that turns each off), the MCP endpoint.
 - **Overlay** — `local/`. One household's configuration (`local/site.json`), its plugins
   (`local/plugins/<id>/`), pictures, deployment recipes and runbooks. In the private repository it is tracked;
   a public export leaves it out. A public checkout has no `local/` until its owner creates one.
@@ -23,8 +24,8 @@ it in tests). Do not branch on the edition to change behaviour: what differs bet
 Rules that keep the split honest:
 
 - **Core never imports from `local/`.** A plugin reaches core through the module registry only.
-- **A plugin registers; it does not edit core tables.** Scopes, routes, MCP tools, pollers, assets and sidebar
-  entries are declared in the plugin's `index.mjs` (`server/plugins.mjs` is the contract, `docs/plugins.md` the
+- **A plugin registers; it does not edit core tables.** Scopes, routes, MCP tools, pollers, assets, integrations
+  and sidebar entries are declared in the plugin's `index.mjs` (`server/plugins.mjs` is the contract, `docs/plugins.md` the
   guide). Never add a plugin's route to `server/core/`, its scope to `server/scopes.mjs`, its tool to
   `server/mcp.mjs` or its page to `public/app.js`.
 - **No household values in core**: no real names, addresses, host names, user names or home paths. Use the
@@ -50,14 +51,14 @@ The run ends with one line per half and a total, and exits non-zero when either 
 an overlay it looks like this (the `overlay` numbers are that household's):
 
 ```
-core     tests 359  pass 358  fail 0  skipped 1
-overlay  tests 70  pass 70  fail 0
-total    tests 429  pass 428  fail 0
+core     tests 397  pass 396  fail 0  skipped 1
+overlay  tests 76  pass 76  fail 0
+total    tests 473  pass 472  fail 0
 ```
 
-- **Core: 359 tests in 49 files (2026-11-10), and none may fail, on any machine.** In a tree that has
+- **Core: 397 tests in 52 files (2026-11-10), and none may fail, on any machine.** In a tree that has
   `local/`, one is reported as skipped: `public edition: no overlay in the tree…` checks an export, and it
-  runs there, so an export passes 359 of 359 with no `overlay` line.
+  runs there, so an export passes 397 of 397 with no `overlay` line.
 - **Overlay: whatever the household added.** Its count, and which of its tests need files that are not in
   git (data, generated media, a runtime on another machine), are written down in `local/AGENTS.md`. A failing
   overlay test that is not on that list is a real failure.

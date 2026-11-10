@@ -1,0 +1,3 @@
+{
+ "/metrics": "vllm:num_requests_running{engine=\"0\",model_name=\"Qwen/Qwen3-8B\"} 1.0\nvllm:generation_tokens_total{engine=\"0\",model_name=\"Qwen/Qwen3-8B\"} 121500.0\n"
+}

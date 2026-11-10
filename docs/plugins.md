@@ -45,6 +45,7 @@ the field. `HOME_HUB_SITE_CONFIG=/path/to/file.json` selects another file; `none
 | `inventory.secretStores[]` | Names of your secret stores (a password manager vault, …) that inventory entries may point at | Only the built-in ones: `passwords-app`, `remembered`, `unknown`, and the `keychain:` / `file:` / … prefixes |
 | `tracker.projects[]` | `{id, key, name, type}`: projects a brand-new tracker starts with | The tracker starts with no projects |
 | `security` | `gitHost` / `gitUrl` of a Forgejo the SSH-key collector should read, `certificates[]` (`{match, label}` names for TLS key files), `order[]` (machine order in the key list) | No git server is queried; TLS keys are labelled generically |
+| `runtimes[]` | `{id?, machine, kind, url, name?}`: local LLM runtimes the hub reads directly (core module `runtimes`). `machine` is a machine of this file; `kind` is `auto` (detected) or one of `llama-swap`, `ollama`, `lmstudio`, `llama-cpp`, `vllm`, `sglang`, `omlx`, `mlx-serve`, `openai`; `url` is an origin only (`http://127.0.0.1:11434`): no path, no user or password, an IP address on loopback or inside `lanCidrs` (any private range when `lanCidrs` is empty). `id` defaults to `<machine>-<port>`. At most 40, each URL once. Entries added through the API live in `state/runtimes-config.json`; these are read-only there | No direct reads; a plugin may still provide `home.runtimes` |
 | `router` | `{adapter, host, site}`: the router feed. `adapter` is `unifi` (included) or the id of an adapter a plugin provides; `host` is the gateway the included collector reads (default: the machine with role `router`); `site` its UniFi site name | No router feed: the router tile and page say what to set up |
 | `strings.en` | English for your own labels (the UI's source language is Czech): `{"source text": "translation"}` | Your labels show as written |
 | `plugins.<id>` | Free-form settings for a plugin; core does not look inside | — |
@@ -133,6 +134,11 @@ export default {
 
   // Extension points of core (see below).
   provides: {},
+
+  // What this plugin reads from outside, its health, and whether an administrator may turn it off
+  // (Administration → Integrations; see Integrations below).
+  integrations: [{id: 'notes.sync', title: 'Synchronizace poznámek', kind: 'other',
+                  status: (state, hub, {enabled}) => ({state: 'ok', summary: 'Vše běží.', configuredBy: [{source: 'env', name: 'NOTES_URL'}]})}],
 };
 ```
 
@@ -151,7 +157,7 @@ A handler gets one context object:
 | `canWrite`, `canAdmin`, `signedIn`, `device` | Shortcuts |
 | `json(status, data)`, `error(status, code, message)` | Replies |
 | `state` | What this module's `setup` returned |
-| `hub` | The hub: `site`, `directory` (data), `stateDirectory`, `db`, `auth`, `accessStore`, `registry`, `options`, `state(id)`, `collect(name)`, `provided(name)` |
+| `hub` | The hub: `site`, `directory` (data), `stateDirectory`, `db`, `auth`, `accessStore`, `registry`, `options`, `state(id)`, `collect(name)`, `provided(name)`, `integrationEnabled(id)`, `integrationDisabled(id)`, `onIntegrationChange(fn)`, `integrationSecret(id, key)` (see Integrations) |
 | `subject` | Set it to what a write touched; it goes into the API write log |
 
 The pipeline does the common checks before your handler runs, in this order: the credential, admin-only path
@@ -202,9 +208,11 @@ The server does not start when a plugin is wrong. The message names the plugin a
 - An unknown field, a missing `handler`, a write route without `scope`, a `view` that is not in `assets`,
   an asset path with `..`, an asset file that does not exist.
 - Two modules registering the same route (method + path, or method + the same pattern), scope id, page hash,
-  MCP tool name, asset URL or module id. Core modules count: a plugin cannot take `/api/home`.
+  MCP tool name, asset URL, integration id or module id. Core modules count: a plugin cannot take `/api/home`.
 - A route, tool, page or `mcpInstructions` part using a scope that no loaded module defines.
 - An `mcpInstructions` text that is empty, longer than 600 characters or more than one line.
+- An integration whose id is not `<this module's id>.<name>`, whose `kind` is unknown, that has no `status`,
+  that names a `provides` the module does not provide, or that is listed twice.
 
 A plugin may use a core scope (`read`, `tickets:write`, …) or another plugin's.
 
@@ -217,12 +225,107 @@ fine).
 |---|---|---|
 | `home.snapshots` | `{machineId: {snapshot, bridge}}` — what an agent on the machine reports: `snapshot.services[]`, `memory`, `uptimeSeconds`, `collectedAt` | Overview tiles and the machine page stack |
 | `home.services` | `{machineId: services[]}` — reachability probes for a machine without an agent (role `nas`) | The NAS tile's online state and service list |
-| `home.runtimes` | `{machineId: {source, observedAt, runtimes: [{id, name, kind, status: running\|stopped\|unknown, url, version, models: [{id, state, sizeGb, contextTokens, ttlRemainingSeconds}], stats: [{label, value}]}]}}` — local LLM runtimes on a machine (llama-swap, Ollama, LM Studio, llama.cpp, vLLM, …). Core bounds it (20 runtimes, 30 models, 12 stats each) and never interprets it. A model's `state` is `loaded`, `loading` or anything else for "not in memory"; the first of `stats` is the figure a card prints large; `label` and `source` go through the plugin's `strings` | The "Local LLM runtimes" section of a machine page, one card per runtime. Nothing in core reads runtimes and the telemetry agent does not report them: a machine no provider reports on has no such section. Report `runtimes: []` only when you watch the machine and it runs none. A machine with runtimes shows its GPU on its tile's small chart, any other its CPU |
+| `home.runtimes` | `{machineId: {source, observedAt, runtimes: [{id, name, kind, status: running\|stopped\|unknown, url, version, source?, models: [{id, state, sizeGb, contextTokens, ttlRemainingSeconds}], stats: [{label, value}]}]}}` — local LLM runtimes on a machine (llama-swap, Ollama, LM Studio, llama.cpp, vLLM, …). Core provides it too, from the runtimes it reads directly, and joins every provider's report per machine (below). Core bounds it (20 runtimes, 30 models, 12 stats each). A model's `state` is `loaded`, `loading` or anything else for "not in memory"; the first of `stats` is the figure a card prints large; `label` and `source` go through the plugin's `strings` | The "Local LLM runtimes" section of a machine page, one card per runtime. The telemetry agent does not report runtimes: a machine that neither a provider nor a direct endpoint reports on has no such section. Report `runtimes: []` only when you watch the machine and it runs none. A machine with runtimes shows its GPU on its tile's small chart, any other its CPU |
+| `runtimes.requests` | `{id, read({from, to, limit}) → Promise<items[]>}` — request history of local model runtimes. An item: `{machine, runtime, model, at, path, inputTokens, outputTokens, promptTps, generationTps, durationMs, client, clientMachine?, clientAddress?}`. `path` is the URL path or a kind (`chat`, `embeddings`, `images`, `audio`); `model` is the name the client asked for (a gateway alias is fine); `client` is who sent it when the provider can tell, else empty ("Unattributed"); `clientMachine` is a machine id, only when the provider knows it; `clientAddress` is the address the request came from (a site machine's `ip` names that machine, loopback names none). Core de-duplicates items two providers both report | The LLM & Diffusion page: requests, tokens and tok/s over time, the clients table and the traffic in the wiring diagram. Without a provider the page shows live state only |
 | `inventory.writer` | `{put(change, by), edit(input)}` or `null` — where inventory edits go instead of the local file. Optional: `remove(change)` and `bulk(change, {by, user})`; without them delete and bulk upsert answer `501` | Inventory map and services catalog |
 | `router.adapter` | `{id, title, read(context)}` — another router's census and health. `read` resolves to an observation `{status, observedAt, model, firmware, routerMac, devices[], hardware[]}` or `null`; core validates and bounds it (`server/router-data.mjs`). Optional `staleAfterSeconds` | `GET /api/router`, the router tile and page |
 
+The LLM & Diffusion page (core module `models`, `server/models-data.mjs`) reads `home.runtimes` too, and draws its wiring
+from optional fields the machine pages ignore. All are optional; without them the page infers what it can (a runtime
+whose name says llama-swap, gateway, proxy or router is a front door; a model's kind comes from its name):
+
+| Field | On | Meaning |
+|---|---|---|
+| `role` | runtime | `gateway` (a front door that hands requests to engines) or `engine` |
+| `memory` | runtime | `{usedGb, capacityGb, basis}`: `basis` `resident` (what it holds) or `budget` (what a router has allotted) |
+| `name`, `kind`, `capabilities[]`, `engine` | model | Display name; `kind` one of `llm`, `embedding`, `image`, `video`, `music`, `audio`, `other`; capabilities such as `image`, `audio`, `embedding`; the engine family (`vlm`, `audio_tts`, …) |
+| `lastRequestAt`, `ttlSeconds` | model | When it was last asked for; its unload timeout |
+| `via`, `target` | model on a gateway | The engine it is handed to: a runtime id on the same machine, or an engine inside the gateway (`llama.cpp`); `target` is that engine's model id. A gateway entry with both is drawn as an alias of the engine's model, not as a second model |
+
 Plugins can define their own names for each other: `hub.collect(name)` returns every provider's value,
 `hub.provided(name)` the first.
+
+#### `home.runtimes` from more than one provider
+
+Core is a `home.runtimes` provider itself: the module `runtimes` (`server/core/runtimes.mjs`) reads the
+runtimes listed in `site.json → runtimes` and those added through `POST /api/runtimes/endpoints` directly,
+GET-only on a fixed list of paths (`server/runtime-adapters.mjs` → `READ_PATHS`). Its entries carry
+`source: "přímo z runtimu"` on the machine and on each runtime. When a plugin reports the same machine, home
+joins the two (`mergeRuntimeReports` in `server/home-data.mjs`):
+
+- Two entries are the same runtime when their `url` names the same address and port (every loopback name
+  counts as one; the path is ignored), or when they carry the same `id` and one has no `url`.
+- The richer one is kept: a known `status` beats `unknown`, then the one with more models, more model facts
+  (size, context, TTL), more figures and a version. The first reported wins a tie.
+- Its gaps are filled from the other: version, the size, context and TTL of a model both list, and figures
+  with a label it lacks (up to four figures in all). Models only the other lists are added unless that one is stale.
+- The machine gets `sources` (every source that contributed) and the oldest `observedAt` of the entries kept
+  (one that only filled gaps does not count).
+
+So a plugin needs to do nothing to coexist with the direct reads: report your runtimes with their real `url`.
+A runtime may carry its own `source` (a source-language label, like the machine's).
+When no host agent reports a service, a runtime with the same `id` as a stack block's `service` fills that
+block (state and models), as a bridge's service does.
+
+### Integrations
+
+An integration is something a module reads from outside: a telemetry agent, a router, a collector's snapshot,
+a bridge to another machine. Declaring one puts a card on Administration → Integrations (`#integrations`) with
+its health, where it is configured, a switch, a "Test now" button and its settings. The other agent-facing view
+is the read-only MCP tool `integrations_status`. Nothing turns an integration off over MCP or with an API key.
+
+```js
+integrations: [{
+  id: 'notes.sync',            // "<module id>.<name>", unique; the registry refuses anything else
+  title: 'Synchronizace poznámek', titleKey: undefined,   // Czech source text, translated with strings.en
+  kind: 'other',               // telemetry | llm-runtimes | router | collector | upstream | storage | bridge | other
+  description: '…',            // one or two sentences: what it reads, and what turning it off does
+  toggle: true,                // false: the page shows why it cannot be switched here (toggleNote)
+  toggleNote: undefined,
+  provides: ['home.snapshots'],// optional: providers of this module that answer nothing while it is off
+  howTo: '…', page: 'overview', docs: 'docs/plugins.md → …',   // optional: shown on a not-configured card
+  status: async (state, hub, {enabled}) => Status,              // required, cheap: no network call when !enabled
+  test: async (state, hub) => Status,                           // optional: a real check, run by "Test now"
+  settings: {schema: [{key, label, type: 'text' | 'number' | 'boolean' | 'select', secret?, options?, min?, max?, help?}],
+             read: (state, hub) => values, write: async (state, hub, values) => {}},   // optional
+}]
+```
+
+`Status` is `{state, summary, lastSuccessAt?, lastError?, configuredBy: [{source, name}], items?: [{id, label,
+state, summary, lastSuccessAt?, lastError?}]}`. `state` is `ok`, `stale`, `error`, `off`, `not-configured` or
+`disabled`; `source` is `site.json`, `env`, `ui`, `file` or `plugin`, and `name` says what exactly (`STUDIO_SOCKET`,
+`router.adapter = unifi`). `summary` is Czech source text, or `tx(template, params)` from `server/text.mjs` when it
+holds numbers, so the browser can translate it. Core bounds what comes back (lengths, list sizes, known values
+only) and drops anything that looks like a secret; a status that throws or takes longer than 5 s reads as
+`error`. Derive every field from real state, never hard-code it. `worstState(states)` in `server/integrations.mjs`
+folds item states into one.
+
+**On and off.** `data/state/integrations.json` (`{schemaVersion: 1, disabled: {<id>: {by, at}}}`) holds what an
+administrator turned off; a missing file means everything is on, which is how a hub behaved before. While an
+integration is off:
+
+- `status` is still called with `{enabled: false}` for its `configuredBy` (core reports `disabled` whatever it
+  returns). Do no network call then.
+- Its pollers stop or skip their work. Check `hub.integrationEnabled(id)` in the poll, and listen with
+  `hub.onIntegrationChange(({id, enabled, by, at}) => …)` to resume at once when it is turned on again. No
+  restart is needed either way.
+- The providers it lists under `provides` answer nothing: `hub.collect(name)` leaves them out and
+  `hub.provided(name)` moves on to the next one.
+- Its routes keep answering. A read answers `200` with `disabled: hub.integrationDisabled(id)` (`{id, title, by,
+  at}`) and empty data; a change answers `409 INTEGRATION_DISABLED`. A page shows `disabledNotice(disabled)` from
+  `ui.js` instead of old data. A provenance source with `state: 'disabled'` makes the pill say so.
+
+**Settings** are for non-secret values: `write` gets the plain ones, validated against the schema. A field with
+`secret: true` is write-only: core stores it in `private/integrations.json` (0600, `INTEGRATION_SECRETS_FILE`
+overrides the path), the API answers `{set: true}` and never the value, and an administrator clears it with an
+explicit action. The module reads it with `hub.integrationSecret(id, key)`. A plain text field that looks like a
+secret is refused.
+
+Every toggle, test and settings change is a line in the access audit (`integration-enabled`,
+`integration-disabled`, `integration-tested`, `integration-settings`, `integration-secret-cleared`) with who made
+it. Settings changes name the keys, never a value.
+
+Core's own LLM-runtime reader declares `runtimes.endpoints` (kind `llm-runtimes`), one item per runtime endpoint.
 
 ### The router adapter
 

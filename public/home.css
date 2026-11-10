@@ -201,6 +201,15 @@
 .hv-models li::before{content:'';position:absolute;left:0;top:13px;width:7px;height:7px;border-radius:50%;background:var(--color-border-strong)}
 .hv-models li.loaded::before{background:var(--color-good)}.hv-models li.loading::before{background:var(--color-warn)}
 .hv-models small{display:block;color:var(--color-text-faint);word-break:break-all}
+/* An engine's models, one group per runtime above it */
+.hv-model-group{display:flex;flex-direction:column;gap:var(--space-1);min-width:0}
+.hv-model-group+.hv-model-group{padding-top:var(--space-2);border-top:1px dashed var(--color-border)}
+.hv-model-group>b{font:600 var(--text-xs)/1.4 var(--font-mono);color:var(--color-text)}
+.hv-model-group summary{display:inline-flex;align-items:center;gap:var(--space-1);min-height:32px;font:var(--text-xs) var(--font-mono);color:var(--color-text-dim);cursor:pointer;list-style:none}
+.hv-model-group summary::-webkit-details-marker{display:none}
+.hv-model-group summary::before{content:'▸';color:var(--color-text-faint)}.hv-model-group details[open]>summary::before{content:'▾'}
+.hv-model-group summary:hover{color:var(--color-text)}
+.hv-model-group summary:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:var(--radius-xs)}
 
 /* Local LLM runtimes: one compact card per runtime a provider reported. The first figure is the large one. */
 .hv-runtimes{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:var(--space-3);align-items:start}

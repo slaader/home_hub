@@ -165,6 +165,8 @@ notInstalled({dependency: 'Thermo', installUrl: 'https://example.com/…',
 
 errorState({title: 'The inventory could not be loaded', body: 'What happened, if you know.', retry: () => load()})
 
+disabledNotice(answer.disabled)            // an administrator turned the integration off: who, when, a link
+
 loadingState('Loading the inventory…')      // a spinner and a line
 skeleton(4)                                 // four grey lines in place of text
 ```
@@ -179,7 +181,8 @@ skeleton(4)                                 // four grey lines in place of text
 | `optional` (`notInstalled`) | `false` hides the "Optional" tag |
 
 Which one: nothing has been added yet → `emptyState`. An optional companion is missing → `notInstalled` (the
-rest of the hub works, and it says so). A request failed → `errorState` with `retry`. Still waiting →
+rest of the hub works, and it says so). The data's integration is turned off (the answer carries `disabled`) →
+`disabledNotice`, never the old data. A request failed → `errorState` with `retry`. Still waiting →
 `loadingState` or `skeleton`.
 
 ### Copy block, tabs, MCP snippet

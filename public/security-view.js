@@ -7,7 +7,7 @@ import {el} from './views.js';
 import {authGuard} from './session-cache.js';
 import {t,tp,locale} from './i18n.js';
 import {timeZone} from './site.js';
-import {pageHeader,emptyState,notInstalled} from './ui.js';
+import {pageHeader,emptyState,notInstalled,disabledNotice} from './ui.js';
 import {badge,say,freshnessBanner,fill} from './systems-view.js';
 
 let tab='matrix';
@@ -235,7 +235,10 @@ export function securityView(){
     if(r.status===404)fill(box,head(e.provenance),setupState(e.collector));
     else fill(box,head(),emptyState({icon:'⚠',title:r.status===403?t('Jen pro administrátora'):t('Inventář se nepodařilo načíst'),body:r.status===403?t('Tahle stránka je dostupná jen správci.'):t(e.error?.message)||t('Zkus to znovu.'),actions:r.status===403?[]:retry}));
     return;}
-   render(box,await r.json());
+   const doc=await r.json();
+   // The key collector turned off by an administrator: say so instead of an old snapshot.
+   if(doc.disabled){fill(box,head(doc.provenance),disabledNotice(doc.disabled));return;}
+   render(box,doc);
   }catch{fill(box,head(),emptyState({icon:'⚠',title:t('Home Hub neodpovídá'),body:t('Zkus to znovu.'),actions:retry}));}
  };
  draw();

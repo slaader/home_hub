@@ -40,6 +40,40 @@ export function inCidrs(ip,cidrs){
   if(net.bits>=31)return true;const host=(n&~net.mask)>>>0,last=(~net.mask)>>>0;return host!==0&&host!==last;});
 }
 
+// --- LLM runtime endpoints ------------------------------------------------------------------
+// Where the hub reads a local LLM runtime directly (server/core/runtimes.mjs, server/runtime-adapters.mjs):
+// {id?, machine, kind, url, name?}. url is an origin only (scheme, address, port): no path, so no endpoint
+// can point the read-only adapters at a route of its choosing, and no user:password, because credentials
+// never go in this file (a bearer token is stored server-side, write-only). The host is an address, never a
+// name: loopback, or inside lanCidrs when the site lists its networks (else a private IPv4 range).
+export const RUNTIME_KINDS=Object.freeze(['auto','llama-swap','ollama','lmstudio','llama-cpp','vllm','sglang','omlx','mlx-serve','openai']);
+export const RUNTIME_ENDPOINT_ID=/^[a-z][a-z0-9-]{1,47}$/;
+export const RUNTIME_ENDPOINT_LIMIT=40;
+const PRIVATE_NETS=['10.0.0.0/8','172.16.0.0/12','192.168.0.0/16'].map(parseCidr);
+const loopback=host=>host==='localhost'||host==='[::1]'||(ipv4(host)!==null&&host.startsWith('127.'));
+// → {id, machine, kind, url, name} or throws Error(message) naming the field. where: the field's path.
+export function runtimeEndpoint(raw,{lanCidrs=[],where='runtime'}={}){
+ const no=message=>{throw Object.assign(new Error(`${where}${message}`),{code:'invalid'});};
+ if(!plain(raw))no(' must be an object');
+ const extra=Object.keys(raw).filter(k=>!['id','machine','kind','url','name'].includes(k));if(extra.length)no(` has unknown field(s): ${extra.join(', ')}`);
+ if(typeof raw.machine!=='string'||!MACHINE_ID.test(raw.machine))no(`.machine must be a machine id`);
+ const kind=raw.kind??'auto';if(!RUNTIME_KINDS.includes(kind))no(`.kind must be one of ${RUNTIME_KINDS.join(', ')}`);
+ let url;try{url=new URL(raw.url);}catch{no('.url must be an http(s) address such as http://127.0.0.1:11434');}
+ if(!['http:','https:'].includes(url.protocol))no('.url must use http or https');
+ if(url.username||url.password)no('.url must not carry a user or password: credentials never go in the configuration');
+ if(url.pathname!=='/'||url.search||url.hash||/[?#]/.test(raw.url))no('.url must be an origin only (scheme, address and port), with no path or query');
+ const host=url.hostname;
+ if(!loopback(host)){
+  if(ipv4(host)===null)no('.url must name an IP address (or localhost), not a host name');
+  if(lanCidrs.length?!inCidrs(host,lanCidrs):!PRIVATE_NETS.some(n=>inCidrs(host,[n])))no(lanCidrs.length?'.url must be a loopback address or inside the site networks (lanCidrs)':'.url must be a loopback or private network address');
+ }
+ const port=url.port||(url.protocol==='https:'?'443':'80');
+ const id=raw.id??`${raw.machine}-${port}`.slice(0,48);
+ if(typeof id!=='string'||!RUNTIME_ENDPOINT_ID.test(id))no(`.id must match ${RUNTIME_ENDPOINT_ID}`);
+ const name=raw.name??'';if(typeof name!=='string'||name.length>60||/[\u0000-\u001f\u007f]/.test(name))no('.name must be a string of at most 60 characters');
+ return {id,machine:raw.machine,kind,url:url.origin,name:name.trim()};
+}
+
 // --- validation ------------------------------------------------------------------------------
 function machine(raw,i){
  const where=`machines[${i}]`;keys(raw,['id','name','hostname','ip','role','picture','thermoId','hardware','ssh','stack'],where);
@@ -60,7 +94,7 @@ function machine(raw,i){
  return {id:raw.id,name:str(raw.name??raw.id,60,`${where}.name`,{empty:false}),hostname:str(raw.hostname??'',253,`${where}.hostname`),ip,role,picture,thermoId,hardware,ssh,stack};
 }
 export function validateSite(raw={}){
- keys(raw,['$comment','siteName','lanCidrs','timeZone','defaultLanguage','publicOrigin','machines','inventory','tracker','security','router','strings','plugins'],'the file');
+ keys(raw,['$comment','siteName','lanCidrs','timeZone','defaultLanguage','publicOrigin','machines','inventory','tracker','security','router','runtimes','strings','plugins'],'the file');
  const lanCidrs=list(raw.lanCidrs??[],16,'lanCidrs').map((c,i)=>parseCidr(c)?.text??fail(`lanCidrs[${i}] must be an IPv4 network such as 10.0.0.0/24`));
  const timeZone=raw.timeZone??null;
  if(timeZone!==null){try{new Intl.DateTimeFormat('en',{timeZone});}catch{fail('timeZone must be an IANA zone such as Europe/Berlin, or null');}}
@@ -92,6 +126,11 @@ export function validateSite(raw={}){
   const host=raw.router.host??null;if(host!==null&&(typeof host!=='string'||!/^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/.test(host)))fail('router.host must be an IPv4 address or a host name');
   const name=raw.router.site??null;if(name!==null&&(typeof name!=='string'||!/^[A-Za-z0-9_-]{1,64}$/.test(name)))fail('router.site must be a UniFi site name such as "default"');
   router={adapter:raw.router.adapter,host,site:name};}
+ // Local LLM runtimes the hub reads directly: each on a machine of this file, each URL once.
+ const runtimes=list(raw.runtimes??[],RUNTIME_ENDPOINT_LIMIT,'runtimes').map((r,i)=>{let e;try{e=runtimeEndpoint(r,{lanCidrs,where:`runtimes[${i}]`});}catch(err){fail(err.message);}
+  if(!ids.includes(e.machine))fail(`runtimes[${i}].machine is not a machine id of this file`);return e;});
+ if(new Set(runtimes.map(r=>r.id)).size!==runtimes.length)fail('runtimes have duplicate ids');
+ if(new Set(runtimes.map(r=>r.url)).size!==runtimes.length)fail('runtimes list one URL twice');
  if(raw.plugins!==undefined&&!plain(raw.plugins))fail('plugins must be an object keyed by plugin id');
  // Translations of the site's own labels (the UI's source language is Czech): {"en": {"source text": "translation"}}.
  const strings={};
@@ -99,7 +138,7 @@ export function validateSite(raw={}){
  return deepFreeze({siteName:str(raw.siteName??'',60,'siteName'),lanCidrs,timeZone,defaultLanguage,publicOrigin,machines,
   inventory:{places,secretStores},tracker:{projects},
   security:{gitHost:security.gitHost?str(security.gitHost,253,'security.gitHost'):null,gitUrl:security.gitUrl?str(security.gitUrl,300,'security.gitUrl'):null,certificates,order},
-  router,strings,plugins:raw.plugins??{}});
+  router,runtimes,strings,plugins:raw.plugins??{}});
 }
 function deepFreeze(v){if(v&&typeof v==='object'&&!Object.isFrozen(v)){Object.freeze(v);for(const x of Object.values(v))deepFreeze(x);}return v;}
 export const EMPTY_SITE=validateSite({});

@@ -169,13 +169,63 @@ export function telemetryFor(def,thermo,nowSec){
 const RUNTIME_STATES=['running','stopped','unknown'];
 export function runtimesFor(entry){
  if(!entry||typeof entry!=='object'||!Array.isArray(entry.runtimes))return null;
- return {source:text(entry.source,40),observedAt:text(entry.observedAt,40)||null,
+ const sources=Array.isArray(entry.sources)?[...new Set(entry.sources.map(x=>text(x,40)).filter(Boolean))].slice(0,4):[];
+ return {source:text(entry.source,40)||sources[0]||'',...(sources.length>1?{sources}:{}),observedAt:text(entry.observedAt,40)||null,
   runtimes:entry.runtimes.filter(r=>r&&typeof r==='object').slice(0,20).map(r=>({id:text(r.id,60),name:text(r.name,60)||text(r.id,60),kind:text(r.kind,40),
    status:RUNTIME_STATES.includes(r.status)?r.status:'unknown',url:text(r.url,120)||null,version:text(r.version,40)||null,
+   ...(r.source?{source:text(r.source,40)}:{}),
    models:Array.isArray(r.models)?r.models.filter(m=>m&&typeof m==='object').slice(0,30).map(m=>({id:text(m.id,120),state:text(m.state,16),sizeGb:number(m.sizeGb,100000),
     contextTokens:number(m.contextTokens,1e9),ttlRemainingSeconds:number(m.ttlRemainingSeconds,1e9)})):[],
    stats:Array.isArray(r.stats)?r.stats.filter(x=>x&&typeof x==='object').slice(0,12).map(x=>({label:text(x.label,40),value:text(String(x.value??''),40)})):[]}))};
 }
+// Several home.runtimes providers (the direct adapters of core, a plugin's bridge, …) may report one machine.
+// reports = their values, in registry order. Per machine the runtimes are joined and each runtime appears
+// once: two entries are the same runtime when they listen on the same address (any loopback name counts as
+// one), or carry the same id and one of them has no address. Of the two, the richer one is kept (a known
+// state beats "unknown", then the one that says more: models and their sizes, context and TTL, figures,
+// version; the first reported wins a tie) and the gaps in it are filled from the other: its version, the
+// size / context / TTL of a model both list, and figures it lacks (up to four in all). Models only the other lists are added
+// when that one is not stale. The machine names every source that contributed to a runtime, and the oldest
+// observation time of the entries it shows (a stale plugin that only filled in sizes does not make it stale).
+const endpointKey=url=>{try{const u=new URL(url),host=['localhost','[::1]'].includes(u.hostname)||/^127\./.test(u.hostname)?'loopback':u.hostname;
+ return `${host}:${u.port||(u.protocol==='https:'?'443':'80')}`;}catch{return null;}};
+const richness=r=>(r.status!=='unknown'?1000:0)+(Array.isArray(r.models)?r.models.length*2+r.models.reduce((a,m)=>a+['sizeGb','contextTokens','ttlRemainingSeconds'].filter(k=>m?.[k]!=null).length,0):0)+(Array.isArray(r.stats)?r.stats.length*3:0)+(r.version?2:0);
+function fillRuntime(base,other){
+ const theirs=new Map((other.models||[]).filter(m=>m&&typeof m.id==='string').map(m=>[m.id,m]));
+ const models=(base.models||[]).map(m=>{const o=theirs.get(m?.id);if(!o)return m;const out={...m};for(const k of ['sizeGb','contextTokens','ttlRemainingSeconds'])if(out[k]==null&&o[k]!=null&&(k!=='ttlRemainingSeconds'||o.state===m.state))out[k]=o[k];return out;});
+ if(other.status!=='unknown')for(const o of theirs.values())if(!models.some(m=>m?.id===o.id))models.push(o);
+ const labels=new Set((base.stats||[]).map(x=>x?.label));
+ return {...base,version:base.version||other.version||null,url:base.url||other.url||null,models:models.slice(0,30),
+  stats:[...(base.stats||[]),...(other.stats||[]).filter(x=>x&&!labels.has(x.label))].slice(0,Math.max(4,(base.stats||[]).length)),
+  _from:[...new Set([...(base._from||[base.source]),...(other._from||[other.source])])],_observedAt:base._observedAt};
+}
+export function mergeRuntimeReports(reports=[]){
+ const out={};
+ const entries=new Map();
+ for(const report of reports){if(!report||typeof report!=='object')continue;
+  for(const [machine,entry] of Object.entries(report)){if(!entry||typeof entry!=='object'||!Array.isArray(entry.runtimes))continue;if(!entries.has(machine))entries.set(machine,[]);entries.get(machine).push(entry);}}
+ for(const [machine,list] of entries){
+  if(list.length===1){out[machine]=list[0];continue;}
+  const kept=[];
+  for(const entry of list)for(const r of entry.runtimes){
+   if(!r||typeof r!=='object')continue;
+   const tagged={...r,source:r.source||entry.source||'',_observedAt:entry.observedAt||null},key=endpointKey(r.url);
+   const i=kept.findIndex(k=>key&&endpointKey(k.url)===key||k.id===r.id&&(!key||!endpointKey(k.url)));
+   if(i<0){kept.push(tagged);continue;}
+   const [base,other]=richness(tagged)>richness(kept[i])?[tagged,kept[i]]:[kept[i],tagged];
+   kept[i]=fillRuntime(base,other);
+  }
+  const sources=[...new Set(kept.flatMap(r=>r._from||[r.source]).filter(Boolean))];
+  const times=kept.map(r=>r._observedAt).filter(Boolean).sort();
+  out[machine]={source:sources[0]||'',sources,observedAt:times[0]||null,runtimes:kept.map(({_observedAt,_from,...r})=>r)};
+ }
+ return out;
+}
+// What a stack block that names a service needs from a runtime nobody's host agent reports (see mergeStack):
+// a runtime read directly then fills its block the same way a bridge's service does. Only runtimes in a known
+// state: "unknown" would draw the block as off.
+const runtimeServices=reported=>(reported?.runtimes||[]).filter(r=>r.status!=='unknown').map(r=>({id:r.id,name:r.name,status:r.status==='running'?'reachable':'unreachable',url:r.url,
+ models:r.models.map(m=>({id:m.id,state:m.state,sizeBytes:m.sizeGb!=null?m.sizeGb*1073741824:null,ttlRemainingSeconds:m.ttlRemainingSeconds}))}));
 // The small chart on a tile: one utilisation series over the hub's live window, the last ten minutes of the
 // 1-second readings it holds, in 10 s steps that end on the last full step of the clock (two reads a few
 // seconds apart then agree, and the newest step is never half empty). A step without a reading is null: the
@@ -255,7 +305,7 @@ export function buildHome({site,snapshots:computeLatest={},thermo,router=null,pr
    runtimes:reported,
    // A machine that reports LLM runtimes works on its GPU; anywhere else the CPU says more.
    spark:def.thermo?sparkFor(thermo,def.thermo,nowSec,reported?.runtimes.length?'gpu':'cpu'):null,
-   stack:mergeStack(def.id,services,publishedStack||collected?.stack||layouts[def.id]||null)};
+   stack:mergeStack(def.id,[...services,...runtimeServices(reported).filter(r=>!services.some(s=>s.id===r.id))],publishedStack||collected?.stack||layouts[def.id]||null)};
  });
  const routerClients=router&&Array.isArray(router.devices)?router.devices.filter(d=>['associated','reachable','lease-only'].includes(d.presence)).length:null;
  return {poll,schemaVersion:1,generatedAt:new Date(now).toISOString(),machines,
@@ -276,7 +326,8 @@ function validStack(st){
  const blocks=st.blocks.filter(b=>b&&typeof b.id==='string'&&Number.isInteger(b.layer)&&b.layer>=0&&b.layer<st.layers.length&&Number.isInteger(b.col0)&&Number.isInteger(b.col1)&&b.col0>=0&&b.col1>=b.col0&&b.col1<st.cols.length)
   .map(b=>({id:text(b.id,60),layer:b.layer,col0:b.col0,col1:b.col1,title:text(b.title,60),port:text(b.port,80),desc:text(b.desc,400),
    ...(b.service?{service:text(b.service,60)}:{}),state:b.state==='off'?'off':'on',
-   ...(b.engine?{engine:true}:{}),...(b.hw||b.layer===st.layers.length-1?{hw:true}:{}),
+   // An engine: marked so, or a block without a service in the layer named ENGINE (as collected stacks write it).
+   ...(b.engine&&!b.service||!b.service&&/^engine$/i.test(String(st.layers[b.layer]||''))&&b.layer!==st.layers.length-1?{engine:true}:{}),...(b.hw||b.layer===st.layers.length-1?{hw:true}:{}),
    models:Array.isArray(b.models)?b.models.slice(0,30).map(m=>({id:text(m.id,120),state:text(m.state,16),sizeGb:number(m.sizeGb,100000),path:text(m.path,240)||null})):[]}));
  if(!blocks.length)return null;
  const engines=Object.fromEntries(Object.entries(st.engines||{}).slice(0,8).map(([k,v])=>[text(k,16),text(v,40)]));

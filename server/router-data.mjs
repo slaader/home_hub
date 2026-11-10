@@ -74,9 +74,15 @@ export async function routerAdapter(hub){
  if(wanted)return ROUTER_ADAPTERS[wanted]||{id:wanted,title:wanted,missing:true,read:async()=>null};
  return await readObservationFile(hub.directory)?ROUTER_ADAPTERS.unifi:null;
 }
+// The router feed is the integration "router.adapter" (server/core/router.mjs). Turned off by an
+// administrator, nothing is read: no adapter call, no file; the state is "disabled".
+export const ROUTER_INTEGRATION='router.adapter';
 // The census and health for a hub, whatever adapter it uses. An adapter that throws is "unavailable".
 export async function readRouterFor(hub,{now=Date.now()}={}){
- const adapter=await routerAdapter(hub),lanCidrs=hub.site.lanCidrs;
+ const lanCidrs=hub.site.lanCidrs;
+ if(hub.integrationEnabled&&!hub.integrationEnabled(ROUTER_INTEGRATION))
+  return {...normalizeRouter(null,{lanCidrs,now}),status:'disabled',state:'disabled',disabled:hub.integrationDisabled?.(ROUTER_INTEGRATION)||{id:ROUTER_INTEGRATION},configuredAdapter:hub.site.router?.adapter||null};
+ const adapter=await routerAdapter(hub);
  if(!adapter)return normalizeRouter(null,{lanCidrs,now});
  let raw;try{raw=await adapter.read({directory:hub.directory,site:hub.site,hub});}catch{raw={status:'unavailable',error:'adapter-failed'};}
  const staleAfterSeconds=Number.isSafeInteger(adapter.staleAfterSeconds)&&adapter.staleAfterSeconds>=60&&adapter.staleAfterSeconds<=86400?adapter.staleAfterSeconds:undefined;
@@ -85,6 +91,9 @@ export async function readRouterFor(hub,{now=Date.now()}={}){
 // Where the census comes from (server/provenance.mjs): the included file adapter is fed by a collector
 // script; any other adapter is a plugin's. router: what readRouterFor() returned. No adapter = no data.
 export function routerProvenance(router){
+ // Off: the pill says so, naming the adapter the site configures (nothing was read to find out more).
+ if(router?.state==='disabled'){const id=router.configuredAdapter,builtin=ROUTER_ADAPTERS[id];
+  return provenance([builtin||!id?{kind:'collector',id:id||'router',source:builtin?.collector||COLLECTORS.router.script,state:'disabled'}:{kind:'plugin',id,source:id,state:'disabled'}]);}
  const a=router?.adapter;if(!a)return provenance([]);
  const builtin=ROUTER_ADAPTERS[a.id],facts={state:router.state,lastAt:router.observedAt,count:router.devices?.length||0,unit:'clients',detail:a.title};
  return provenance([builtin?{kind:'collector',id:a.id,source:builtin.collector,intervalSeconds:COLLECTORS.router.intervalSeconds,...facts}:{kind:'plugin',id:a.id,source:a.id,...facts}]);

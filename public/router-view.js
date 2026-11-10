@@ -5,7 +5,7 @@
 import {el} from './views.js';
 import {authGuard} from './session-cache.js';
 import {t} from './i18n.js';
-import {emptyState,notInstalled} from './ui.js';
+import {emptyState,notInstalled,disabledNotice} from './ui.js';
 import {badge,when,ago,fill} from './systems-view.js';
 
 const stat=(k,v,sub,tone='')=>el('div',{class:`col-stat ${tone}`},el('div',{class:'k'},k),el('div',{class:'v'},String(v)),el('div',{class:'s',title:sub},sub));
@@ -55,6 +55,7 @@ function hardware(doc){
 }
 function render(box,doc,reload){
  const title=el('h3',{class:'col-router-title'},t('Klienti a stav routeru'));
+ if(doc.state==='disabled'){fill(box,title,disabledNotice(doc.disabled,{compact:true}));return;}
  if(doc.state==='not-configured'||doc.state==='waiting'){fill(box,title,setupState(doc));return;}
  const c=doc.health?.clients||{},down=doc.health?.hardwareDown||0;
  fill(box,el('div',{class:'col-toolbar'},title,el('button',{type:'button',class:'ui-button small',onclick:reload},t('Obnovit'))),banner(doc),

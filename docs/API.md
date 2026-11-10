@@ -97,6 +97,39 @@ scope), `ADMIN_REQUIRED` (administration) or `SESSION_REQUIRED` (password sign-i
 
 Limits: 100 users, 30 custom roles, 50 service accounts, 100 active keys (`409`). Invalid input is `400 ACCESS_FAILED`.
 
+### Integrations (administrator, password sign-in)
+
+What the hub reads from outside (Thermo, the router adapter, the collectors, a plugin's bridges), declared by the
+modules (`docs/plugins.md` → Integrations). The UI is Administration → Integrations (`#integrations`). No API
+key reaches these routes; MCP has only the read-only tool `integrations_status` (scope `read`:
+`{integrations:[{id, kind, state, summary}]}`).
+
+- `GET /api/admin/integrations` → `{schemaVersion:1, generatedAt, kinds[], integrations:[…], plugins:[{id, title, integrations:[id]}], pluginsDirectory}`.
+  An integration: `{id, module, moduleTitle, core, title, titleKey?, kind, description, howTo, page, docs, toggle, toggleNote?, enabled, disabledBy?, disabledAt?, test, settings, status}`.
+  `status` = `{state, summary, summaryT?, lastSuccessAt, lastError, configuredBy:[{source, name}], items:[{id, label, state, summary, summaryT?, lastSuccessAt, lastError?}]}`;
+  `state` is `ok`, `stale`, `error`, `off`, `not-configured` or `disabled`; `source` is `site.json`, `env`, `ui`, `file` or `plugin`.
+  `settings` is `null` or `{schema:[{key, label, labelKey, type, secret, options?, min?, max?, help}], values}`; a write-only field's value is `{set: true|false}`, never the value.
+- `POST /api/admin/integrations/toggle` `{id, enabled}` → `{changed, integration}`. Takes effect at once, no restart. `409 INTEGRATION_LOCKED` for an integration with `toggle: false`.
+- `POST /api/admin/integrations/test` `{id}` → `{id, at, result: status, integration}`: the integration's own check, now. `409 INTEGRATION_NO_TEST`, or `409 INTEGRATION_DISABLED` while it is off.
+- `POST /api/admin/integrations/settings` `{id, values?, clear?}` → `{integration}`. `values` maps keys of the schema to values (a select takes one of its options; a plain text that looks like a secret is refused); a write-only value is stored in `private/integrations.json` (0600); `clear` lists write-only keys to forget. `400 INVALID_INPUT` with `details` names what is wrong; `409 INTEGRATION_NO_SETTINGS`.
+- Unknown id: `404 INTEGRATION_NOT_FOUND`. Every change is a line in the access audit (`integration-enabled`, `integration-disabled`, `integration-tested`, `integration-settings`, `integration-secret-cleared`) with `by`; settings lines name the keys, never values.
+
+The state lives in `data/state/integrations.json`: `{schemaVersion: 1, disabled: {<id>: {by, at}}}`. A missing
+file means every integration is on. While one is off its data routes answer **`200` with
+`disabled: {id, title, by, at}`** and empty data (or `409 INTEGRATION_DISABLED` for a change), and the
+`provenance` source says `state: "disabled"`:
+
+| Integration | Off means |
+|---|---|
+| `home.thermo` | No Thermo session; `GET /api/home` tiles carry no telemetry; `GET /api/home/history` → `{points:[], source:"vypnuto", disabled}` |
+| `router.adapter` | `GET /api/router` → `state: "disabled"`, no census; the file and the adapter are not read |
+| `security.systems` | `GET /api/systems` → `{disabled, machines:[], collector:{state:"disabled"}}`; `snapshot.json` is not read |
+| `security.upstream` | `GET /api/systems` answers without the newest releases and with `upstreamDisabled`; `upstream.json` is not read |
+| `security.keys` | `GET /api/security` → `{disabled, machines:[], keys:[]}` |
+
+`GET /api/collectors` reports a collector that is off as `state: "disabled"`. `GET /api/home` lists what is off in
+`integrations.disabled: [{id, title, kind}]`. Turning a collector off does not stop its scheduled job.
+
 ### Own account (password sign-in, every role)
 
 - `GET /api/profile` → `{user, permissions:[{id, label, desc, write}], prefs:{timeZone}, site:{timeZone}}`.
@@ -156,7 +189,7 @@ Every JSON error has this shape:
 | 403 | `SCOPE_REQUIRED`, `SESSION_REQUIRED`, `READ_ONLY`, `ADMIN_REQUIRED` | The credential may not do this: a role or API key without the scope, a route that needs a password sign-in, a read-only account, a non-administrator |
 | 409 | `SETUP_REQUIRED`, `ROLE_IN_USE` | No owner account exists yet (run `node scripts/setup.mjs`); a role people still hold cannot be deleted without `reassignTo` |
 | 400/403/404/409/422 | `MACHINE_INVALID`, `MACHINE_SECRET`, `MACHINE_NOT_FOUND`, `MACHINE_CONFLICT`, `MACHINE_DUPLICATE`, `MACHINE_LIMIT`, `MACHINE_READ_ONLY` | The machine API (see Machines below): one code per refusal |
-| 400/404/409/429/503 | `HOME_UNAVAILABLE`, `DEVICE_FAILED`, `INVENTORY_EDIT_FAILED`, `INVENTORY_UPDATE_FAILED`, `TICKETS_FAILED`, `REVIEW_FAILED`, `SEARCH_FAILED`, `ACCESS_FAILED`, `UPDATE_FAILED` (plugins add their own) | Feature errors: 400 invalid request, 404 unknown id, 409 conflict (read again, reapply), 429 another action is running (retry shortly), 503 the feature cannot answer right now |
+| 400/404/409/429/503 | `HOME_UNAVAILABLE`, `DEVICE_FAILED`, `INVENTORY_EDIT_FAILED`, `INVENTORY_UPDATE_FAILED`, `TICKETS_FAILED`, `REVIEW_FAILED`, `SEARCH_FAILED`, `ACCESS_FAILED`, `UPDATE_FAILED`, `MODELS_UNAVAILABLE`, `INVALID_QUERY` (plugins add their own) | Feature errors: 400 invalid request, 404 unknown id, 409 conflict (read again, reapply), 429 another action is running (retry shortly), 503 the feature cannot answer right now |
 | 500 | `UNAVAILABLE` | Anything else |
 
 Timestamps are ISO 8601 UTC strings. Byte sizes are integers. A value the source did not report is `null`.
@@ -263,7 +296,7 @@ and `pages` marks it `admin: true`. The data routes behind a page check the scop
   - `telemetry` = `{"state","thermoId","lastSampleAt","ageSeconds","reason"}`. `state` is `not-installed` (the machine names no telemetry host), `not-applicable` (a router), `ok` (newest reading at most 3 minutes old), `stale` (readings exist, the newest is older) or `unreachable` (a host is named and nothing was ever read). `reason` for the last two: `no-login` (the hub has no login for that host), `denied`, `down`, `no-data`, `waiting`. A failed read never means the machine is off; `online` keeps its earlier meaning for existing clients.
   - Top-level `telemetry` = `{"agent":"Thermo","repoUrl","staleAfterSeconds":180,"adapters":[…]}`: the optional telemetry agent and where to get it (one constant, `TELEMETRY_REPO_URL` in `server/thermo-client.mjs`, still a placeholder until its repository is published). `adapters` lists the agents this hub can connect a device to, each `{"id","name","repoUrl","connect":"account","defaultPort","summary"}` (`summary` is a source-language sentence). The Telemetry step of Add device offers exactly these; today there is one, `thermo`.
   - `spark` = `{"series":"cpu"|"gpu","end","stepSeconds":10,"windowSeconds":600,"values":[…60]}` on a machine with telemetry readings in the window, else `null`: the tile's small chart. `values` are percentages per 10 s step, the last one ending at `end` (unix seconds); `null` is a step without a reading and is drawn as a gap. `series` is `gpu` for a machine that has `runtimes`, else `cpu`.
-  - `stack.source` is `published` (with `publishedAt`, `publishedBy`, `hash`, `layerKeys`) when an agent published it, `collected` for a collected descriptor, absent for the site configuration. `runtimes` is `null` unless a `home.runtimes` provider reports local LLM runtimes for the machine (docs/plugins.md); the machine page then has no such section. Otherwise it is `{"source","observedAt","runtimes":[{"id","name","kind","status","url","version","models":[{"id","state","sizeGb","contextTokens","ttlRemainingSeconds"}],"stats":[{"label","value"}]}]}`. A stack block whose service is reported live gets its `port` and `desc` rewritten as source-language sentences (`":8081 · živě"`); `portT` and `descT` carry the same as translatable parts, like the collector texts below.
+  - `stack.source` is `published` (with `publishedAt`, `publishedBy`, `hash`, `layerKeys`) when an agent published it, `collected` for a collected descriptor, absent for the site configuration. `runtimes` is `null` unless a `home.runtimes` provider reports local LLM runtimes for the machine (docs/plugins.md); the machine page then has no such section. Otherwise it is `{"source","observedAt","runtimes":[{"id","name","kind","status","url","version","source"?,"models":[{"id","state","sizeGb","contextTokens","ttlRemainingSeconds"}],"stats":[{"label","value"}]}]}`; when more than one provider contributed (the hub's own direct reads, see [LLM runtime endpoints](#llm-runtime-endpoints), and a plugin), also `"sources":[…]`, and each runtime appears once (docs/plugins.md → `home.runtimes` from more than one provider). A stack block whose service is reported live gets its `port` and `desc` rewritten as source-language sentences (`":8081 · živě"`); `portT` and `descT` carry the same as translatable parts, like the collector texts below.
 - `GET /api/home/history?machine=<id>&range=30m|7d|30d|6m` → chart buckets for a machine that reports through Thermo; other machines answer with `points: []` and a `reason`.
 - `POST /api/home/refresh` `{}` → the same document after an immediate Thermo pull (rate limited). `POST /api/home/settings` `{"intervalSeconds":15|30|60}` changes the pull interval (scope `home:settings`).
 - `GET /api/ui/manifest` → what the web shell draws itself from; see [The UI manifest](#the-ui-manifest).
@@ -330,6 +363,44 @@ What needs a person: uploading a picture and giving the hub a Thermo login. A de
   first; then the device is its own telemetry host (`thermoId` = its id). `{"id","thermo":null}` forgets the login.
 - `POST /api/home/devices/image/remove` `{"id"}` → the device, back on its built-in picture.
 - `POST /api/home/devices/remove` `{"id"}` → `{"removed"}`; the tile, its Thermo login and picture go, the metric history stays.
+
+### LLM runtime endpoints
+
+Local LLM runtimes the hub reads itself over HTTP (core module `runtimes`), every 30 s (`RUNTIMES_POLL_SECONDS`,
+10–600). What they report appears in `GET /api/home` → `machines[].runtimes` and fills the stack blocks that name
+their service. Endpoints come from `site.json → runtimes` (`source: "site"`, read-only here) and from this API
+(`source: "ui"` or `"agent"`, stored in `state/runtimes-config.json`).
+
+An endpoint: `{"id"?,"machine","kind"?,"url","name"?}`. `id` is `[a-z][a-z0-9-]{1,47}` (default `<machine>-<port>`);
+`machine` is a machine on the overview; `kind` is `auto` (default: recognised by its answers), `llama-swap`,
+`ollama`, `lmstudio`, `llama-cpp`, `vllm`, `sglang`, `omlx`, `mlx-serve` or `openai`; `url` is an origin only:
+`http(s)://<IPv4 or localhost>:<port>`, no path, query, user or password, on loopback or inside the site's
+`lanCidrs` (any private range when none are set). At most 40 endpoints, each URL once.
+
+What the hub requests, and nothing else: `GET` on `/v1/models`, `/running`, `/api/version`, `/api/metrics/stats`,
+`/api/metrics/activity`, `/api/metrics`, `/metrics`, `/api/tags`, `/api/ps`, `/api/v0/models`, `/health`, `/props`,
+`/version`, `/v1/models/status`, `/admin/api/stats` (bodies ≤ 512 KiB, 3 s timeout, no redirects). Never a model-loading
+or unload route (llama-swap's `/upstream/…`, `/unload`, `/api/models/unload`), never `/slots`, never a prompt.
+
+- `GET /api/runtimes/endpoints` (`read`) → `{"endpoints":[…],"kinds","readPaths","limits":{"endpoints":40},"intervalSeconds"}`.
+  Each endpoint has the fields above plus `source`, `readOnly`, `hasToken` (never the token), `addedBy`/`addedAt` for
+  stored ones, and its last read: `state` (`ok`, `stale`, `error`, `off` = nothing listens there, `waiting`),
+  `detectedKind`, `lastAttemptAt`, `lastSuccessAt`, `lastError` (`refused`, `timeout`, `auth`, `http-<status>`,
+  `not-json`, `too-large`, `unrecognised`, …), `lastErrorAt`.
+- `POST /api/runtimes/endpoints` (`home:write`) `{"endpoint":{…}}` → `201` created or `200` →
+  `{"ok","id","created","changed","by","endpoint"}`; the endpoint is read at once and the answer carries that read.
+  The same `id` replaces the stored entry.
+- `POST /api/runtimes/endpoints/remove` (`home:write`) `{"id"}` → `{"ok","id","removed":true}`; its token goes too.
+- `POST /api/runtimes/endpoints/token` (password sign-in with write access; never an API key) `{"id","token"|null}` →
+  `{"ok","id","hasToken"}`. The token (8–512 printable characters) is sent as `Authorization: Bearer …` to that
+  endpoint only and kept in `private/runtime-tokens.json` (mode 0600; `RUNTIME_TOKENS_FILE` overrides the path).
+- Errors: `400 RUNTIME_ENDPOINT_INVALID` (with `details` naming the field), `404 RUNTIME_ENDPOINT_NOT_FOUND`,
+  `403 RUNTIME_ENDPOINT_READ_ONLY` (from `site.json`), `409 RUNTIME_ENDPOINT_CONFLICT` (the URL is another
+  endpoint's), `409 RUNTIME_ENDPOINT_LIMIT`.
+- MCP: `runtime_endpoints_list` (`read`), `runtime_endpoint_upsert` and `runtime_endpoint_remove` (`home:write`),
+  with the same arguments. Tokens never go through MCP.
+- The module declares the integration `runtimes.endpoints` (kind `llm-runtimes`): its status is `ok`, `stale`,
+  `error`, `off`, `not-configured` or `disabled`, with one item per endpoint (docs/plugins.md → Integrations).
 
 ## Project Tracker (UI: #projects, #items, #releases)
 
@@ -552,6 +623,22 @@ An entry: `id` (lowercase letters, digits, hyphens; never changes), `kind` (`net
 | `inventory_update` | `inventory:write` | Create or replace one whole entry (`entry`, `base`) |
 | `inventory_bulk_upsert` | `inventory:write` | `entries: [{entry, base?}]`, `dryRun?`: as `POST /api/inventory/bulk` (one MCP request is at most 64 kB) |
 | `inventory_delete` | `inventory:write` | `id`, `base`: hash-checked, refused while something depends on the entry |
+
+## LLM & Diffusion (UI: #models)
+
+Local language and generative models on every machine, built only from the `home.runtimes` and `runtimes.requests`
+providers and the machines' stacks (`docs/plugins.md` → extension points). Scope `read`; MCP `models_overview`
+(`{range?, graph?}`) returns the same overview, models, clients and known tools, the graph only with `graph:true`.
+
+- `GET /api/models?range=24h|7d|30d` (default `24h`) → `{"schemaVersion":1,"generatedAt","range","empty","providers":{"runtimes":[…],"requests":[…]},"overview","machines","models","clients","graph","known","provenance"}`.
+  - `empty` is true when no provider reports a runtime and none holds a request: the page then explains how to connect one.
+  - `overview` = `{machines, runtimes:{total,up,down,unknown}, models:{total,loaded,loading,byKind}, memory:[{machine,name,ramGb,residentGb,loaded,models,pools:[{runtime,name,usedGb,capacityGb,basis}]}], range, requests, inputTokens, outputTokens, medianTps, attributed, lastRequestAt, observedAt}`. `residentGb` counts what engines hold; a router's budget is a pool, not residency. `medianTps` is the median generation speed of requests with at least 8 output tokens.
+  - `models[]` = one entry per model name across machines: `{key, name, kind, state, machines, sizeGb, contextTokens, ttlRemainingSeconds, lastRequestAt, requests, tokens, placements:[{machine, runtime, role, engine, gateways, aliases, id, state, sizeGb, contextTokens, ttlRemainingSeconds, lastRequestAt, requests, tokens}]}`. A gateway alias (`qwen-27b` on llama-swap for an oMLX model) is folded into the engine's placement (`gateways`, `aliases`). `kind`: `llm`, `embedding`, `image`, `video`, `music`, `audio`, `other`.
+  - `clients[]` = `{client, attributed, clientMachine, via:[provider|address|loopback], requests, inputTokens, outputTokens, recent, lastAt, cross, targets:[{machine, runtime, requests, tokens, models:[{model, requests}]}]}`. `client` is `"Unattributed"` and `clientMachine` `null` where the data does not say; `loopback` means the address was 127.0.0.1 (this machine, or a tunnel into it).
+  - `graph` = `{lanes:[{id, name}], nodes:[{id, column: client|door|engine|model, lane, label, sub, state, kind?, machine, runtime?, model?, known?, history?, requests, tokens, recent, lastAt}], edges:[{id, from, to, requests, tokens, recent, tokensRecent, cross, lastAt}], maxRequests, maxRecent, crossRequests, recentMinutes, truncated}`. Lanes are machines plus `unknown` for clients whose machine is not known; `recent` counts the last `recentMinutes` (15).
+  - `known[]` = tools a machine's stack names (site configuration or `runtime_publish`) that no provider reports: `{machine, machineName, role: client|runtime, title, description, state, source, models, kind}`.
+- `GET /api/models/history?range=24h|7d|30d` → `{"schemaVersion":1,"available","range","stepMs","from","to","buckets":[ISO…],"totals":{requests,inputTokens,outputTokens,medianTps,attributed},"requests":[…],"inputTokens":[…],"outputTokens":[…],"tps":[…],"series":{"model"|"machine"|"client"|"kind":{"keys":[…],"values":{key:[…]}}},"top":{"model"|"machine"|"client"|"kind":[{key,requests,inputTokens,outputTokens,medianTps,medianDurationMs}]}}`. Buckets are hours (24h), six hours (7d) or days (30d) on the site's clock; each series keeps its eight largest keys and folds the rest into `other`. `available` is false when no provider supplies `runtimes.requests`.
+- Errors: `400 INVALID_QUERY` for another range or parameter, `503 MODELS_UNAVAILABLE`.
 
 ## Other read-only routes
 

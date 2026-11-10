@@ -1,0 +1,77 @@
+/* Administration → Integrations (public/integrations-view.js). Tokens only (tokens.css). */
+.ig-page{max-width:var(--content-max);margin:0 auto}
+.ig-body{display:flex;flex-direction:column;gap:var(--space-6)}
+.ig-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:var(--space-3)}
+.ig-stat{display:flex;flex-direction:column;gap:var(--space-0);padding:var(--space-3) var(--space-4);border:1px solid var(--color-border);border-radius:var(--radius-m);background:var(--color-surface)}
+.ig-stat b{font:var(--weight-semibold) var(--text-xl)/var(--leading-tight) var(--font-sans);letter-spacing:var(--tracking-tight)}
+.ig-stat span{color:var(--color-text-dim);font-size:var(--text-s)}
+.ig-stat.good b{color:var(--color-good)}.ig-stat.warn b{color:var(--color-warn)}.ig-stat.bad b{color:var(--color-bad)}
+.ig-group h2{display:flex;align-items:center;gap:var(--space-2);margin:0 0 var(--space-3);font:var(--weight-semibold) var(--text-l)/var(--leading-tight) var(--font-sans)}
+.ig-group h2 .ui-icon{color:var(--color-text-dim)}
+.ig-lead{margin:0 0 var(--space-3);color:var(--color-text-dim);font-size:var(--text-s);max-width:80ch}
+.ig-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,380px),1fr));gap:var(--space-4);align-items:start}
+.ig-card{display:flex;flex-direction:column;gap:var(--space-3);min-width:0;padding:var(--space-4);border:1px solid var(--color-border);border-radius:var(--radius-l);background:var(--color-surface);box-shadow:var(--shadow-1)}
+.ig-card[data-state="error"]{border-color:color-mix(in srgb,var(--color-bad) 45%,var(--color-border))}
+.ig-card[data-state="stale"]{border-color:color-mix(in srgb,var(--color-warn) 40%,var(--color-border))}
+.ig-card.off{background:var(--color-surface-sunken);border-style:dashed}
+.ig-card-head{display:grid;grid-template-columns:auto 1fr auto;gap:var(--space-3);align-items:start}
+.ig-mark{display:grid;place-items:center;width:32px;height:32px;border-radius:var(--radius-s);background:var(--color-accent-soft);color:var(--color-accent);font-size:16px}
+.ig-card.off .ig-mark{background:var(--color-muted-soft);color:var(--color-text-faint)}
+.ig-card-title{min-width:0}
+.ig-card-title h3{margin:0;font:var(--weight-semibold) var(--text-m)/var(--leading-snug) var(--font-sans);overflow-wrap:anywhere}
+.ig-module{display:block;margin-top:var(--space-0);color:var(--color-text-faint);font-size:var(--text-xs);overflow-wrap:anywhere}
+.ig-module code,.ig-chip,.ig-item code,.ig-doc code,.ig-error code,.ig-plugins code{font-family:var(--font-mono);font-size:var(--text-2xs)}
+.ig-summary,.ig-desc,.ig-error,.ig-off-note,.ig-locked,.ig-how p{margin:0;font-size:var(--text-s);line-height:var(--leading-body)}
+.ig-desc{color:var(--color-text-dim)}
+.ig-dim{color:var(--color-text-faint)}
+.ig-error{color:var(--color-bad)}
+.ig-err{margin-left:var(--space-2);color:var(--color-bad)}
+.ig-off-note{padding:var(--space-2) var(--space-3);border-radius:var(--radius-s);background:var(--color-muted-soft);color:var(--color-text-dim)}
+.ig-config{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-1) var(--space-2);font-size:var(--text-xs)}
+.ig-config-label{color:var(--color-text-dim)}
+.ig-chip{display:inline-flex;gap:var(--space-1);padding:1px var(--space-2);border:1px solid var(--color-border);border-radius:var(--radius-pill);background:var(--color-surface-sunken);color:var(--color-text);overflow-wrap:anywhere}
+.ig-chip b{color:var(--color-accent);font-weight:var(--weight-medium)}
+.ig-items{display:flex;flex-direction:column;margin:0;padding:0;list-style:none;border:1px solid var(--color-border);border-radius:var(--radius-m);overflow:hidden}
+/* two lines per part: what it is and its state, then what it says and when it last worked */
+.ig-item{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"label pill" "text when";gap:var(--space-1) var(--space-3);align-items:center;padding:var(--space-2) var(--space-3);font-size:var(--text-xs)}
+.ig-item-label{grid-area:label}.ig-item>.ui-pill,.ig-item-nopill{grid-area:pill;justify-self:end}.ig-item-text{grid-area:text}.ig-item-when{grid-area:when;justify-self:end}
+.ig-item+.ig-item{border-top:1px solid var(--color-border)}
+.ig-item-label{font-weight:var(--weight-medium);overflow-wrap:anywhere}
+.ig-item-text{color:var(--color-text-dim);min-width:0;overflow-wrap:anywhere}
+.ig-item-when{color:var(--color-text-faint);white-space:nowrap}
+.ig-how{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-3);border:1px dashed var(--color-border-strong);border-radius:var(--radius-m)}
+.ig-how-links{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-3)}
+.ig-doc{color:var(--color-text-dim);font-size:var(--text-xs)}
+.ig-card-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--space-3);padding-top:var(--space-3);border-top:1px solid var(--color-border)}
+.ig-locked{display:flex;gap:var(--space-2);align-items:flex-start;color:var(--color-text-dim);font-size:var(--text-xs)}
+.ig-toggle{display:inline-flex;align-items:center;gap:var(--space-2);font-size:var(--text-s);cursor:pointer}
+.ig-switch{position:relative;display:inline-flex;padding:0;border:0;background:none;cursor:pointer;border-radius:var(--radius-pill)}
+.ig-switch:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.ig-switch[aria-busy="true"],.ig-card .ui-button[aria-busy="true"]{cursor:progress;opacity:.6}
+.ig-switch-track{display:block;width:40px;height:22px;border-radius:var(--radius-pill);background:var(--color-border-strong);transition:background var(--duration-fast) var(--ease-out)}
+.ig-switch-thumb{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:var(--color-surface);box-shadow:var(--shadow-1);transition:transform var(--duration-fast) var(--ease-out)}
+.ig-switch[aria-checked="true"] .ig-switch-track{background:var(--color-good)}
+.ig-switch[aria-checked="true"] .ig-switch-thumb{transform:translateX(18px)}
+.ig-settings{border:1px solid var(--color-border);border-radius:var(--radius-m)}
+.ig-settings summary{display:flex;align-items:center;gap:var(--space-2);padding:var(--space-2) var(--space-3);cursor:pointer;font-size:var(--text-s);color:var(--color-text-dim)}
+.ig-settings summary:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.ig-form{display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-3);border-top:1px solid var(--color-border)}
+.ig-field{display:flex;flex-direction:column;gap:var(--space-1);font-size:var(--text-s)}
+.ig-field small{color:var(--color-text-faint);font-size:var(--text-xs)}
+.ig-field-row{display:flex;gap:var(--space-2);align-items:center}
+.ig-field input:not([type="checkbox"]),.ig-field select{flex:1;min-width:0;padding:var(--space-1) var(--space-2);border:1px solid var(--color-border-strong);border-radius:var(--radius-s);background:var(--color-surface-sunken);color:var(--color-text);font:var(--text-s) var(--font-sans)}
+.ig-field input:focus-visible,.ig-field select:focus-visible{outline:var(--focus-ring);outline-offset:1px}
+.ig-form-actions{display:flex;justify-content:flex-end}
+.ig-problem{margin:0;color:var(--color-bad);font-size:var(--text-xs)}
+.ig-problem:empty{display:none}
+.ig-plugins{display:flex;flex-direction:column;gap:var(--space-2);margin:0;padding:0;list-style:none}
+.ig-plugins li{padding:var(--space-2) var(--space-3);border:1px solid var(--color-border);border-radius:var(--radius-m);background:var(--color-surface);font-size:var(--text-s);overflow-wrap:anywhere}
+/* "turned off by an administrator" on the pages that show an integration's data */
+.ig-disabled-note{display:flex;gap:var(--space-2);align-items:flex-start;margin:0 0 var(--space-4);padding:var(--space-3) var(--space-4);border:1px dashed var(--color-border-strong);border-radius:var(--radius-m);background:var(--color-surface-sunken);color:var(--color-text-dim);font-size:var(--text-s)}
+.ig-disabled-note a{color:var(--color-accent)}
+@media (max-width:520px){
+ .ig-item{grid-template-areas:"label pill" "text text" "when when"}
+ .ig-item-when{justify-self:start}
+ .ig-card-head{grid-template-columns:auto 1fr}
+ .ig-card-head .ui-pill{grid-column:1/-1;justify-self:start}
+}

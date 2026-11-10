@@ -6,12 +6,15 @@
 //   home.snapshots  (state, hub) => {machineId: {snapshot, bridge}}        host agents (services, memory, uptime)
 //   home.services   (state, hub) => Promise<{machineId: services[]}>       service probes for agent-less machines
 //   home.runtimes   (state, hub) => {machineId: {source, observedAt, runtimes[]}}   local LLM runtimes on a machine
+//                   (core's own direct adapters, server/core/runtimes.mjs, are one provider; mergeRuntimeReports joins them)
 import path from 'node:path';
 import {readFile} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
-import {createThermoPoller,probeThermo,checkThermoLogin} from '../thermo-client.mjs';
+import {createThermoPoller,probeThermo,checkThermoLogin,loadHostsConfig,TELEMETRY_STALE_SECONDS} from '../thermo-client.mjs';
+import {worstState} from '../integrations.mjs';
+import {tx} from '../text.mjs';
 import {createHomeDevices,validHost,DEVICE_ID,PICTURES,MACHINE_ROLES,RUNTIME_LAYERS,RUNTIME_LIMITS,machineFields} from '../home-devices.mjs';
-import {buildHome,homeHistory,homeHistoryQuery,loadMachineDescriptors,homeMachineIds,machineList} from '../home-data.mjs';
+import {buildHome,mergeRuntimeReports,homeHistory,homeHistoryQuery,loadMachineDescriptors,homeMachineIds,machineList} from '../home-data.mjs';
 import {readRouterFor} from '../router-data.mjs';
 import {siteConfigPath} from '../site-config.mjs';
 import {toolError} from '../mcp.mjs';
@@ -72,6 +75,51 @@ async function publishRuntime(state,hub,input,principal){
  return {ok:true,id:r.machine,hash:r.hash,changed:r.changed,published:r.hash!==null,publishedAt:r.publishedAt,by:principal.username};
 }
 
+// --- integration "home.thermo": the Thermo pull client -----------------------------------------------
+export const THERMO_INTEGRATION='home.thermo';
+// What the overview reads while Thermo is turned off: no readings, no disks, no live state.
+const quietThermo=poller=>({interval:()=>poller.interval?.()||{intervalSeconds:15,lastPollAt:null},status:()=>({}),live:()=>({}),seconds:()=>[],minutes:()=>[],disks:()=>({})});
+const relLabel=(root,file)=>{const rel=path.relative(root,file);return rel&&!rel.startsWith('..')&&!path.isAbsolute(rel)?rel:path.basename(file);};
+// Hosts, their last reading and their errors, from the poller's own state. The hosts file is read for
+// its ids only; logins never leave it.
+async function thermoStatus(state,hub,{enabled=true}={}){
+ const {thermoPoller,homeDevices,thermoHostsFile}=state;
+ const fromFile=(await loadHostsConfig(thermoHostsFile).catch(()=>[])).map(h=>h.id);
+ const fromUi=(await homeDevices.thermoHosts().catch(()=>[])).map(h=>h.id);
+ const added=await homeDevices.list().catch(()=>[]);
+ const ids=[...new Set([...fromFile,...fromUi,...(enabled?thermoPoller.hosts?.()||[]:[])])];
+ const nameOf=id=>hub.site.machines.find(m=>m.thermoId===id)?.name||added.find(d=>d.id===id||d.thermoId===id)?.name||id;
+ const status=enabled?thermoPoller.status?.()||{}:{},live=enabled?thermoPoller.live?.()||{}:{};
+ const now=Date.now();
+ const items=ids.map(id=>{
+  const st=status[id],lv=live[id],at=Number.isFinite(lv?.at)?new Date(lv.at).toISOString():null,fresh=Number.isFinite(lv?.at)&&now-lv.at<=TELEMETRY_STALE_SECONDS*1000;
+  const base={id,label:nameOf(id),lastSuccessAt:at};
+  if(!enabled)return {...base,state:'disabled',summary:'Nečte se.'};
+  if(st?.state==='denied')return {...base,state:'error',summary:'Thermo odmítlo přihlášení.',lastError:'denied'};
+  if(st?.state==='down')return {...base,state:'error',summary:'Neodpovídá.',lastError:st.error||'unavailable'};
+  if(fresh)return {...base,state:'ok',summary:'Čte se živě.'};
+  if(at)return {...base,state:'stale',summary:'Poslední čtení je staré.'};
+  return {...base,state:'stale',summary:'Zatím nic nepřečteno.'};
+ });
+ const configuredBy=[
+  ...(fromFile.length?[...(process.env.THERMO_HOSTS_FILE&&!hub.options.thermoHostsFile?[{source:'env',name:'THERMO_HOSTS_FILE'}]:[]),{source:'file',name:relLabel(hub.root,thermoHostsFile)}]:[]),
+  ...(fromUi.length?[{source:'ui',name:'Přehled → Přidat zařízení'}]:[]),
+  ...(hub.site.machines.some(m=>m.thermoId)?[{source:'site.json',name:'machines[].thermoId'}]:[])];
+ const ok=items.filter(i=>i.state==='ok').length,newest=items.map(i=>i.lastSuccessAt).filter(Boolean).sort().at(-1)||null;
+ if(!items.length)return {state:'not-configured',summary:'Žádný stroj nemá přihlášení k Thermo.',configuredBy,items};
+ return {state:worstState(items.map(i=>i.state)),summary:tx('Thermo čte {ok} z {total} strojů.',{ok,total:items.length}),lastSuccessAt:newest,
+  lastError:items.find(i=>i.lastError)?.lastError||null,configuredBy,items};
+}
+const thermoIntegration={id:THERMO_INTEGRATION,title:'Telemetrie Thermo',kind:'telemetry',
+ description:'Živé CPU, GPU, paměť, příkon, teploty a disky strojů z aplikace Thermo. Vypnutá: hub zavře spojení, nic nečte a přehled ukáže stroje bez telemetrie.',
+ howTo:'Na přehledu přidej zařízení s Thermo (Přidat zařízení), nebo zapiš hostitele do souboru private/thermo-hosts.json.',page:'overview',docs:'docs/plugins.md → Site configuration (thermoId)',
+ status:thermoStatus,
+ // A pull now (at most one every 5 s), then the state it left.
+ async test(state,hub){await state.thermoPoller.refresh?.().catch(()=>false);return thermoStatus(state,hub);},
+ settings:{schema:[{key:'intervalSeconds',label:'Interval čtení',type:'select',options:[{value:15,label:'15 s'},{value:30,label:'30 s'},{value:60,label:'60 s'}],help:'Jak často hub čte Thermo na strojích.'}],
+  read:state=>({intervalSeconds:state.thermoPoller.interval?.().intervalSeconds??null}),
+  async write(state,hub,values){if(values.intervalSeconds!==undefined)await state.thermoPoller.setIntervalMs(values.intervalSeconds*1000);}}};
+
 const MACHINE_SCHEMA={type:'object',required:['id','name'],additionalProperties:false,properties:{
  id:{type:'string',pattern:DEVICE_ID.source,description:'Stable id, used in URLs (#host-<id>) and as the key for updates, e.g. mac-mini or nas.'},
  name:{type:'string',minLength:1,maxLength:60,description:'What the tile shows, e.g. "Mac mini (office)".'},
@@ -114,13 +162,21 @@ export default {
   // The site's own tile pictures (<site images>/home/<id>.jpg), looked up once: the page then asks only for files that exist.
   const imagesDirectory=options.siteImagesDirectory===undefined?(options.site?null:siteConfigPath()&&path.join(path.dirname(siteConfigPath()),'images')):options.siteImagesDirectory;
   const sitePictures=Object.fromEntries(ids.filter(id=>imagesDirectory&&existsSync(path.join(imagesDirectory,'home',`${id}.jpg`))).map(id=>[id,`/images/home/${id}.jpg`]));
-  const merged=async name=>Object.assign({},...await Promise.all(hub.collect(name).map(v=>Promise.resolve(v).catch(()=>({})))));
-  const payload=async()=>buildHome({site,added:await homeDevices.list(),published:await homeDevices.stacks(),sitePictures,descriptors:await loadMachineDescriptors(process.env.MACHINES_DIR||path.join(directory,'machines'),ids),
-   snapshots:await merged('home.snapshots'),runtimes:await merged('home.runtimes'),thermo:thermoPoller,router:await readRouterFor(hub),probed:await merged('home.services')});
-  return {homeDevices,thermoPoller,payload,checkThermo:options.checkThermo||checkThermoLogin,probeCert:options.probeCert||probeThermo,
+  const settled=async name=>Promise.all(hub.collect(name).map(v=>Promise.resolve(v).catch(()=>({}))));
+  const merged=async name=>Object.assign({},...await settled(name));
+  // Integrations an administrator turned off: the overview says so instead of showing nothing silently.
+  const disabledIntegrations=()=>hub.registry.integrations.filter(i=>!hub.integrationEnabled(i.id)).map(i=>({id:i.id,title:i.title,...(i.titleKey?{titleKey:i.titleKey}:{}),kind:i.kind}));
+  const payload=async()=>({...buildHome({site,added:await homeDevices.list(),published:await homeDevices.stacks(),sitePictures,descriptors:await loadMachineDescriptors(process.env.MACHINES_DIR||path.join(directory,'machines'),ids),
+   snapshots:await merged('home.snapshots'),runtimes:mergeRuntimeReports(await settled('home.runtimes')),thermo:hub.integrationEnabled(THERMO_INTEGRATION)?thermoPoller:quietThermo(thermoPoller),router:await readRouterFor(hub),probed:await merged('home.services')}),
+   integrations:{disabled:disabledIntegrations()}});
+  // Thermo off: close the sessions and stop pulling; on again: pull right away. Neither waits for the network.
+  if(!hub.integrationEnabled(THERMO_INTEGRATION))void thermoPoller.pause?.();
+  hub.onIntegrationChange(e=>{if(e.id!==THERMO_INTEGRATION)return;void Promise.resolve(e.enabled?thermoPoller.resume?.():thermoPoller.pause?.()).catch(()=>{});});
+  return {homeDevices,thermoPoller,thermoHostsFile,payload,checkThermo:options.checkThermo||checkThermoLogin,probeCert:options.probeCert||probeThermo,
    machineIds:async()=>[...ids,...(await homeDevices.list()).map(d=>d.id)]};
  },
  pollers:[{id:'thermo',start:state=>state.thermoPoller.start(),stop:state=>state.thermoPoller.stop?.()}],
+ integrations:[thermoIntegration],
  mcpInstructions:[
   'Machines: home_status is the live state (online, load, temperature, memory, services). machine_list is what the overview holds: each machine with its hash, where it comes from and where its runtime stack comes from.',
   {scope:'home:write',text:'With home:write: machine_upsert adds or replaces a machine and machine_remove removes one (pass the hash from machine_list as base; machines from the site configuration are read-only). runtime_publish replaces the runtime stack drawn on a machine\'s page: what clients call, launchers, model servers, engines and the chip.'},
@@ -151,6 +207,7 @@ export default {
   {method:'GET',path:'/api/home/history',error:homeError,async handler({query,json,state,hub}){
     const added=await state.homeDevices.list(),q=homeHistoryQuery(query,added,hub.site);
     if(q.reason)return json(200,q);
+    if(!hub.integrationEnabled(THERMO_INTEGRATION))return json(200,{...q,points:[],complete:false,source:'vypnuto',reason:'Telemetrie Thermo je vypnutá administrátorem.',disabled:hub.integrationDisabled(THERMO_INTEGRATION)});
     // A machine reads the Thermo host named by its thermoId (a device connected on the overview is its own host).
     const thermoId=hub.site.machines.find(m=>m.id===q.machine)?.thermoId||added.find(d=>d.id===q.machine)?.thermoId||q.machine;
     return json(200,{...homeHistory(state.thermoPoller,thermoId,q.range,undefined,[thermoId]),machine:q.machine});}},

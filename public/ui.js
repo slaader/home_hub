@@ -1,6 +1,6 @@
 // Shared building blocks for pages. docs/design.md shows each one with its options.
 //   layout    pageHeader, provenanceBadge, setProvenance, provenancePart
-//   states    emptyState, notInstalled, errorState, loadingState, skeleton
+//   states    emptyState, notInstalled, disabledNotice, errorState, loadingState, skeleton
 //   pieces    copyBlock, copyButton, tabs, mcpConnect, statusPill, banner, segmented, themeSwitch, icon
 //   feedback  toast, startLoading, track
 // Text-safe DOM only (SPEC.md): every string lands in a text node or an attribute, never in innerHTML.
@@ -12,6 +12,7 @@ import {t,tp,locale} from './i18n.js';
 import {timeZone} from './site.js';
 import {icon,ICONS} from './icons.js';
 import {THEMES,getTheme,setTheme} from './theme.js';
+import {pageAllowed} from './session-cache.js';
 export {icon} from './icons.js';
 
 // Copies text to the clipboard; returns whether it worked (clipboard access can be refused).
@@ -120,7 +121,7 @@ const provWhat=kind=>({manual:t('Upravil člověk ve webovém rozhraní nebo v a
  collector:t('Zapsala automatická úloha, která stroje jen čte.'),telemetry:t('Hlásí živě agent na stroji.'),plugin:t('Dodává plugin.'),other:t('Razítko nebo jméno, které tady nenese žádný účet: import, úprava souboru nebo zrušený účet.')})[kind]||'';
 const provCount=(n,unit)=>({entries:()=>tp(n,'{n} záznam|{n} záznamy|{n} záznamů'),rounds:()=>tp(n,'{n} kolo|{n} kola|{n} kol'),
  machines:()=>tp(n,'{n} stroj|{n} stroje|{n} strojů'),records:()=>tp(n,'{n} zápis|{n} zápisy|{n} zápisů'),projects:()=>tp(n,'{n} projekt|{n} projekty|{n} projektů'),items:()=>tp(n,'{n} položka|{n} položky|{n} položek'),sources:()=>tp(n,'{n} zdroj|{n} zdroje|{n} zdrojů'),clients:()=>tp(n,'{n} klient|{n} klienti|{n} klientů')})[unit]?.()||String(n);
-const provState=state=>({'not-configured':t('nenastaveno'),waiting:t('zatím neběžel'),stale:t('starý snímek'),unavailable:t('poslední pokus selhal')})[state]||'';
+const provState=state=>({'not-configured':t('nenastaveno'),waiting:t('zatím neběžel'),stale:t('starý snímek'),unavailable:t('poslední pokus selhal'),disabled:t('vypnuto administrátorem')})[state]||'';
 const DAY_ONLY=/^\d{4}-\d{2}-\d{2}$/;
 // "2 days ago" in the reader's language; a calendar day (an inventory stamp) is counted in whole days.
 function provAgo(at,now=Date.now()){
@@ -156,6 +157,8 @@ function provSummary(p){
  const label=provLabel(p.kind);if(p.kind==='mixed')return label;
  const sources=p.kinds,timed=['collector','telemetry','plugin'].includes(p.kind);
  const state=sources.map(s=>s.state).find(s=>s==='not-configured'||s==='waiting');
+ // A source an administrator turned off says so, whatever else it carries.
+ if(sources.some(s=>s.state==='disabled'))return `${label} · ${t('vypnuto')}`;
  if(timed&&!p.lastAt&&state)return `${label} · ${provState(state)}`;
  if(timed&&p.lastAt)return `${label} · ${provAgo(p.lastAt)}`;
  const names=[...new Set(sources.flatMap(s=>s.accounts||[]))];
@@ -180,7 +183,7 @@ export function provenanceBadge(provenance){
  const p=provenance&&Array.isArray(provenance.kinds)?provenance:null;
  if(!p||!p.kinds.length||!PROV_ICON[p.kind])return null;
  const id=`ui-prov-${++serial}`,summary=provSummary(p);
- const tone=p.kinds.some(s=>s.state==='stale'||s.state==='unavailable')?' warn':p.kinds.every(s=>s.state==='not-configured'||s.state==='waiting')?' idle':'';
+ const tone=p.kinds.some(s=>s.state==='stale'||s.state==='unavailable')?' warn':p.kinds.every(s=>s.state==='not-configured'||s.state==='waiting'||s.state==='disabled')?' idle':'';
  const pop=el('div',{class:'ui-prov-pop',id,role:'group','aria-label':t('Původ dat'),hidden:''},
   el('p',{class:'ui-prov-title'},t('Odkud jsou data na téhle stránce')),
   el('ul',{class:'ui-prov-list'},p.kinds.map(s=>el('li',{class:'ui-prov-item'},
@@ -281,6 +284,20 @@ export function notInstalled({dependency,installUrl,steps,title,body,agentPrompt
   stepList(steps),
   agentPrompt?copyBlock(t('Zadání pro agenta'),agentPrompt):null,
   actionsRow([install,...(actions||[])]));
+}
+
+/**
+ * Data that is missing because an administrator turned its integration off (Administration → Integrations):
+ * say so, and who did it, instead of showing stale data. info = the `disabled` of an API answer:
+ * {id, title, titleKey?, by, at}. Administrators get a link to the integrations page.
+ * disabledNotice(info, {compact, body})   body: a sentence of your own when part of the page still has data
+ */
+export function disabledNotice(info,{compact=false,body}={}){
+ const name=info?.titleKey?t(info.titleKey):t(info?.title||'')||t('Integrace');
+ const at=Number.isFinite(Date.parse(info?.at))?new Intl.DateTimeFormat(locale(),{day:'numeric',month:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit',timeZone:timeZone()}).format(new Date(info.at)):null;
+ return emptyState({icon:'plug',compact,title:t('{name}: vypnuto administrátorem',{name}),
+  body:body||(info?.by&&at?t('Vypnul ji {by} ({when}). Home Hub ji teď nečte, proto tu nejsou žádná data.',{by:info.by,when:at}):t('Home Hub tuhle integraci teď nečte, proto tu nejsou žádná data.')),
+  actions:pageAllowed('integrations')?[{label:t('Otevřít Integrace'),href:'#integrations'}]:[]});
 }
 
 /**

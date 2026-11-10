@@ -23,6 +23,7 @@ home in one file, and an agent fills in the rest.
   [tracker, review and search](#project-tracker-review-and-search),
   [users and access](#users-roles-and-service-accounts)
 - [Live telemetry (optional)](#live-telemetry-optional)
+- [How LLM stats are read](#how-llm-stats-are-read)
 - [Collectors (optional)](#collectors-optional)
 - [Plugins](#plugins)
 - [Security model](#security-model)
@@ -104,7 +105,7 @@ each one needs. The same key works on the HTTP API ([docs/API.md](docs/API.md)).
 | Overview: a tile per machine | Empty, and says how to fill it | Machines in `local/site.json`, **Add device** on the page, or an agent with `home:write` | You, or your agent through MCP (`machine_upsert`) |
 | Runtime stack on a machine page | Says how to publish one | Nothing | Your agent (`runtime_publish`), or `stack` in `site.json` |
 | Live CPU, GPU, power, temperature, memory on the tiles | Tiles show static facts and say telemetry is not installed | The telemetry agent on each machine (optional) | The telemetry agent |
-| Local LLM runtimes on a machine page | Not shown | A plugin that provides `home.runtimes` for that machine | That plugin |
+| Local LLM runtimes on a machine page | Not shown | Works directly when the runtime is reachable from the hub (`runtimes[]` in `site.json`, or an agent with `home:write`); otherwise needs a per-machine agent or a plugin that provides `home.runtimes` | The hub's own read-only adapters, or that plugin |
 | Inventory map, table and services catalog | Empty, with a template and a prompt for an agent | Nothing | Your agent through MCP (`inventory_update`, `inventory_bulk_upsert`), or you in the form |
 | Versions and updates, host protection | Says what to configure and run | SSH access to the machines and `scripts/collect-systems.mjs` | A collector |
 | Which software the versions page follows | Only operating systems, NAS apps and containers | A site overlay (`local/`), where the list is kept | Your agent (`software_watch_put`), or you |
@@ -141,6 +142,7 @@ Edit it and restart. Every field is optional, and a wrong one stops the server w
 | `inventory.places[]`, `inventory.secretStores[]` | Your vocabulary for the inventory map |
 | `tracker.projects[]` | Projects a new tracker starts with |
 | `router` | Which router adapter feeds the client census |
+| `runtimes[]` | Local LLM runtimes the hub reads directly: `{machine, kind, url, name?}` ([How LLM stats are read](#how-llm-stats-are-read)) |
 | `plugins.<id>` | Settings for a plugin |
 
 [docs/plugins.md](docs/plugins.md) describes every field. Pictures you put in `local/images/` are served
@@ -262,6 +264,37 @@ installs or changes anything there.
   agent has a public home. The UI takes it from one constant, `TELEMETRY_AGENT_URL` in `public/site.js`, and
   the API reports `TELEMETRY_REPO_URL` from `server/thermo-client.mjs`.
 
+## How LLM stats are read
+
+A machine page has a **Local LLM runtimes** section, and the engine blocks of its runtime stack list the
+models of the runtimes above them, once something reports that machine's runtimes. There are three ways in:
+
+1. **Direct adapters (included).** When the hub can reach a runtime over HTTP (on `127.0.0.1` because the
+   hub runs on the same machine, or on the LAN) it reads it itself, every 30 seconds. List it in `site.json`:
+
+   ```json
+   "runtimes": [
+     {"machine": "studio", "kind": "ollama", "url": "http://127.0.0.1:11434"},
+     {"machine": "gpu-box", "kind": "auto", "url": "http://10.0.0.42:8000", "name": "vLLM"}
+   ]
+   ```
+
+   or let an agent add it (`runtime_endpoint_upsert`, scope `home:write`; `POST /api/runtimes/endpoints`).
+   Supported: llama-swap, Ollama, LM Studio, llama.cpp server (also router mode), vLLM, SGLang, oMLX,
+   mlx-serve, and anything OpenAI-compatible (reachable and its model list). `kind: "auto"` recognises the
+   runtime by its answers. The `url` is an origin only (no path, no user or password), on loopback or inside
+   `lanCidrs`, written as an IP address. A runtime that needs a bearer token gets it in the web UI; the token
+   is stored server-side (`private/runtime-tokens.json`, mode 0600) and never shown again.
+   Every read is a `GET` on a fixed list of read-only paths, with a bounded body and a short timeout. The hub
+   never loads, unloads or prompts a model, and never requests a route that would (llama-swap's
+   `/upstream/…`, for instance, loads one).
+2. **A plugin or a bridge.** For a runtime the hub cannot reach (on another machine with no open port, or
+   behind a socket), a plugin can provide `home.runtimes` from its own source, such as a small bridge process on
+   that machine ([docs/plugins.md](docs/plugins.md)). When a plugin and the direct adapters report the same
+   runtime (the same address), it is shown once: the entry that says more is kept and the other fills its gaps.
+3. **A telemetry agent (later).** The telemetry agent does not report runtimes today. If it ever does, it
+   becomes one more provider of the same shape.
+
 ## Collectors (optional)
 
 Collectors are scripts you run from a scheduler. They look at your machines over SSH, read only, and write
@@ -333,7 +366,7 @@ Home Hub is meant for a home network. It is not hardened for the open internet: 
   |---|---|
   | `read` | Every read endpoint except security (always included) |
   | `inventory:write` | Create and change inventory and service entries |
-  | `home:write` | Add, change and remove machines on the overview; publish a machine's runtime stack |
+  | `home:write` | Add, change and remove machines on the overview; publish a machine's runtime stack; add and remove LLM runtime endpoints |
   | `home:settings` | The telemetry read interval |
   | `tickets:write` | Tickets, comments, releases, projects |
   | `review:write` | Publish review sets and store decisions |

@@ -1,0 +1,19 @@
+{
+ "/version": {
+  "version": "0.11.0"
+ },
+ "/v1/models": {
+  "object": "list",
+  "data": [
+   {
+    "id": "Qwen/Qwen3-8B",
+    "object": "model",
+    "created": 1762770000,
+    "owned_by": "vllm",
+    "root": "Qwen/Qwen3-8B",
+    "max_model_len": 40960
+   }
+  ]
+ },
+ "/metrics": "# HELP vllm:num_requests_running Number of requests in model execution batches.\n# TYPE vllm:num_requests_running gauge\nvllm:num_requests_running{engine=\"0\",model_name=\"Qwen/Qwen3-8B\"} 2.0\nvllm:num_requests_waiting{engine=\"0\",model_name=\"Qwen/Qwen3-8B\"} 1.0\nvllm:kv_cache_usage_perc{engine=\"0\",model_name=\"Qwen/Qwen3-8B\"} 0.375\n# TYPE vllm:generation_tokens_total counter\nvllm:generation_tokens_total{engine=\"0\",model_name=\"Qwen/Qwen3-8B\"} 120000.0\nvllm:prompt_tokens_total{engine=\"0\",model_name=\"Qwen/Qwen3-8B\"} 990000.0\n"
+}

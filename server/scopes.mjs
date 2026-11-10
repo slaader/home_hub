@@ -17,7 +17,7 @@ export const CORE_SCOPES=Object.freeze({
  'security:read':{label:'Bezpečnost – čtení',desc:'Číst inventář SSH klíčů, verze systémů a ochranu strojů.',readOnly:true,legacy:false},
 
  // Overview module (server/core/home.mjs): machine_upsert, machine_remove, runtime_publish. New, so old read/write keys never get it.
- 'home:write':{label:'Přehled – zápis',desc:'Přidávat, měnit a odebírat stroje v přehledu a zveřejňovat jejich runtime stack (s kontrolou otisku a bez tajemství).',legacy:false},
+ 'home:write':{label:'Přehled – zápis',desc:'Přidávat, měnit a odebírat stroje v přehledu a zveřejňovat jejich runtime stack a endpointy LLM runtimů, které hub čte (s kontrolou otisku a bez tajemství).',legacy:false},
  'software:write':{label:'Sledovaný software – zápis',desc:'Číst a měnit seznam sledovaného softwaru: odkud se bere nejnovější verze a jak se na stroji zjistí nainstalovaná.',legacy:false},
 });
 

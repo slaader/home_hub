@@ -20,6 +20,7 @@ import {readBuild} from './build-info.mjs';
 import {repoRoot,readEdition} from './edition.mjs';
 import {site as loadedSite,siteConfigPath} from './site-config.mjs';
 import {defineModule,createRegistry,loadPlugins} from './plugins.mjs';
+import {createIntegrationStore,createSecretStore} from './integrations.mjs';
 import sessionModule from './core/session.mjs';
 import shellModule from './core/shell.mjs';
 import accessModule from './core/access.mjs';
@@ -29,6 +30,9 @@ import trackerModule from './core/tracker.mjs';
 import reviewModule from './core/review.mjs';
 import securityModule from './core/security.mjs';
 import routerModule from './core/router.mjs';
+import integrationsModule from './core/integrations.mjs';
+import runtimesModule from './core/runtimes.mjs';
+import modelsModule from './core/models.mjs';
 
 const root=repoRoot;
 // The running commit, shown in the UI footer. Read once: a deploy restarts the server.
@@ -39,7 +43,7 @@ export const MODEL_VIEWER_STYLE_HASH=(()=>{try{const m=/<style>([\s\S]*?)<\/styl
 export const PAGE_CSP=`default-src 'self'; script-src 'self'; style-src 'self'${MODEL_VIEWER_STYLE_HASH?' '+MODEL_VIEWER_STYLE_HASH:''}; img-src 'self' blob:; connect-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`;
 
 // Core modules, in set-up order (a later one may use the state of an earlier one).
-export const CORE_MODULES=Object.freeze([sessionModule,shellModule,accessModule,homeModule,inventoryModule,trackerModule,reviewModule,securityModule,routerModule].map(m=>defineModule(m,{core:true})));
+export const CORE_MODULES=Object.freeze([sessionModule,shellModule,accessModule,homeModule,runtimesModule,inventoryModule,trackerModule,reviewModule,securityModule,routerModule,integrationsModule,modelsModule].map(m=>defineModule(m,{core:true})));
 // Plugins found in the overlay directory when the process started.
 export const STARTUP_PLUGINS=Object.freeze(await loadPlugins());
 // Core + plugins as one registry; scopes of every module join the scope table (server/scopes.mjs).
@@ -68,7 +72,9 @@ export function siteImages(directory){
  * directory = data dir (knowledge.json, router-observations.json, machines/, security/, systems/);
  * stateDirectory = what the hub writes (hub.db, access.json, home/, tickets/, review/).
  * site = the site configuration (default: local/site.json); plugins = module objects to load instead of
- * the overlay found at start-up (tests). Every other option is handed to the modules as hub.options.
+ * the overlay found at start-up (tests). integrationSecretsFile: where write-only integration settings
+ * are kept (default INTEGRATION_SECRETS_FILE, else private/integrations.json). Every other option is
+ * handed to the modules as hub.options.
  */
 export function createHandler(options) {
   const {directory,credentials,authFile=null,origin,allowedOrigins=(process.env.ORIGIN_ALIASES||'').split(',').filter(Boolean),secure=true,
@@ -80,11 +86,24 @@ export function createHandler(options) {
   const auth=createAuth(credentials,{secure,accounts:accessStore,sessions:db.sessions});
   const origins=[origin,...allowedOrigins];
   const states=new Map();
+  // Which integrations an administrator turned off (data/state/integrations.json) and the write-only
+  // values of their settings (private/integrations.json). server/integrations.mjs, docs/plugins.md.
+  const integrationStore=options.integrationStore||createIntegrationStore(stateDirectory);
+  const integrationSecrets=createSecretStore(options.integrationSecretsFile||process.env.INTEGRATION_SECRETS_FILE||path.join(root,'private','integrations.json'));
+  // A provider an integration lists under `provides` answers nothing while that integration is off.
+  const silenced=(module,name)=>registry.integrations.some(i=>i.module===module&&i.provides.includes(name)&&!integrationStore.enabled(i.id));
+  const providers=name=>registry.providers(name).filter(p=>!silenced(p.module,name));
   const hub={root,directory,stateDirectory,site,edition:readEdition(),origin,secure,build,options,db,auth,accessStore,deviceTokens,registry,
    state:id=>states.get(id)??null,
    // Values from every module that provides `name` (docs/plugins.md → extension points).
-   collect:name=>registry.providers(name).map(p=>p.provide(states.get(p.module),hub)),
-   provided:name=>{const p=registry.providers(name)[0];return p?p.provide(states.get(p.module),hub):undefined;}};
+   collect:name=>providers(name).map(p=>p.provide(states.get(p.module),hub)),
+   provided:name=>{const p=providers(name)[0];return p?p.provide(states.get(p.module),hub):undefined;},
+   // Integrations: is this one on, who turned it off and when, tell me when that changes, a write-only value.
+   integrationEnabled:id=>integrationStore.enabled(id),
+   integrationDisabled:id=>{const info=integrationStore.disabledInfo(id);if(!info)return null;const i=registry.integration(id);return {id,title:i?.title??id,...(i?.titleKey?{titleKey:i.titleKey}:{}),by:info.by,at:info.at};},
+   onIntegrationChange:listener=>integrationStore.onChange(listener),
+   integrationSecret:(id,key)=>integrationSecrets.get(id,key),
+   integrations:{store:integrationStore,secrets:integrationSecrets}};
   for(const m of registry.modules)states.set(m.id,m.setup?(m.setup(hub)??{}):{});
   const assets=new Map(registry.assets);
   for(const image of siteImages(siteImagesDirectory===undefined?(options.site?null:siteConfigPath()&&path.join(path.dirname(siteConfigPath()),'images')):siteImagesDirectory)){

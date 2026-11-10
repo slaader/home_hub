@@ -1,0 +1,15 @@
+{
+ "/v1/models": {
+  "object": "list",
+  "data": [
+   {
+    "id": "meta-llama/Llama-3.1-8B-Instruct",
+    "object": "model",
+    "owned_by": "sglang",
+    "root": "meta-llama/Llama-3.1-8B-Instruct",
+    "max_model_len": 131072
+   }
+  ]
+ },
+ "/metrics": "# TYPE sglang:num_running_reqs gauge\nsglang:num_running_reqs{model_name=\"meta-llama/Llama-3.1-8B-Instruct\"} 3.0\nsglang:num_queue_reqs{model_name=\"meta-llama/Llama-3.1-8B-Instruct\"} 0.0\nsglang:gen_throughput{model_name=\"meta-llama/Llama-3.1-8B-Instruct\"} 412.6\nsglang:token_usage{model_name=\"meta-llama/Llama-3.1-8B-Instruct\"} 0.12\nsglang:generation_tokens_total{model_name=\"meta-llama/Llama-3.1-8B-Instruct\"} 5300000.0\n"
+}

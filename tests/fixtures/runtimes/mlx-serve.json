@@ -1,0 +1,82 @@
+{
+ "/v1/models": {
+  "object": "list",
+  "data": [
+   {
+    "id": "ddalcu/Krea-2-Turbo-MLX-Serve-mixed-4-8",
+    "object": "model",
+    "created": 0,
+    "owned_by": "mlx-serve",
+    "loaded": true,
+    "state": "loaded",
+    "bytes_resident": 9840816670,
+    "bytes_on_disk": 9840816670,
+    "context_length": 0,
+    "max_model_len": 0,
+    "capabilities": [
+     "image"
+    ],
+    "meta": {
+     "architecture": "krea2_turbo",
+     "engine": "mlx",
+     "vocab_size": 0,
+     "hidden_size": 0,
+     "num_layers": 0,
+     "quantization": null,
+     "context_length": 0,
+     "model_max_tokens": 0,
+     "is_moe": false,
+     "mtp_available": false,
+     "bytes_on_disk": 9840816670
+    }
+   },
+   {
+    "id": "ddalcu/Stable-Audio-3-Small-SFX-MLX-Serve",
+    "object": "model",
+    "created": 0,
+    "owned_by": "mlx-serve",
+    "loaded": false,
+    "state": "unloaded",
+    "bytes_resident": 0,
+    "bytes_on_disk": 2270384940,
+    "capabilities": [
+     "audio",
+     "sound"
+    ],
+    "meta": {
+     "architecture": "stable_audio3",
+     "engine": "mlx",
+     "bytes_on_disk": 2270384940
+    }
+   }
+  ],
+  "machine": {
+   "os": "macos",
+   "model": "Mac17,15",
+   "free_mib": 177307,
+   "total_mib": 262144
+  }
+ },
+ "/api/version": {
+  "version": "26.10.3"
+ },
+ "/health": {
+  "status": "ok"
+ },
+ "/props": {
+  "total_slots": 1,
+  "memory": {
+   "active_bytes": 8,
+   "peak_bytes": 16,
+   "available_bytes": 185920684032,
+   "max_safe_context": 0,
+   "weights_bytes": 0
+  },
+  "batching": {
+   "supported": false,
+   "reason": "no_model",
+   "max_group": 32
+  },
+  "registry_generation": 2
+ }
+}

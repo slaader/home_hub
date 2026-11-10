@@ -1,0 +1,45 @@
+{
+ "/health": {
+  "status": "ok"
+ },
+ "/v1/models": {
+  "object": "list",
+  "data": [
+   {
+    "id": "gpt-oss-20b",
+    "object": "model",
+    "owned_by": "llamacpp",
+    "status": {
+     "value": "loaded",
+     "args": [
+      "--ctx-size",
+      "32768"
+     ]
+    },
+    "meta": {
+     "n_ctx_train": 131072
+    }
+   },
+   {
+    "id": "qwen2.5-coder-7b",
+    "object": "model",
+    "owned_by": "llamacpp",
+    "status": {
+     "value": "unloaded"
+    }
+   },
+   {
+    "id": "gemma-3-4b",
+    "object": "model",
+    "owned_by": "llamacpp",
+    "status": {
+     "value": "loading"
+    }
+   }
+  ]
+ },
+ "/props": {
+  "role": "router",
+  "build_info": "b7012-9f8e7d6c"
+ }
+}

@@ -302,10 +302,12 @@ export function systemsSetup(site,{now=Date.now()}={}){
  return {...collectorState('systems',{configured:probed.length>0,now}),machines:probed,siteMachines:site.machines.length};
 }
 
-export async function loadSystems(directory,{registryFile=watchPath(),site=loadedSite(),now=Date.now()}={}){
- const dir=process.env.SYSTEMS_DIR||path.join(directory,'systems');
+// upstream:false leaves upstream.json unread (the release check is turned off: server/core/security.mjs).
+export const systemsDirectory=directory=>process.env.SYSTEMS_DIR||path.join(directory,'systems');
+export async function loadSystems(directory,{registryFile=watchPath(),site=loadedSite(),now=Date.now(),upstream:withUpstream=true}={}){
+ const dir=systemsDirectory(directory);
  let snapshot;try{snapshot=JSON.parse(await readFile(path.join(dir,'snapshot.json'),'utf8'));}catch{return null;}
- const upstream=await readFile(path.join(dir,'upstream.json'),'utf8').then(JSON.parse).catch(()=>null);
+ const upstream=withUpstream?await readFile(path.join(dir,'upstream.json'),'utf8').then(JSON.parse).catch(()=>null):null;
  const watch=await readWatch({file:registryFile});
  // The watch list by the name people know it under: its path inside the checkout, else just the file name.
  const rel=registryFile?path.relative(path.resolve(import.meta.dirname,'..'),registryFile):'',watchFile=!registryFile?null:rel&&!rel.startsWith('..')&&!path.isAbsolute(rel)?rel:path.basename(registryFile);

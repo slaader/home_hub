@@ -114,7 +114,7 @@ function runtimeCard(r,open){
  const heading=held.length?tp(held.length,'{n} načtený model|{n} načtené modely|{n} načtených modelů'):r.status==='running'&&r.models.length?t('žádný model není načtený'):r.models.length?t('Modely'):t('žádné modely');
  return el('article',{class:'hv-runtime'},
   el('header',{},el('h3',{},r.name),el('span',{class:`hv-status ${tone}`},el('i',{'aria-hidden':'true'}),t(label))),
-  el('p',{class:'hv-runtime-meta'},[r.kind,r.version,r.url?listen(r.url):null].filter(Boolean).join(' · ')||' '),
+  el('p',{class:'hv-runtime-meta'},[r.kind&&r.kind.toLowerCase()!==String(r.name).toLowerCase()?r.kind:null,r.version,r.url?listen(r.url):null].filter(Boolean).join(' · ')||' '),
   r.stats.length?el('dl',{class:'hv-runtime-stats'},r.stats.map((x,i)=>el('div',{class:i?'':'main'},el('dt',{},t(x.label)),el('dd',{},x.value)))):null,
   el('div',{class:'hv-runtime-list'},el('span',{class:'hv-k'},heading),
    held.length?el('ul',{class:'hv-runtime-models'},held.map(modelRow)):null,
@@ -125,7 +125,7 @@ function runtimeCard(r,open){
 export function runtimesSection(m,meta,{open=[]}={}){
  const data=m.runtimes;if(!data)return null;
  const old=data.observedAt&&Date.now()-Date.parse(data.observedAt)>(meta?.staleAfterSeconds||180)*1000;
- const source=[data.source?t(data.source):null,data.observedAt?(old?t('stará data · naposledy {when}',{when:clock(data.observedAt)}):t('čteno {when}',{when:clock(data.observedAt)})):null].filter(Boolean).join(' · ');
+ const source=[(data.sources?.length?data.sources:[data.source]).filter(Boolean).map(x=>t(x)).join(' + ')||null,data.observedAt?(old?t('stará data · naposledy {when}',{when:clock(data.observedAt)}):t('čteno {when}',{when:clock(data.observedAt)})):null].filter(Boolean).join(' · ');
  return el('div',{class:'hv-runtimes'},
   data.runtimes.length?data.runtimes.map(r=>runtimeCard(r,open.includes(r.id))):el('p',{class:'hv-note'},t('Poskytovatel teď na tomhle stroji žádný runtime nehlásí.')),
   source?el('p',{class:`hv-source${old?' warn':''}`},source):null);

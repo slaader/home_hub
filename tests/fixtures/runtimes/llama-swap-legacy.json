@@ -1,0 +1,47 @@
+{
+ "/v1/models": {
+  "object": "list",
+  "data": [
+   {
+    "id": "gemma-12b",
+    "object": "model",
+    "created": 1762770000,
+    "owned_by": "llama-swap"
+   },
+   {
+    "id": "gemma-27b",
+    "object": "model",
+    "created": 1762770000,
+    "owned_by": "llama-swap"
+   }
+  ]
+ },
+ "/running": {
+  "running": [
+   {
+    "model": "gemma-12b",
+    "state": "ready"
+   }
+  ]
+ },
+ "/api/metrics": [
+  {
+   "id": 1,
+   "timestamp": "2026-11-10T10:00:00Z",
+   "model": "gemma-12b",
+   "input_tokens": 500,
+   "output_tokens": 120,
+   "tokens_per_second": 31.5,
+   "duration_ms": 4000
+  },
+  {
+   "id": 2,
+   "timestamp": "2026-11-10T10:01:00Z",
+   "model": "gemma-12b",
+   "input_tokens": 800,
+   "output_tokens": 200,
+   "tokens_per_second": 33.1,
+   "duration_ms": 6000
+  }
+ ]
+}

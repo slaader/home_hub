@@ -1,0 +1,313 @@
+{
+ "/v1/models": {
+  "data": [
+   {
+    "id": "krea-image",
+    "object": "model",
+    "created": 1794346216,
+    "owned_by": "llama-swap",
+    "name": "Krea-2 Turbo mixed 4/8-bit image (mlx-serve)",
+    "description": "Fast text-to-image; ~10 GB on disk",
+    "meta": {
+     "llamaswap": {
+      "aliases": [
+       "krea",
+       "image"
+      ],
+      "type": "model"
+     }
+    },
+    "status": {
+     "value": "unloaded"
+    }
+   },
+   {
+    "id": "ornith",
+    "object": "model",
+    "created": 1794346216,
+    "owned_by": "llama-swap",
+    "name": "Ornith 1.5 122B oQ8e fp16 MTP (oMLX, trial)",
+    "description": "Trial 2026-11-08 (not promoted). scottlowry oQ8e of official",
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "modality": "text+image->text",
+     "output_modalities": [
+      "text"
+     ]
+    },
+    "capabilities": {
+     "function_calling": true,
+     "vision": true
+    },
+    "supported_parameters": [
+     "tools",
+     "tool_choice"
+    ],
+    "context_length": 262144,
+    "context_window": 262144,
+    "meta": {
+     "llamaswap": {
+      "aliases": [
+       "ornith-122b",
+       "ornith-oq8e"
+      ],
+      "type": "model"
+     },
+     "n_ctx": 262144
+    },
+    "status": {
+     "value": "unloaded"
+    }
+   },
+   {
+    "id": "qwen-27b",
+    "object": "model",
+    "created": 1794346216,
+    "owned_by": "llama-swap",
+    "name": "Qwen3.8 27B 8-bit (oMLX)",
+    "description": "Dense chat, writing and render/screenshot QA model with visi",
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image",
+      "video"
+     ],
+     "modality": "text+image+video->text",
+     "output_modalities": [
+      "text"
+     ]
+    },
+    "capabilities": {
+     "function_calling": true,
+     "vision": true
+    },
+    "supported_parameters": [
+     "tools",
+     "tool_choice"
+    ],
+    "context_length": 262144,
+    "context_window": 262144,
+    "meta": {
+     "llamaswap": {
+      "aliases": [
+       "qwen3.8-27b",
+       "chat",
+       "vision"
+      ],
+      "type": "model"
+     },
+     "n_ctx": 262144
+    },
+    "status": {
+     "value": "ready"
+    }
+   },
+   {
+    "id": "qwen-flash-next",
+    "object": "model",
+    "created": 1794346216,
+    "owned_by": "llama-swap",
+    "name": "Qwen3.8 Flash-Next Uncensored oQ6e MTP (oMLX)",
+    "description": "Primary agentic coding model for OpenCode / Claude Code / Co",
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "modality": "text+image->text",
+     "output_modalities": [
+      "text"
+     ]
+    },
+    "capabilities": {
+     "function_calling": true,
+     "vision": true
+    },
+    "supported_parameters": [
+     "tools",
+     "tool_choice"
+    ],
+    "context_length": 262144,
+    "context_window": 262144,
+    "meta": {
+     "llamaswap": {
+      "aliases": [
+       "flash-next",
+       "coder",
+       "flash-next-oq6e"
+      ],
+      "type": "model"
+     },
+     "n_ctx": 262144
+    },
+    "status": {
+     "value": "unloaded"
+    }
+   },
+   {
+    "id": "stable-audio-sfx",
+    "object": "model",
+    "created": 1794346216,
+    "owned_by": "llama-swap",
+    "name": "Stable Audio 3 Small SFX (mlx-serve)",
+    "description": "Sound effects; ~2 GB on disk",
+    "meta": {
+     "llamaswap": {
+      "aliases": [
+       "sfx"
+      ],
+      "type": "model"
+     }
+    },
+    "status": {
+     "value": "unloaded"
+    }
+   }
+  ],
+  "object": "list"
+ },
+ "/running": {
+  "running": [
+   {
+    "model": "qwen-27b",
+    "state": "ready",
+    "ttl": 1800,
+    "name": "Qwen3.8 27B 8-bit (oMLX)"
+   }
+  ]
+ },
+ "/api/version": {
+  "build_date": "2026-10-28T03:26:39Z",
+  "commit": "2576af3",
+  "version": "v268"
+ },
+ "/api/metrics/stats": {
+  "total_requests": 941,
+  "total_input_tokens": 94926083,
+  "total_output_tokens": 759115,
+  "total_cache_tokens": 92476823,
+  "prompt_histogram": {
+   "bins": [
+    204,
+    272,
+    143,
+    107,
+    54,
+    53,
+    30,
+    13,
+    12,
+    16,
+    25
+   ],
+   "min": 2.95,
+   "max": 3236.46,
+   "binSize": 293.9554545454546,
+   "p50": 574.74,
+   "p95": 2554.8599999999983,
+   "p99": 3159.0524
+  },
+  "gen_histogram": {
+   "bins": [
+    434,
+    492,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    2
+   ],
+   "min": 3.06,
+   "max": 1205.61,
+   "binSize": 109.32272727272726,
+   "p50": 113.72,
+   "p95": 155.51,
+   "p99": 186.8572
+  }
+ },
+ "/api/metrics/activity": {
+  "data": [
+   {
+    "id": 919,
+    "timestamp": "2026-11-08T20:35:40+01:00",
+    "src": "ip:127.0.0.1",
+    "model": "qwen-27b",
+    "req_path": "/v1/chat/completions",
+    "resp_content_type": "text/event-stream; charset=utf-8",
+    "resp_status_code": 200,
+    "tokens": {
+     "cache_tokens": 67593,
+     "draft_tokens": -1,
+     "draft_acc_tokens": -1,
+     "input_tokens": 67764,
+     "output_tokens": 1390,
+     "prompt_per_second": 216.34,
+     "tokens_per_second": 100.46
+    },
+    "duration_ms": 14735,
+    "has_capture": true,
+    "metadata": {
+     "fifo_priority": "0"
+    }
+   },
+   {
+    "id": 918,
+    "timestamp": "2026-11-08T20:35:25+01:00",
+    "src": "ip:127.0.0.1",
+    "model": "qwen-27b",
+    "req_path": "/v1/chat/completions",
+    "resp_content_type": "text/event-stream; charset=utf-8",
+    "resp_status_code": 200,
+    "tokens": {
+     "cache_tokens": 67113,
+     "draft_tokens": -1,
+     "draft_acc_tokens": -1,
+     "input_tokens": 67598,
+     "output_tokens": 99,
+     "prompt_per_second": 556.2,
+     "tokens_per_second": 116.29
+    },
+    "duration_ms": 1831,
+    "has_capture": true,
+    "metadata": {
+     "fifo_priority": "0"
+    }
+   },
+   {
+    "id": 917,
+    "timestamp": "2026-11-08T20:35:23+01:00",
+    "src": "ip:127.0.0.1",
+    "model": "qwen-27b",
+    "req_path": "/v1/chat/completions",
+    "resp_content_type": "text/event-stream; charset=utf-8",
+    "resp_status_code": 200,
+    "tokens": {
+     "cache_tokens": 66735,
+     "draft_tokens": -1,
+     "draft_acc_tokens": -1,
+     "input_tokens": 67118,
+     "output_tokens": 445,
+     "prompt_per_second": 498.79,
+     "tokens_per_second": 119.29
+    },
+    "duration_ms": 4603,
+    "has_capture": true,
+    "metadata": {
+     "fifo_priority": "0"
+    }
+   }
+  ],
+  "page": 1,
+  "limit": 25,
+  "total": 3,
+  "total_pages": 38
+ },
+ "/metrics": "# HELP llamaswap_memory_total_bytes Total memory in bytes\nllamaswap_memory_total_bytes 274877906944\n# HELP llamaswap_memory_used_bytes Used memory in bytes\nllamaswap_memory_used_bytes 76162269184\n# HELP llamaswap_memory_free_bytes Free memory in bytes\nllamaswap_memory_free_bytes 140450463744\nllamaswap_gpu_util_percent{id=\"0\",name=\"Apple M5 Ultra (80-core GPU)\"} 0\n"
+}

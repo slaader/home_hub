@@ -91,9 +91,9 @@ test('core: the scope table and the page list match what the core modules regist
  for(const r of registry.routes)assert.ok(r.method==='GET'||r.scope===null||SCOPES[r.scope],`${r.method} ${r.path??r.match}`);
  assert.equal(scopeFor('POST','/api/unknown',registry.match),null);assert.equal(scopeFor('GET','/api/unknown',registry.match),'read');
  const admin=registry.manifest({role:'admin'}),viewer=registry.manifest({role:'viewer'});
- assert.deepEqual(admin.nav.map(g=>g.labelKey||g.label),['Domov','Inventář','Bezpečnost','Project Tracker','Správa']);
- assert.deepEqual(viewer.nav.map(g=>g.labelKey||g.label),['Domov','Inventář','Project Tracker','Správa'],'admin-only groups disappear for other roles');
- assert.deepEqual(admin.nav[1].items.map(i=>i.hash),['inventory-map','versions']);assert.deepEqual(viewer.nav[1].items.map(i=>i.hash),['inventory-map']);
+ assert.deepEqual(admin.nav.map(g=>g.labelKey||g.label),['Domov','Lokální AI','Inventář','Bezpečnost','Project Tracker','Správa']);
+ assert.deepEqual(viewer.nav.map(g=>g.labelKey||g.label),['Domov','Lokální AI','Inventář','Project Tracker','Správa'],'admin-only groups disappear for other roles');
+ assert.deepEqual(admin.nav[2].items.map(i=>i.hash),['inventory-map','versions']);assert.deepEqual(viewer.nav[2].items.map(i=>i.hash),['inventory-map']);
  // #services is still a page (it leads to the Services view of the inventory page), just not a sidebar entry.
  assert.ok(viewer.pages.find(p=>p.hash==='services').view,'the old services address stays routable');
  assert.ok(viewer.pages.find(p=>p.hash==='versions').admin&&!viewer.pages.find(p=>p.hash==='versions').view,'an admin page is listed for routing, without its module');
