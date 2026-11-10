@@ -1,0 +1,69 @@
+/* Design tokens: the one place for spacing, radius, colour and type scale. New and reworked pages use
+   these custom properties instead of literal values; existing page styles are moved over module by
+   module (they still carry their own values). Dark is the default look; light follows the system
+   setting, or data-theme="light" / "dark" on <html> forces one. index.html pins data-theme="dark" for
+   now, because the page styles written before this file are dark only; drop that attribute once they
+   read their colours from here. */
+:root{
+ /* spacing: a 4 px grid */
+ --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:24px;--space-6:32px;--space-7:48px;--space-8:64px;
+ /* radius */
+ --radius-s:6px;--radius-m:10px;--radius-l:16px;--radius-pill:999px;
+ /* type scale */
+ --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,"Helvetica Neue",Arial,sans-serif;
+ --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+ --text-xs:12px;--text-s:13px;--text-m:15px;--text-l:18px;--text-xl:24px;--text-2xl:32px;
+ --leading-tight:1.25;--leading-body:1.5;
+ --weight-regular:400;--weight-medium:550;--weight-bold:700;
+ /* colour: dark */
+ --color-bg:#08070c;--color-surface:#12111a;--color-surface-raised:#1a1924;--color-border:#2b2937;--color-border-strong:#403d52;
+ --color-text:#eceaf4;--color-text-dim:#a39fb5;--color-text-faint:#6f6b82;
+ --color-accent:#b79cff;--color-accent-text:#12101c;--color-focus:#d6c8ff;
+ --color-good:#62d6a1;--color-warn:#f2c14e;--color-bad:#ff7a85;--color-info:#7ab8ff;
+ --shadow-raised:0 8px 24px rgb(0 0 0 / .35);
+ color-scheme:dark;
+}
+@media (prefers-color-scheme:light){
+ :root:not([data-theme="dark"]){
+  --color-bg:#f6f5f9;--color-surface:#ffffff;--color-surface-raised:#ffffff;--color-border:#dcd9e6;--color-border-strong:#bdb8cf;
+  --color-text:#1b1926;--color-text-dim:#5a5670;--color-text-faint:#8a869c;
+  --color-accent:#6a4ee0;--color-accent-text:#ffffff;--color-focus:#4b32c0;
+  --color-good:#16794c;--color-warn:#8a6100;--color-bad:#b3261e;--color-info:#1a5fb4;
+  --shadow-raised:0 8px 24px rgb(27 25 38 / .12);
+  color-scheme:light;
+ }
+}
+:root[data-theme="light"]{
+ --color-bg:#f6f5f9;--color-surface:#ffffff;--color-surface-raised:#ffffff;--color-border:#dcd9e6;--color-border-strong:#bdb8cf;
+ --color-text:#1b1926;--color-text-dim:#5a5670;--color-text-faint:#8a869c;
+ --color-accent:#6a4ee0;--color-accent-text:#ffffff;--color-focus:#4b32c0;
+ --color-good:#16794c;--color-warn:#8a6100;--color-bad:#b3261e;--color-info:#1a5fb4;
+ --shadow-raised:0 8px 24px rgb(27 25 38 / .12);
+ color-scheme:light;
+}
+
+/* Shared components (public/ui.js). They use only the tokens above. */
+.ui-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:var(--space-3) var(--space-5);margin:0 0 var(--space-5)}
+.ui-head-text{min-width:0}
+.ui-head .ui-eyebrow{margin:0 0 var(--space-1);font-size:var(--text-xs);letter-spacing:.08em;text-transform:uppercase;color:var(--color-text-faint)}
+.ui-head h1{margin:0;font-size:var(--text-xl);line-height:var(--leading-tight);font-weight:var(--weight-bold);color:var(--color-text)}
+.ui-head .ui-lead{margin:var(--space-2) 0 0;max-width:70ch;font-size:var(--text-m);line-height:var(--leading-body);color:var(--color-text-dim)}
+.ui-head-actions,.ui-actions{display:flex;flex-wrap:wrap;gap:var(--space-2);align-items:center}
+
+.ui-empty{max-width:720px;margin:var(--space-6) auto;padding:var(--space-6);border:1px dashed var(--color-border-strong);border-radius:var(--radius-l);background:var(--color-surface);color:var(--color-text)}
+.ui-empty-icon{font-size:var(--text-2xl);line-height:1;margin-bottom:var(--space-3)}
+.ui-empty h2{margin:0 0 var(--space-2);font-size:var(--text-l);line-height:var(--leading-tight)}
+.ui-empty p{margin:0 0 var(--space-3);font-size:var(--text-m);line-height:var(--leading-body);color:var(--color-text-dim)}
+.ui-empty ol{margin:0 0 var(--space-4);padding-left:var(--space-5);font-size:var(--text-m);line-height:var(--leading-body);color:var(--color-text-dim)}
+.ui-empty ol li{margin:var(--space-1) 0}
+.ui-empty .ui-actions{margin-top:var(--space-4)}
+.ui-copy{margin:var(--space-4) 0 0;border:1px solid var(--color-border);border-radius:var(--radius-m);background:var(--color-surface-raised);overflow:hidden}
+.ui-copy-head{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);padding:var(--space-2) var(--space-3);border-bottom:1px solid var(--color-border);font-size:var(--text-xs);letter-spacing:.06em;text-transform:uppercase;color:var(--color-text-faint)}
+.ui-copy pre{margin:0;padding:var(--space-3);overflow:auto;max-height:16em;font:var(--text-s)/var(--leading-body) var(--font-mono);color:var(--color-text);white-space:pre-wrap;word-break:break-word}
+.ui-button{appearance:none;display:inline-flex;align-items:center;gap:var(--space-2);padding:var(--space-2) var(--space-4);border:1px solid var(--color-border-strong);border-radius:var(--radius-pill);background:transparent;color:var(--color-text);font:var(--weight-medium) var(--text-s)/1.2 var(--font-sans);text-decoration:none;cursor:pointer}
+.ui-button:hover{border-color:var(--color-accent)}
+.ui-button:focus-visible{outline:2px solid var(--color-focus);outline-offset:2px}
+.ui-button.primary{background:var(--color-accent);border-color:var(--color-accent);color:var(--color-accent-text)}
+.ui-button.small{padding:var(--space-1) var(--space-3);font-size:var(--text-xs)}
+.ui-missing{border-style:solid;border-color:var(--color-warn)}
+.ui-missing .ui-dependency{font-family:var(--font-mono);color:var(--color-text)}

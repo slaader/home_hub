@@ -1,0 +1,1 @@
+{"name":"home-hub","version":"1.0.0","private":true,"type":"module","scripts":{"start":"node server/index.mjs","test":"node scripts/run-tests.mjs","collect:systems":"node scripts/collect-systems.mjs","check:upstream":"node scripts/check-upstream.mjs","export:public":"node scripts/export-public.mjs"},"engines":{"node":">=22"}}

@@ -1,0 +1,46 @@
+{
+ "$comment": "A generic site for the core tests: neutral names and addresses only (see tests/leak.test.mjs).",
+ "siteName": "Example",
+ "lanCidrs": ["10.0.0.0/24"],
+ "timeZone": "Europe/Berlin",
+ "defaultLanguage": "en",
+ "publicOrigin": "https://hub.example.lan",
+ "machines": [
+  {"id": "mini", "name": "Mac mini", "hostname": "mini.example.lan", "ip": "10.0.0.25", "role": "computer", "picture": "/images/desktop.png", "thermoId": "mini",
+   "hardware": {"cpu": "14j (10P+4E) M4 Pro", "gpu": "20c", "ramGb": 64, "diskTotalBytes": 3996000000000}, "ssh": {"alias": "mini", "probe": "mac"},
+   "stack": {"layers": ["INPUT", "RUNTIME", "HARDWARE"], "cols": ["gguf", "mlx"], "engines": {"gguf": "llama.cpp", "mlx": "Apple MLX"}, "blocks": [
+    {"id": "gw", "layer": 0, "col0": 0, "col1": 1, "title": "AI Gateway", "port": ":8789", "desc": "Front door."},
+    {"id": "lswap", "layer": 1, "col0": 0, "col1": 0, "title": "llama-swap", "port": ":8081", "service": "llama-swap", "desc": "Model router."},
+    {"id": "omlx", "layer": 1, "col0": 1, "col1": 1, "title": "oMLX", "port": ":8000", "service": "omlx", "desc": "MLX server.", "models": [{"id": "gemma-4-26B-A4B-it-OptiQ-4bit", "state": "loaded", "sizeGb": 15, "path": "~/models/gemma-4-26B-A4B-it-OptiQ-4bit"}]},
+    {"id": "hw", "layer": 2, "col0": 0, "col1": 1, "title": "M4 Pro", "port": "64 GB", "hw": true}]}},
+  {"id": "studio", "name": "Mac Studio", "hostname": "studio.example.lan", "ip": "10.0.0.151", "role": "computer", "picture": "/images/desktop.png", "thermoId": "studio",
+   "hardware": {"cpu": "36j (12P+24E) M5 Ultra", "gpu": "36c", "ramGb": 256, "diskTotalBytes": 3996000000000}, "ssh": {"alias": "local", "probe": "mac"},
+   "stack": {"layers": ["INPUT", "TOOL", "RUNTIME", "ENGINE", "HARDWARE"], "cols": ["gguf", "mlx", "mlx", "mlx", "torch", "torch"], "engines": {"gguf": "llama.cpp", "mlx": "Apple MLX", "torch": "PyTorch MPS"}, "blocks": [
+    {"id": "lswap", "layer": 1, "col0": 0, "col1": 3, "title": "llama-swap", "port": ":8081", "engine": "mlx", "service": "llama-swap", "desc": "Model router."},
+    {"id": "omlx", "layer": 2, "col0": 1, "col1": 2, "title": "oMLX", "port": ":8000", "service": "omlx", "desc": "MLX server."},
+    {"id": "mlxserve", "layer": 2, "col0": 3, "col1": 3, "title": "mlx-serve", "port": ":11234", "service": "mlx-serve", "desc": "Diffusion packs."},
+    {"id": "lserver", "layer": 2, "col0": 0, "col1": 0, "title": "llama-server", "port": "off", "state": "off", "models": [], "desc": "Installed, not running."},
+    {"id": "hw", "layer": 4, "col0": 0, "col1": 5, "title": "M5 Ultra", "port": "256 GB", "hw": true, "desc": "Unified memory."}]}},
+  {"id": "mini_server", "name": "mini_server", "hostname": "mini-server.example.lan", "ip": "10.0.0.64", "role": "computer", "picture": "/images/desktop.png", "thermoId": "mini_server",
+   "hardware": {"cpu": "8j M1", "gpu": "8c", "ramGb": 16, "diskTotalBytes": 245000000000}, "ssh": {"alias": "mini_server", "probe": "mac"}},
+  {"id": "nas", "name": "NAS", "hostname": "nas.example.lan", "ip": "10.0.0.74", "role": "nas", "picture": "/images/nas.png",
+   "hardware": {"cpu": "Ryzen 9 7900", "gpu": "—", "ramGb": 64, "pools": 3, "diskTotalBytes": 66000000000000}, "ssh": {"alias": "nas-admin", "probe": "nas"},
+   "stack": {"layers": ["INPUT", "RUNTIME", "HARDWARE"], "cols": ["app"], "engines": {}, "blocks": [
+    {"id": "apps", "layer": 0, "col0": 0, "col1": 0, "title": "Apps", "port": "wiki", "desc": "NAS apps."},
+    {"id": "zfs", "layer": 1, "col0": 0, "col1": 0, "title": "ZFS", "port": "3× pool", "hw": true, "desc": "Pools."},
+    {"id": "hw", "layer": 2, "col0": 0, "col1": 0, "title": "Ryzen 9 7900", "port": "64 GB ECC", "hw": true}]}},
+  {"id": "router", "name": "Router", "hostname": "10.0.0.1", "ip": "10.0.0.1", "role": "router", "picture": "/images/desktop.png",
+   "hardware": {"cpu": "4× GbE", "gpu": "—", "ramGb": null, "wifi": "Wi-Fi 7"},
+   "stack": {"layers": ["HARDWARE"], "cols": ["net"], "engines": {}, "blocks": [{"id": "hw", "layer": 0, "col0": 0, "col1": 0, "title": "Router", "port": "4× GbE", "hw": true}]}}
+ ],
+ "inventory": {"places": [
+   {"id": "studio", "label": "studio · Mac Studio", "short": "studio", "column": "Mac Studio"},
+   {"id": "mini", "label": "mini · Mac mini M4", "short": "mini", "column": "mini · M4"},
+   {"id": "mini-server", "label": "mini_server · Mac mini M1", "short": "mini_server", "column": "mini_server · M1"},
+   {"id": "nas", "label": "nas · Linux NAS", "short": "nas", "column": "nas · Linux NAS"},
+   {"id": "router", "label": "UniFi router", "short": "router", "lane": "net"},
+   {"id": "work-macbook", "label": "Work laptop", "short": "work Mac", "lane": "outside"}],
+  "secretStores": ["example-vault"]},
+ "tracker": {"projects": [{"id": "home-hub", "key": "HH", "name": "Home Hub", "type": "app"}, {"id": "sample-game", "key": "GAME", "name": "Sample Game", "type": "game"}]},
+ "security": {"gitHost": "git.example.lan", "gitUrl": "https://git.example.lan", "certificates": [{"match": "home-wildcard|_\\.home\\.", "label": "*.example.lan – HTTPS certifikát"}], "order": ["studio", "mini", "mini_server", "nas", "router"]}
+}

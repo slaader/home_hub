@@ -1,0 +1,38 @@
+{
+ "$comment": "Example site configuration. Copy to local/site.json and edit; every field is optional and a hub without the file runs empty and generic. Schema and checks: server/site-config.mjs (docs/plugins.md describes each field).",
+ "siteName": "Example Home",
+ "lanCidrs": ["10.0.0.0/24"],
+ "timeZone": "Europe/Berlin",
+ "defaultLanguage": "en",
+ "publicOrigin": "https://hub.example.lan",
+ "machines": [
+  {"id": "studio", "name": "Mac Studio", "hostname": "studio.example.lan", "ip": "10.0.0.10", "role": "computer", "picture": "/images/desktop.png", "thermoId": "studio",
+   "hardware": {"cpu": "16c M4 Max", "gpu": "40c", "ramGb": 64, "diskTotalBytes": 1000000000000},
+   "ssh": {"alias": "local", "probe": "mac"}},
+  {"id": "mini", "name": "Mac mini", "hostname": "mini.example.lan", "ip": "10.0.0.11", "role": "computer", "picture": "/images/desktop.png", "thermoId": "mini",
+   "hardware": {"cpu": "10c M4", "gpu": "10c", "ramGb": 24, "diskTotalBytes": 500000000000},
+   "ssh": {"alias": "mini", "probe": "mac"},
+   "stack": {"layers": ["INPUT", "RUNTIME", "HARDWARE"], "cols": ["gguf"], "engines": {"gguf": "llama.cpp"}, "blocks": [
+    {"id": "api", "layer": 0, "col0": 0, "col1": 0, "title": "OpenAI-compatible API", "port": ":8081", "desc": "What clients call."},
+    {"id": "llama", "layer": 1, "col0": 0, "col1": 0, "title": "llama-server", "port": ":8081", "desc": "Serves one GGUF model."},
+    {"id": "hw", "layer": 2, "col0": 0, "col1": 0, "title": "M4", "port": "24 GB unified memory", "hw": true}]}},
+  {"id": "nas", "name": "NAS", "hostname": "nas.example.lan", "ip": "10.0.0.20", "role": "nas", "picture": "/images/nas.png",
+   "hardware": {"cpu": "8c x86-64", "gpu": "—", "ramGb": 32, "pools": 2, "diskTotalBytes": 32000000000000},
+   "ssh": {"alias": "nas-admin", "probe": "nas"}},
+  {"id": "router", "name": "Router", "hostname": "10.0.0.1", "ip": "10.0.0.1", "role": "router", "picture": "/images/desktop.png",
+   "hardware": {"cpu": "4× GbE", "gpu": "—", "ramGb": null, "wifi": "Wi-Fi 6"}}
+ ],
+ "inventory": {
+  "places": [
+   {"id": "studio", "label": "studio · Mac Studio", "short": "studio", "column": "Mac Studio"},
+   {"id": "mini", "label": "mini · Mac mini", "short": "mini", "column": "Mac mini"},
+   {"id": "nas", "label": "nas · NAS", "short": "nas", "column": "NAS"},
+   {"id": "router", "label": "Router", "short": "router", "lane": "net"},
+   {"id": "work-laptop", "label": "Work laptop", "short": "work", "lane": "outside"}],
+  "secretStores": ["example-vault"]
+ },
+ "tracker": {"projects": [{"id": "home-hub", "key": "HH", "name": "Home Hub", "type": "app"}]},
+ "security": {"gitHost": "git.example.lan", "gitUrl": "https://git.example.lan", "certificates": [{"match": "wildcard", "label": "*.example.lan – HTTPS certificate"}], "order": ["studio", "mini", "nas", "router"]},
+ "strings": {"en": {}},
+ "plugins": {}
+}

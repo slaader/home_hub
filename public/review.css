@@ -1,0 +1,132 @@
+/* Review (builds on tickets.css tk-*, security.css sec-* and access.css acc-* styles) */
+.rv-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.rv-card{display:flex;flex-direction:column;gap:0;padding:0;overflow:hidden;text-decoration:none;color:inherit}
+.rv-card:hover{border-color:var(--line-hi)}
+.rv-cover{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:var(--panel2);border-bottom:1px solid var(--line)}
+.rv-cover-none{display:grid;place-items:center;font:600 28px var(--mono);color:var(--faint)}
+.rv-card-body{padding:12px 14px;display:flex;flex-direction:column;gap:6px}
+.rv-card-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.rv-card .rv-card-title{margin:0;font:650 16px var(--sans);color:var(--txt);text-transform:none;letter-spacing:0}
+.rv-banner{background:color-mix(in srgb,var(--warn) 12%,var(--panel));border:1px solid color-mix(in srgb,var(--warn) 40%,var(--line));border-radius:10px;padding:8px 12px;margin:0}
+.rv-notes{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--accent2);border-radius:10px;padding:10px 14px}
+.rv-notes p{margin:6px 0 0}
+.rv-row{display:grid;grid-template-columns:repeat(var(--rv-cols,3),minmax(300px,1fr));gap:12px;overflow-x:auto;padding-bottom:4px}
+.rv-row[data-focus]{grid-template-columns:1fr}
+.rv-row[data-focus] .rv-variant:not(.on){display:none}
+@media(max-width:900px){.rv-row{grid-template-columns:1fr}}
+.rv-variant{display:flex;flex-direction:column;gap:8px;background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:10px;min-width:0}
+.rv-variant.rv-chosen{border-color:color-mix(in srgb,var(--ok) 60%,var(--line))}
+.rv-variant-head{display:flex;align-items:center;gap:8px}
+.rv-variant-head .acc-btn{margin-left:auto}
+.rv-letter{display:inline-grid;place-items:center;min-width:28px;height:28px;border-radius:8px;background:var(--panel3);font:700 14px var(--mono);color:var(--accent)}
+.rv-variant-title{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rv-variant-desc{margin:0}
+.rv-media{display:flex;flex-direction:column;gap:6px}
+.rv-frame{position:relative;overflow:hidden;border-radius:8px;background:#fff;border:1px solid var(--line);align-self:center;max-width:100%}
+.rv-frame iframe{position:absolute;left:0;top:0;border:0;transform-origin:0 0;background:#fff}
+.rv-image{position:relative;border-radius:8px;overflow:hidden;background:var(--panel3);border:1px solid var(--line)}
+.rv-image img{display:block;width:100%;height:auto}
+.rv-overlay{position:absolute;inset:0;pointer-events:none}
+.rv-image.rv-commenting .rv-overlay{pointer-events:auto;cursor:crosshair}
+.rv-commenting{outline:2px dashed color-mix(in srgb,var(--accent) 70%,transparent);outline-offset:2px}
+.rv-highlight{position:absolute;border:2px solid var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);border-radius:3px;pointer-events:none}
+.rv-pin{position:absolute;transform:translate(-50%,-100%);pointer-events:auto;min-width:22px;height:22px;padding:0 6px;border-radius:11px 11px 11px 2px;border:2px solid #fff;
+ background:var(--accent);color:#1a1012;font:700 11px var(--mono);cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.45)}
+.rv-pin.saved{background:var(--accent2)}
+.rv-pin.done{background:var(--ok);opacity:.75}
+.rv-pin[hidden]{display:none}
+.rv-media-tabs,.rv-thumbs{display:flex;gap:6px;flex-wrap:wrap}
+.rv-media-tabs button{background:var(--panel3);border:1px solid var(--line);border-radius:999px;color:var(--dim);font:11px var(--mono);padding:4px 10px;cursor:pointer}
+.rv-media-tabs button.on{color:var(--txt);border-color:var(--accent)}
+.rv-thumbs button{padding:0;border:2px solid transparent;border-radius:6px;background:none;cursor:pointer;width:64px;height:44px;overflow:hidden}
+.rv-thumbs button.on{border-color:var(--accent)}
+.rv-thumbs img{width:100%;height:100%;object-fit:cover;display:block}
+.rv-caption{margin:0}
+.rv-comments{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.rv-comments li{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:start}
+.rv-comments li.rv-done{opacity:.6}
+.rv-draft-body{display:flex;flex-direction:column;gap:4px;min-width:0}
+.rv-draft-body textarea{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;color:var(--txt);font:13px var(--sans);resize:vertical;width:100%;box-sizing:border-box}
+.rv-draft-body textarea:focus{outline:none;border-color:var(--accent)}
+.rv-pin-badge{min-width:26px;height:26px;border-radius:13px 13px 13px 3px;border:0;background:var(--accent);color:#1a1012;font:700 11px var(--mono);cursor:pointer}
+.rv-pin-badge.saved{background:var(--accent2)}
+/* An empty status line and the generic empty-state padding left a large gap under the toolbar. */
+.rv .acc-status:empty{display:none}
+.rv .sec-empty{padding:4px 0}
+.rv-cover-frame{position:relative;overflow:hidden;background:#fff}
+.rv-cover-frame iframe{position:absolute;left:0;top:0;border:0;transform-origin:0 0;pointer-events:none}
+/* One item = one framed block: numbered header with the saved state, the variants, a one-line decision bar. */
+.rv-item{display:flex;flex-direction:column;gap:10px;background:var(--panel);border:1px solid var(--line-hi);border-radius:16px;padding:12px 14px 14px}
+.rv-item+.rv-item{margin-top:14px}
+.rv-item-head{display:flex;align-items:center;gap:10px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.rv-item-no{font:11px var(--mono);color:var(--faint);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:2px 7px}
+.rv-item-title{margin:0;font:650 17px var(--sans);color:var(--txt)}
+.rv-item-desc{margin:0}
+.rv-item-state{margin-left:auto}
+.rv-variant-actions{display:flex;gap:6px;flex-wrap:wrap}
+.rv-pick[aria-pressed=true]{border-color:var(--ok);color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent)}
+.rv-variant.rv-chosen{border-color:color-mix(in srgb,var(--ok) 70%,var(--line));box-shadow:0 0 0 1px color-mix(in srgb,var(--ok) 40%,transparent)}
+.rv-decide{display:flex;flex-direction:column;gap:8px;padding-top:2px}
+.rv-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.rv-bar-left,.rv-bar-right{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.rv-bar .acc-btn[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
+.rv-bar .acc-btn:disabled{opacity:.45;cursor:default}
+.rv-decide textarea[aria-label=Poznámka]{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;color:var(--txt);font:13px var(--sans);resize:vertical;width:100%;box-sizing:border-box}
+.rv-saved summary{cursor:pointer;font:12px var(--mono);color:var(--dim)}
+.rv-saved[open] summary{margin-bottom:8px}
+/* 3D models: <model-viewer> fills a fixed-ratio box; pins are its hotspots and dim when they face away. */
+.rv-model{position:relative;border-radius:8px;overflow:hidden;background:radial-gradient(circle at 50% 35%,var(--panel3),var(--panel2));border:1px solid var(--line);aspect-ratio:4/3;max-height:520px}
+.rv-row[data-focus] .rv-model{aspect-ratio:16/9;max-height:min(80vh,820px)}
+.rv-model model-viewer{display:block;width:100%;height:100%;--poster-color:transparent;--progress-bar-color:var(--accent)}
+.rv-model.rv-commenting model-viewer{cursor:crosshair}
+.rv-model-note{margin:0}
+.rv-model-note[hidden]{display:none}
+.rv-pin3d{min-width:22px;height:22px;padding:0 6px;border-radius:11px 11px 11px 2px;border:2px solid #fff;background:var(--accent);color:#1a1012;font:700 11px var(--mono);cursor:pointer;
+ box-shadow:0 2px 8px rgba(0,0,0,.45);transform:translate(50%,-50%);transition:opacity .15s}
+.rv-pin3d.saved{background:var(--accent2)}
+.rv-pin3d.done{background:var(--ok)}
+.rv-pin3d:not([data-visible]){opacity:.3}
+.rv-anim{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.rv-anim[hidden]{display:none}
+.rv-anim select{background:var(--panel3);border:1px solid var(--line);border-radius:8px;color:var(--txt);font:12px var(--sans);padding:4px 8px;max-width:220px}
+.rv-sync[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
+.rv-item-head .rv-sync{margin-left:auto}
+.rv-item-head .rv-sync+.rv-item-state{margin-left:0}
+/* List: a bin (or ↩ in the archive) appears over a card on hover. */
+.rv-card-wrap{position:relative;display:flex}
+.rv-card-wrap>.rv-card{flex:1}
+.rv-card-bin{position:absolute;top:8px;right:8px;z-index:2;width:32px;height:32px;border-radius:8px;border:1px solid var(--line-hi);background:color-mix(in srgb,var(--panel) 88%,transparent);
+ color:var(--txt);font-size:15px;cursor:pointer;opacity:0;transition:opacity .12s}
+.rv-card-wrap:hover .rv-card-bin,.rv-card-bin:focus-visible{opacity:1}
+.rv-card-bin:hover{border-color:var(--crit);color:var(--crit)}
+.rv-card-bin:disabled{opacity:.4;cursor:default}
+@media(hover:none){.rv-card-bin{opacity:.85}}
+/* The item's frame shows its saved decision: green = a variant taken, red = back for rework. */
+.rv-item.rv-taken{border-color:var(--ok);box-shadow:0 0 0 1px color-mix(in srgb,var(--ok) 45%,transparent)}
+.rv-item.rv-rework{border-color:var(--crit);box-shadow:0 0 0 1px color-mix(in srgb,var(--crit) 45%,transparent)}
+.rv-bar .rv-reject[aria-pressed=true]{border-color:var(--crit);color:var(--crit)}
+.rv-save-state{font:11px var(--mono)}
+.rv-save-state.error{color:var(--crit)}
+/* Note / rework box: text, links, screenshots. */
+.rv-note{display:flex;flex-direction:column;gap:8px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px}
+.rv-note-rework{border-color:color-mix(in srgb,var(--crit) 60%,var(--line))}
+.rv-note-title{font:600 13px var(--sans);color:var(--crit)}
+.rv-note textarea{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px;color:var(--txt);font:13px var(--sans);resize:vertical;width:100%;box-sizing:border-box}
+.rv-note textarea:focus{outline:none;border-color:var(--accent)}
+.rv-note-tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.rv-note-tools input[hidden]{display:none}
+.rv-shots{display:flex;gap:8px;flex-wrap:wrap}
+.rv-shot{position:relative;margin:0;width:120px;height:80px;border-radius:8px;overflow:hidden;border:1px solid var(--line);background:var(--panel3)}
+.rv-shot img{width:100%;height:100%;object-fit:cover;display:block}
+.rv-shot-x{position:absolute;top:4px;right:4px;width:22px;height:22px;border-radius:11px;border:0;background:rgba(0,0,0,.65);color:#fff;cursor:pointer;font:700 13px var(--sans)}
+.rv-decide .tk-text a,.rv-comments .tk-text a{color:var(--accent2);word-break:break-all}
+/* Approve items: a panel sent back with comments is amber; the item frame too while any is. */
+.rv-variant.rv-changes{border-color:color-mix(in srgb,var(--warn) 70%,var(--line));box-shadow:0 0 0 1px color-mix(in srgb,var(--warn) 40%,transparent)}
+.rv-item.rv-changes{border-color:var(--warn);box-shadow:0 0 0 1px color-mix(in srgb,var(--warn) 45%,transparent)}
+.rv-variant-head .sec-pill{flex:none}
+/* A comment's own screenshots and its 📎 button. */
+.rv-draft-tools{display:flex;gap:6px}
+.rv-draft-tools .acc-btn.small{margin-left:0}
+.rv-draft-tools input[hidden]{display:none}
+.rv-comments .rv-shots{margin-top:6px}
+.rv-comments .rv-shot{width:96px;height:64px}

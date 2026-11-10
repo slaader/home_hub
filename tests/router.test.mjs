@@ -1,0 +1,2 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {execFileSync} from 'node:child_process';import {fileURLToPath} from 'node:url';
+test('UniFi collector maps wired/wireless clients, bands, bounds, key and credential handling and keeps the previous snapshot on failure',()=>{assert.doesNotThrow(()=>execFileSync('python3',[fileURLToPath(new URL('./router_unifi_test.py',import.meta.url))],{stdio:'pipe',timeout:20000}));});

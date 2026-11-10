@@ -1,0 +1,80 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,readFile,rm} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {createAccessStore} from '../server/access-store.mjs';
+import {scopeFor,legacyScopes,validScopes} from '../server/scopes.mjs';
+import {hub,credentials} from './hub-helper.mjs';
+test('scope table: admin and token routes are never reachable with a key, legacy keys keep their old reach',()=>{
+ assert.equal(scopeFor('POST','/api/inventory/entries'),'inventory:write');
+ assert.equal(scopeFor('POST','/api/tickets'),'tickets:write');assert.equal(scopeFor('PUT','/api/review/blobs/'+'a'.repeat(64)),'review:write');assert.equal(scopeFor('POST','/api/home/devices'),null);
+ assert.equal(scopeFor('GET','/api/home'),'read');
+ assert.equal(scopeFor('GET','/api/security'),'security:read');
+ assert.equal(scopeFor('GET','/api/systems'),'security:read');
+ for(const [m,p] of [['POST','/api/profile/password'],['GET','/api/admin/users'],['POST','/api/admin/accounts'],['POST','/api/devices/tokens'],['GET','/api/devices/tokens'],['POST','/api/session'],['POST','/api/unknown']])assert.equal(scopeFor(m,p),null,`${m} ${p}`);
+ assert.deepEqual(legacyScopes('read'),['read']);
+ assert.ok(legacyScopes('write').includes('tickets:write')&&!legacyScopes('write').includes('security:read'));
+ assert.deepEqual(validScopes(['inventory:write']),['read','inventory:write'],'read is always included');
+ assert.throws(()=>validScopes(['root']),/invalid/);
+});
+
+test('store: accounts own keys, scopes apply live, disabling or deleting cuts the keys off',async t=>{
+ const dir=await mkdtemp(path.join(os.tmpdir(),'hub-sa-store-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const s=createAccessStore(dir,credentials);
+ const {account}=await s.createAccount({name:'agent-studio',description:'Codex on the Studio',scopes:['inventory:write']});
+ assert.deepEqual(account.scopes,['read','inventory:write']);
+ await assert.rejects(s.createAccount({name:'agent-studio',scopes:['read']}),/conflict/);
+ assert.throws(()=>s.createAccount({name:'Bad Name',scopes:['read']}),/invalid/);
+ assert.throws(()=>s.createAccount({name:'agent-x',scopes:['admin']}),/invalid/);
+ const issued=await s.issueAccountKey({accountId:account.id});
+ let p=s.verifyKey(issued.token);
+ assert.equal(p.username,'agent-studio');assert.deepEqual(p.scopes,['read','inventory:write']);assert.equal(p.permission,'write');assert.equal(p.accountId,account.id);
+ await s.updateAccount({id:account.id,scopes:['read']});
+ p=s.verifyKey(issued.token);assert.deepEqual(p.scopes,['read']);assert.equal(p.permission,'read','narrowing scopes applies to existing keys');
+ await s.updateAccount({id:account.id,disabled:true});assert.equal(s.verifyKey(issued.token),null);
+ await s.updateAccount({id:account.id,disabled:false});assert.ok(s.verifyKey(issued.token));
+ assert.throws(()=>s.updateAccount({id:account.id,scopes:['read'],disabled:true}),/invalid/,'one change per call');
+ await s.updateAccount({id:account.id,remove:true});
+ assert.equal(s.verifyKey(issued.token),null);assert.ok(s.keys().find(k=>k.id===issued.key.id).revokedAt,'keys of a deleted account are revoked');
+ const disk=await readFile(path.join(dir,'access.json'),'utf8');assert.ok(!disk.includes(issued.token));
+ const legacy=await s.issueKey({name:'old writer',permission:'write'});
+ assert.equal(createAccessStore(dir,credentials).verifyKey(legacy.token).legacy,true,'legacy keys survive a restart unchanged');
+});
+
+test('HTTP: an inventory agent can update the inventory and nothing else; every write is logged',async t=>{
+ let bridgeCalls=0;
+ const h=await hub(t,{bridgeRequest:async()=>{bridgeCalls++;return {};}});
+ const agent=await h.account('agent-studio',['inventory:write']);
+ const reader=await h.account('reader-mini',[]);
+ assert.equal((await fetch(h.origin+'/api/inventory',{headers:agent.headers})).status,200);
+ const inv=await (await fetch(h.origin+'/api/inventory',{headers:agent.headers})).json();
+ const entry=inv.doc.entries.find(e=>e.id==='studio-llama-swap');
+ const ok=await h.post('/api/inventory/entries',{entry:{...entry,version:'v190'},base:inv.hashes[entry.id]},agent.headers);
+ assert.equal(ok.status,200);
+ const saved=JSON.parse(await readFile(path.join(h.dir,'knowledge.json'),'utf8')).entries.find(e=>e.id==='studio-llama-swap');
+ assert.equal(saved.version,'v190');assert.equal(saved.verified_by,'Home Hub API · agent-studio');
+ for(const [route,body] of [['/api/home/settings',{intervalSeconds:30}],['/api/tickets',{project:'home-hub',title:'x'}],['/api/review/sets',{id:'R-1'}],['/api/home/devices',{name:'x'}]]){
+  const r=await h.post(route,body,agent.headers);assert.equal(r.status,403,route);assert.equal((await r.json()).error.code,'SCOPE_REQUIRED');
+ }
+ assert.equal(bridgeCalls,0,'refused writes never reach a bridge');
+ assert.equal((await h.post('/api/inventory/entries',{entry:{id:'x-new',kind:'tool',name:'x'}},reader.headers)).status,403,'read-only account cannot write');
+ assert.equal((await fetch(h.origin+'/api/security',{headers:agent.headers})).status,403);
+ const sec=await h.account('auditor',['security:read']);
+ assert.equal((await fetch(h.origin+'/api/security',{headers:sec.headers})).status,404,'security:read passes auth (no snapshot in the test dir)');
+ assert.equal((await fetch(h.origin+'/api/admin/accounts',{headers:agent.headers})).status,403);
+ assert.equal((await h.post('/api/admin/accounts',{name:'escalate',scopes:['tickets:write']},agent.headers)).status,403);
+ const legacy=await (await h.post('/api/admin/keys',{name:'old writer',permission:'write'},h.admin)).json();
+ assert.notEqual((await h.post('/api/home/settings',{intervalSeconds:30},{Authorization:'Bearer '+legacy.token})).status,403,'legacy write keys keep full write');
+ const audit=await (await fetch(h.origin+'/api/admin/audit',{headers:h.admin})).json();
+ const writes=audit.events.filter(e=>e.event==='api-write'&&e.subject==='agent-studio');
+ assert.ok(writes.some(e=>e.detail==='/api/inventory/entries · studio-llama-swap'&&e.status===200));
+ assert.ok(writes.some(e=>e.detail.startsWith('/api/home/settings')&&e.status===403),'refused attempts are logged too');
+ assert.ok(writes.some(e=>e.detail.startsWith('/api/admin/accounts')&&e.status===403),'attempts on admin routes are logged');
+ assert.ok(audit.events.some(e=>e.event==='account-created'&&e.subject==='agent-studio'));
+ const text=JSON.stringify(audit);assert.ok(!text.includes(agent.token)&&!text.includes('v190'),'no tokens or bodies in the log');
+ await h.post('/api/admin/accounts/action',{id:agent.account.id,disabled:true},h.admin);
+ assert.equal((await fetch(h.origin+'/api/inventory',{headers:agent.headers})).status,401,'disabled account keys stop at once');
+ const listed=await (await fetch(h.origin+'/api/admin/accounts',{headers:h.admin})).json();
+ assert.ok(listed.scopes['inventory:write'].label);assert.equal(listed.accounts.length,3);assert.ok(!JSON.stringify(listed).includes('"hash"'));
+});

@@ -1,0 +1,25 @@
+/* Systémy · Verze a aktualizace + Ochrana strojů (builds on security.css: sec-stat, sec-table, sec-pill) */
+.sys-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 16px 10px}
+.sys-card h3{margin:0 0 6px;font:600 11px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.sys-chart{height:196px;width:100%}
+.sys-chips{display:flex;flex-wrap:wrap;gap:6px}
+.sys-chip{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line);color:var(--dim);border-radius:999px;padding:6px 12px;font:12px var(--mono);text-decoration:none}
+.sys-chip .dot{width:8px;height:8px;border-radius:50%}
+.sys-chip.on{color:var(--txt);border-color:color-mix(in srgb,var(--accent2) 55%,var(--line));background:linear-gradient(90deg,rgba(199,167,255,.14),transparent)}
+.sys-chip .sec-pill{margin-left:0}
+.sys-toggle{display:inline-flex;align-items:center;gap:6px;font:12px var(--mono);color:var(--dim);margin:0 0 10px;cursor:pointer}
+.sys-name{font:600 12.5px var(--mono);color:var(--txt)}
+.sys-ver{font:600 12.5px var(--mono);color:var(--txt);word-break:break-all}
+.sys-note{margin-top:4px;line-height:1.4;max-width:420px;word-break:break-word}
+.sys-link{color:var(--accent2);text-decoration:none}.sys-link:hover{text-decoration:underline}
+.sys-table td{min-width:0}
+.sys-table tr.sys-upd td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
+.sys-upd-line+.sys-upd-line{margin-top:6px}
+.sys-matrix td{vertical-align:top}
+.sys-matrix td .sec-pill{white-space:normal;text-align:left}
+.sys-empty{padding:16px 2px}
+.sys-brew{display:grid;gap:10px}
+.sys-brew-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:4px 16px;padding:8px 0 4px}
+a.sys-stat-link{text-decoration:none;color:inherit}
+a.sys-stat-link:hover{border-color:var(--line-hi)}
+a.sys-stat-link .v{color:var(--accent2)}
