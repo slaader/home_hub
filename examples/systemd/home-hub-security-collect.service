@@ -7,6 +7,8 @@ Description=Home Hub: collect the SSH key inventory over SSH
 
 [Service]
 Type=oneshot
+# Lets the snapshot say which unit wrote it (the page shows "scheduled by systemd").
+Environment=HOME_HUB_UNIT=%n
 WorkingDirectory=%h/home-hub
 ExecStart=/usr/bin/env node scripts/collect-security.mjs --data %h/home-hub/data
 Nice=10

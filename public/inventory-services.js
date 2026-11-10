@@ -1,15 +1,18 @@
-// #services (Inventář → Služby): the services catalog. It is the inventory seen through one kind: every
-// entry of kind "runtime" is a service, grouped by the machine it runs on. There is nothing to maintain
-// here separately: add or change a runtime entry (in the map, or an agent with inventory_update) and the
-// catalog follows. Opening a card shows the same entry detail as the map.
+// The Services view of the inventory page (#inventory-map/services; the old address #services leads there).
+// It is the inventory seen through one kind: every entry of kind "runtime" is a service. Next to the map
+// and the table it is the one dense list that answers "what is this service, where do I reach it, and what
+// breaks with it": per service its address (port or URL, clickable), the machine it runs on, the names of
+// what depends on it and of what it needs, and when and by whom it was last verified. The map shows those
+// names for one selected card at a time; the table shows only how many there are.
+// It shares the page's search box and the table's place and gap filters, and keeps its own sort order.
+// There is nothing to maintain here separately: add or change a runtime entry (in any view, or an agent
+// with inventory_update) and the list follows. Opening a row shows the same entry detail as the map.
 import {canWrite} from './access.js';
 import {t,tp} from './i18n.js';
-import {el,onLeave} from './views.js';
-import {pageHeader,emptyState} from './ui.js';
-import {currentPrincipal,pageAllowed} from './session-cache.js';
-import {load as loadSystems} from './systems-view.js';
-import {load,setCurrent,setSystems,systemsDoc,place,hasGap,matcher,typeTag,isExample,index} from './inventory-data.js';
-import {showDetail,showCreate,linkify,badge} from './inventory-entry.js';
+import {el} from './views.js';
+import {emptyState} from './ui.js';
+import {place,hasGap,matcher,typeTag,isExample,index} from './inventory-data.js';
+import {showCreate,linkify} from './inventory-entry.js';
 
 export const SERVICES_PROMPT=()=>t('Projdi moje stroje a zapiš do inventáře Home Hubu každou běžící službu (MCP server „home-hub“, scope inventory:write).\n1. Zavolej inventory_describe: zjistíš schéma, druhy a pravidla.\n2. Před každým zápisem zavolej inventory_search, ať nezaložíš nic dvakrát. Stroj, na kterém služba běží, musí mít vlastní záznam druhu machine; když chybí, založ ho jako první.\n3. Každou službu ulož přes inventory_update (nebo víc naráz přes inventory_bulk_upsert, nejdřív s dryRun) jako záznam s kind „runtime“: id, name, machine, address (host:port nebo URL), version, managed_by a depends_on.\n4. U přihlašovacích údajů zapiš jen to, kde jsou uložené (store a název položky), nikdy jejich hodnotu.\nNakonec vypiš, co se ti nepodařilo ověřit.');
 
@@ -19,47 +22,79 @@ export function serviceGroups(doc){
  for(const e of doc.entries.filter(x=>x.kind==='runtime')){const key=e.machine||'';if(!groups.has(key))groups.set(key,[]);groups.get(key).push(e);}
  return [...groups].map(([machine,services])=>({machine,label:services[0]?place(services[0])||machine:machine,services}));
 }
-function card(doc,e,usedBy){
- const needs=(e.depends_on||[]).length,users=(usedBy.get(e.id)||[]).length;
- return el('article',{class:`inv-service${hasGap(e)?' gap':''}`,tabindex:'0',role:'button','aria-label':`${e.name}. ${t('Otevřít záznam')}`,
-   onclick:ev=>{if(!ev.target.closest('a'))showDetail(doc,e.id);},onkeydown:ev=>{if((ev.key==='Enter'||ev.key===' ')&&ev.target===ev.currentTarget){ev.preventDefault();showDetail(doc,e.id);}}},
-  el('header',{},el('h3',{},e.name),badge(typeTag(e),'kind-runtime'),isExample(e)?badge(t('Ukázka'),'amber'):null),
-  e.address?el('p',{class:'mono inv-service-addr'},linkify(e.address)):el('p',{class:'amber-text inv-service-addr'},t('Adresa není zapsaná')),
-  e.notes?el('p',{class:'inv-service-notes'},e.notes):null,
-  el('footer',{},e.version?el('span',{class:'inv-service-version',title:`${t('Verze (zapsaná)')}: ${e.version}`},e.version):null,el('span',{title:t('Potřebuje {n}',{n:needs})},`→ ${needs}`),el('span',{title:t('Závisí na něm {n}',{n:users})},`← ${users}`),
-   (e.secrets||[]).length?el('span',{},tp(e.secrets.length,'{n} tajemství|{n} tajemství|{n} tajemství')):null,el('span',{class:'inv-service-when'},e.verified_at||'')));
+const text=v=>typeof v==='string'?v:'';
+// One row per service, with everything the list shows and sorts by. usedBy: the entries that name this
+// service in their depends_on (what stops when it fails); needs: what it names itself.
+export function serviceRows(doc){
+ const {byId,usedBy}=index(doc),named=d=>({id:d.id,name:byId.get(d.id)?.name||d.id,kind:d.kind||''});
+ return doc.entries.filter(e=>e.kind==='runtime').map(e=>({entry:e,id:e.id,name:text(e.name)||e.id,type:typeTag(e),place:text(place(e)),address:text(e.address),version:text(e.version),
+  usedBy:(usedBy.get(e.id)||[]).map(named),needs:(e.depends_on||[]).map(named),verified:text(e.verified_at),verifiedBy:text(e.verified_by),gap:hasGap(e)}));
 }
-const emptyServices=(inventoryEmpty)=>emptyState({icon:'◎',title:t('Zatím tu nejsou žádné služby'),
- body:inventoryEmpty?t('Katalog služeb je pohled na inventář: každý záznam druhu „runtime“ je služba. Inventář je zatím prázdný, takže není co ukázat.'):t('Katalog služeb je pohled na inventář: každý záznam druhu „runtime“ je služba. V inventáři zatím žádný takový není.'),
+const COLUMNS=[['name','Služba'],['address','Adresa'],['place','Stroj'],['usedBy','Závisí na ní'],['needs','Potřebuje'],['verified','Ověřeno']];
+const KEY={name:r=>r.name.toLowerCase(),address:r=>r.address.toLowerCase(),place:r=>r.place.toLowerCase(),usedBy:r=>r.usedBy.length,needs:r=>r.needs.length,verified:r=>r.verified};
+// Sorted copy. Empty values go last in either direction; ties go by machine, then by name.
+export function sortServices(rows,key='place',dir='asc'){
+ const of=KEY[key]||KEY.place,sign=dir==='desc'?-1:1,empty=v=>v===''||v===0;
+ return [...rows].sort((a,b)=>{const x=of(a),y=of(b);
+  if(empty(x)!==empty(y))return empty(x)?1:-1;
+  const c=typeof x==='number'?x-y:String(x).localeCompare(String(y),undefined,{numeric:true});
+  return c?c*sign:a.place.localeCompare(b.place)||a.name.localeCompare(b.name);});
+}
+const emptyServices=()=>emptyState({icon:'◎',title:t('Zatím tu nejsou žádné služby'),
+ body:t('Katalog služeb je pohled na inventář: každý záznam druhu „runtime“ je služba. V inventáři zatím žádný takový není.'),
  steps:[t('Služba je cokoli, co běží a má adresu: server, démon, aplikace s portem.'),t('Založ záznam s druhem „runtime“ a strojem, na kterém běží. Stroj musí mít vlastní záznam druhu „machine“.'),t('Doplň adresu, verzi, kdo ji spouští a na čem závisí. Objeví se tady i v mapě.')],
  agentPrompt:SERVICES_PROMPT(),mcpSnippet:true,
- actions:[canWrite()?{label:t('Přidat službu'),onclick:()=>showCreate({kind:'runtime'}),primary:true}:null,{label:t('Otevřít mapu inventáře'),href:'#inventory-map'}]});
+ actions:[canWrite()?{label:t('Přidat službu'),onclick:()=>showCreate({kind:'runtime'}),primary:true}:null]});
 
-export function servicesPage({me}={}){
- const body=el('div',{class:'inv-services-body'},el('p',{class:'inv-loading',role:'status'},t('Načítám služby…')));
- const who=currentPrincipal();let alive=true;onLeave(()=>{alive=false;});
- const state={query:'',machine:''};
- const show=({doc})=>{
-  if(!alive)return;setCurrent(doc);
-  const groups=serviceGroups(doc),total=groups.reduce((n,g)=>n+g.services.length,0);
-  if(!total)return body.replaceChildren(emptyServices(!doc.entries.length));
-  const {usedBy}=index(doc),list=el('div',{class:'inv-service-groups'}),count=el('span',{class:'inv-count',role:'status'});
-  const draw=()=>{const match=matcher(state.query);let shown=0;
-   list.replaceChildren(...groups.filter(g=>!state.machine||g.machine===state.machine).map(g=>{const services=g.services.filter(e=>!match||match(e));shown+=services.length;
-    return services.length?el('section',{class:'inv-service-group'},el('h2',{},g.label||t('Bez stroje'),el('span',{class:'inv-count'},String(services.length))),el('div',{class:'inv-service-grid'},services.map(e=>card(doc,e,usedBy)))):null;}).filter(Boolean));
-   if(!shown)list.replaceChildren(el('div',{class:'inv-none'},el('p',{},t('Tomuhle hledání a filtrům nic neodpovídá.'))));
-   count.textContent=shown===total?tp(total,'{n} služba|{n} služby|{n} služeb'):t('{n} z {total} služeb',{n:shown,total});
-   for(const b of chips.querySelectorAll('button'))b.classList.toggle('on',b.getAttribute('data-machine')===state.machine),b.setAttribute('aria-pressed',String(b.getAttribute('data-machine')===state.machine));};
-  const chip=(machine,label,n)=>el('button',{type:'button',class:'inv-chip','data-machine':machine,onclick:()=>{state.machine=machine;draw();}},`${label} · ${n}`);
-  const chips=el('div',{class:'inv-chips',role:'group','aria-label':t('Stroj')},chip('',t('Vše'),total),groups.length>1?groups.map(g=>chip(g.machine,g.label||t('Bez stroje'),g.services.length)):null);
-  const search=el('input',{type:'search',class:'inv-search',placeholder:t('Hledat službu, adresu, stroj…'),'aria-label':t('Hledat ve službách'),oninput:()=>{state.query=search.value;draw();}});
-  body.replaceChildren(el('div',{class:'inv-toolbar'},search,count,el('span',{class:'inv-toolbar-gap'}),canWrite()?el('button',{type:'button',class:'inv-btn primary',onclick:()=>showCreate({kind:'runtime',machine:state.machine})},t('+ Přidat službu')):null),chips,list,
-   el('p',{class:'muted inv-source-note'},t('Služby jsou záznamy inventáře druhu „runtime“ · aktualizováno {when}.',{when:doc.updated_at||'—'})));
-  draw();
- };
- const fail=e=>{if(alive)body.replaceChildren(emptyState({icon:'⚠',title:t('Služby se nepodařilo načíst'),body:t(e.message),actions:[{label:t('Zkusit znovu'),onclick:()=>{body.replaceChildren(el('p',{class:'inv-loading',role:'status'},t('Načítám služby…')));load().then(show).catch(fail);},primary:true}]}));};
- load().then(show).catch(fail);
- // The entry detail shows installed versions to those who may see the versions page.
- if(me&&pageAllowed('versions',me)&&!systemsDoc())loadSystems().then(d=>{if(who===currentPrincipal()&&alive)setSystems(d);}).catch(()=>{});
- return el('div',{class:'inv-page'},pageHeader({eyebrow:t('Inventář'),title:t('Služby'),lead:t('Co kde běží, na jaké adrese a v jaké verzi. Každá služba je záznam inventáře druhu „runtime“.')}),body);
+const SHOWN=3;
+/**
+ * The list. filters: the table's {place, gaps}, shared so a filter set in one view holds in the other;
+ * sort: {sort, dir} of this view; query(): the page's search box; onOpen(id) opens an entry.
+ */
+export function servicesView({doc,filters,sort,query,onOpen,onChange=()=>{}}){
+ const all=serviceRows(doc);
+ if(!all.length)return {node:el('div',{class:'inv-services-view'},emptyServices()),redraw:()=>{}};
+ const places=[...new Set(all.map(r=>r.place).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+ const body=el('tbody',{}),count=el('span',{class:'inv-count',role:'status'}),head=el('tr',{}),empty=el('div',{class:'inv-none'});
+ // A place picked in the table that holds no service stays selected (and listed), so the filter is visible here too.
+ const placeSelect=el('select',{'aria-label':t('Všechna místa'),onchange:()=>{filters.place=placeSelect.value;draw();onChange();}},
+  el('option',{value:''},t('Všechna místa')),[...new Set([...places,filters.place].filter(Boolean))].map(p=>el('option',{value:p},p)));
+ const gaps=el('button',{type:'button',class:'inv-chip',onclick:()=>{filters.gaps=!filters.gaps;draw();onChange();}},t('Jen s mezerami'));
+ const clear=el('button',{type:'button',class:'inv-more',onclick:()=>{filters.place='';filters.gaps=false;draw();onChange();}},t('Zrušit filtry'));
+ const cell=(label,cls,...children)=>el('td',{class:cls,'data-label':label},cls.includes('inv-td-name')?children:el('div',{class:'inv-td-val'},children));
+ // Names of related entries: the first few as buttons that open them, the rest as a count.
+ const related=(list,none)=>!list.length?el('span',{class:'inv-rel-none'},none):el('span',{class:'inv-rel'},
+  list.slice(0,SHOWN).map(x=>el('button',{type:'button',class:'inv-rel-item',title:x.name,onclick:ev=>{ev.stopPropagation();onOpen(x.id);}},x.name)),
+  list.length>SHOWN?el('span',{class:'inv-rel-more',title:list.slice(SHOWN).map(x=>x.name).join(', ')},`+${list.length-SHOWN}`):null);
+ function draw(){
+  const match=matcher(query()),rows=sortServices(all.filter(r=>(!filters.place||r.place===filters.place)&&(!filters.gaps||r.gap)&&(!match||match(r.entry))),sort.sort,sort.dir);
+  placeSelect.value=filters.place||'';
+  gaps.classList.toggle('on',!!filters.gaps);gaps.setAttribute('aria-pressed',String(!!filters.gaps));
+  clear.hidden=!(filters.place||filters.gaps);
+  count.textContent=rows.length===all.length?tp(all.length,'{n} služba|{n} služby|{n} služeb'):t('{n} z {total} služeb',{n:rows.length,total:all.length});
+  head.replaceChildren(...COLUMNS.map(([key,label])=>{const on=sort.sort===key;
+   return el('th',{scope:'col','aria-sort':on?(sort.dir==='desc'?'descending':'ascending'):'none'},
+    el('button',{type:'button',class:`inv-sort${on?' on':''}`,onclick:()=>{sort.dir=on&&sort.dir==='asc'?'desc':'asc';sort.sort=key;draw();onChange();}},t(label),el('span',{'aria-hidden':'true'},on?(sort.dir==='desc'?' ↓':' ↑'):'')));}));
+  body.replaceChildren(...rows.map(r=>el('tr',{class:r.gap?'gap':'',onclick:ev=>{if(!ev.target.closest('a,button'))onOpen(r.id);}},
+   cell(t('Služba'),'inv-td-name cat-service',el('span',{class:'inv-swatch','aria-hidden':'true'}),el('button',{type:'button',class:'inv-rowbtn',onclick:ev=>{ev.stopPropagation();onOpen(r.id);}},r.name),isExample(r.entry)?el('span',{class:'inv-badge amber'},t('Ukázka')):null,
+    el('small',{},[r.type,r.version].filter(Boolean).join(' · '))),
+   cell(t('Adresa'),'mono inv-td-addr',r.address?el('span',{class:'inv-addr',title:r.address},linkify(r.address)):el('span',{class:'amber-text'},t('Adresa není zapsaná'))),
+   cell(t('Stroj'),'',r.place||'—'),
+   cell(t('Závisí na ní'),'inv-td-rel',related(r.usedBy,t('nic zapsaného'))),
+   cell(t('Potřebuje'),'inv-td-rel',related(r.needs,'—')),
+   cell(t('Ověřeno'),'mono',r.verified||'—',r.verifiedBy?el('small',{title:r.verifiedBy},r.verifiedBy):null))));
+  empty.hidden=rows.length>0;
+  empty.replaceChildren(el('p',{},t('Tomuhle hledání a filtrům nic neodpovídá.')));
+ }
+ draw();
+ return {node:el('div',{class:'inv-table-view inv-services-view'},
+   el('div',{class:'inv-chips inv-table-filters'},placeSelect,gaps,clear,el('span',{class:'inv-chip-gap'}),count),
+   el('div',{class:'inv-table-wrap'},el('table',{class:'inv-table inv-services'},el('caption',{class:'inv-sr'},t('Služby: adresa, stroj, co na nich závisí a kdy byly ověřené')),el('thead',{},head),body)),empty),
+  redraw:draw};
+}
+// #services was a page of its own. The address still works: it opens the inventory page in this view.
+export function servicesPage(){
+ const target='#inventory-map/services';
+ if(globalThis.location){try{location.replace(target);}catch{location.hash=target;}}
+ return el('p',{class:'inv-loading',role:'status'},t('Načítám služby…'));
 }

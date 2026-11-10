@@ -1,4 +1,4 @@
-// Core module "inventory": the inventory map and the services catalog, both views of one file
+// Core module "inventory": the inventory page (map, table and the services catalog), all views of one file
 // (data/knowledge.json) that is served only when it passes the same checker agents run.
 // Writes go through one writer. By default that is the local editor (the file on this machine);
 // a plugin may provide another one (extension point inventory.writer → {put(change, by), edit(input)}
@@ -11,6 +11,7 @@ import {readFile} from 'node:fs/promises';
 import {check,describe} from '../../scripts/check-knowledge.mjs';
 import {createKnowledgeEditor,editInput,entryInput,deleteInput,bulkInput,entryHash,emptyDoc,LIMITS} from '../../scripts/knowledge-edit.mjs';
 import {toolError} from '../mcp.mjs';
+import {inventoryProvenance} from '../provenance.mjs';
 
 const UNSUPPORTED='This hub forwards inventory edits to another machine, and that writer cannot do this yet.';
 const servicesError=e=>[({invalid:400,conflict:409,busy:429})[e.message]||503,'INVENTORY_UPDATE_FAILED',e.message==='conflict'?'The entry changed. Read it again before updating.':'Cannot update the service inventory.'];
@@ -128,7 +129,8 @@ export default {
  assets:['inventory-view.js','inventory-data.js','inventory-entry.js','inventory-table.js','inventory-services.js','inventory-rules.js','inventory-versions.js','inventory.css'],
  nav:[
   {groupKey:'Inventář',hash:'inventory-map',labelKey:'Mapa inventáře',view:'inventory-view.js#inventoryPage',order:20},
-  {groupKey:'Inventář',hash:'services',labelKey:'Služby',view:'inventory-services.js#servicesPage',order:20.5},
+  // The services catalog is a view of the inventory page now; its old address stays routable and leads there.
+  {hash:'services',labelKey:'Služby',view:'inventory-services.js#servicesPage',hidden:true},
  ],
  setup(hub){
   const file=path.join(hub.directory,'knowledge.json'),secretStores=hub.site.inventory.secretStores;
@@ -157,7 +159,8 @@ export default {
   ['POST','/api/inventory/bulk','inventory:write','Hromadné založení nebo nahrazení {entries:[{entry, base?}], dryRun?}; uloží se vše, nebo nic.'],
   ['POST','/api/inventory/entries/delete','inventory:write','Smazání záznamu {id, base}; vyžaduje aktuální otisk a nesmí na něm nic záviset.']]}],
  routes:[
-  {method:'GET',path:'/api/inventory',error:inventoryError,async handler(c){const r=await served(c);if(r)return c.json(200,{doc:r.doc,gaps:r.warnings,hashes:hashes(r.doc.entries)});}},
+  // provenance (server/provenance.mjs): who wrote the entries, read from each entry's verified_by stamp.
+  {method:'GET',path:'/api/inventory',error:inventoryError,async handler(c){const r=await served(c);if(r)return c.json(200,{doc:r.doc,gaps:r.warnings,hashes:hashes(r.doc.entries),provenance:inventoryProvenance(r.doc.entries)});}},
   {method:'GET',path:'/api/inventory/export',error:inventoryError,async handler(c){const r=await served(c);if(!r)return;
     c.res.writeHead(200,{'Content-Type':'application/json','Content-Disposition':`attachment; filename="home-inventory-${r.doc.updated_at}.json"`});return c.res.end(JSON.stringify(r.doc,null,2)+'\n');}},
   // The schema as data, for a client or an agent that fills the inventory: never fails for a missing file.
@@ -166,7 +169,7 @@ export default {
   {method:'GET',path:'/api/inventory/schema',error:inventoryError,async handler(c){const r=await c.state.load(),good=r.doc&&!r.errors.length?r.doc:null;
     return c.json(200,{...describe(c.hub.site.inventory,good?good.entries:[]),inventory:{entries:r.missing?0:good?good.entries.length:null,updatedAt:good?.updated_at||null}});}},
   {method:'GET',path:'/api/services',error:servicesError,async handler(c){const r=await served(c);if(!r)return;const services=r.doc.entries.filter(e=>e.kind==='runtime');
-    return c.json(200,{updatedAt:r.doc.updated_at,services,hashes:hashes(services)});}},
+    return c.json(200,{updatedAt:r.doc.updated_at,services,hashes:hashes(services),provenance:inventoryProvenance(services)});}},
   {method:'POST',path:'/api/inventory/entries',scope:'inventory:write',bodyLimit:65536,error:inventoryError,handler:c=>put(c,false)},
   {method:'POST',path:'/api/services',scope:'inventory:write',bodyLimit:65536,error:servicesError,handler:c=>put(c,true)},
   {method:'POST',path:'/api/inventory/entries/delete',scope:'inventory:write',error:inventoryError,handler:remove},

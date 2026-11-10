@@ -3,7 +3,8 @@
 import path from 'node:path';
 import {createReadStream} from 'node:fs';
 import {pipeline} from 'node:stream/promises';
-import {createTicketStore,TICKET_ID,TICKET_TYPES,TICKET_PRIORITIES} from '../tickets-store.mjs';
+import {createTicketStore,ticketAuthors,TICKET_ID,TICKET_TYPES,TICKET_PRIORITIES} from '../tickets-store.mjs';
+import {authoredProvenance} from '../provenance.mjs';
 import {createTicketFiles,inline as inlineFile} from '../ticket-files.mjs';
 import {toolError} from '../mcp.mjs';
 
@@ -24,8 +25,18 @@ const SEARCH_MESSAGES={
 const say=(pair,c)=>pair[c?.principal?.authKind==='api-key'?1:0];
 const ticketsError=(e,c)=>[({'too-large':413,invalid:400,'not-found':404,conflict:409,limit:409})[e.message]||503,'TICKETS_FAILED',say(TICKET_MESSAGES[e.message]||TICKET_MESSAGES.unavailable,c)];
 const searchError=(e,c)=>[e.message==='invalid'?400:503,'SEARCH_FAILED',say(SEARCH_MESSAGES[e.message]||SEARCH_MESSAGES.unavailable,c)];
+// Provenance (server/provenance.mjs): who made and changed the records, people or service accounts, read from
+// the records themselves. The list counts projects, releases and items together (unit records); projects the
+// site configuration seeded count as configuration (unit projects).
+const SEEDED='site.json → tracker.projects';
+async function listed(c){
+ const {authors,...data}=await c.state.tickets.list(c.query,{authors:true});
+ return {...data,provenance:authoredProvenance(c.hub.accessStore,authors,{unit:'records',extra:authors.seeded?[{kind:'config',source:SEEDED,count:authors.seeded,unit:'projects'}]:[]})};
+}
+// A full ticket (it has its history) gets the same for itself; a release or a project passes through.
+const withProvenance=(c,ticket)=>ticket&&Array.isArray(ticket.history)?{...ticket,provenance:authoredProvenance(c.hub.accessStore,ticketAuthors(ticket))}:ticket;
 // The write log names what a write touched; a failed write names nothing (never rejected argument text).
-const write=(path,status,run)=>({method:'POST',path,scope:'tickets:write',error:ticketsError,async handler(c){c.subject=null;const saved=await run(c);c.subject=saved.subject;return c.json(typeof status==='function'?status(c):status,saved.body);}});
+const write=(path,status,run)=>({method:'POST',path,scope:'tickets:write',error:ticketsError,async handler(c){c.subject=null;const saved=await run(c);c.subject=saved.subject;return c.json(typeof status==='function'?status(c):status,withProvenance(c,saved.body));}});
 const who=c=>c.principal.username;
 // Names the assignee field offers: sign-in accounts and service accounts that are not disabled, then every
 // name the tickets already carry. Only names and counts leave the server, never ids, roles or scopes.
@@ -74,14 +85,14 @@ export default {
    async handler(c){const {tickets,ticketFiles}=c.state,id=c.params[1];
     await tickets.get(id);
     const file=await ticketFiles.put(c.req,{name:c.url.searchParams.get('name'),declaredLength:Number(c.req.headers['content-length'])});
-    c.subject=id;return c.json(201,await tickets.attach(id,file,who(c)));}},
+    c.subject=id;return c.json(201,withProvenance(c,await tickets.attach(id,file,who(c))));}},
   write('/api/tickets',201,async c=>{const ticket=await c.state.tickets.create(c.input,who(c));return {subject:ticket.id,body:ticket};}),
   write('/api/tickets/update',200,async c=>{const saved=await c.state.tickets.update(c.input,who(c));return {subject:saved.id||saved.project,body:saved};}),
   write('/api/tickets/comment',200,async c=>{const saved=await c.state.tickets.comment(c.input,who(c));return {subject:saved.id||saved.project,body:saved};}),
   write('/api/tickets/releases',200,async c=>{const saved=await c.state.tickets.saveRelease(c.input,who(c));return {subject:saved.id||saved.project,body:saved};}),
   write('/api/tickets/attachments/delete',200,async c=>{const out=await c.state.tickets.detach(c.input,who(c));if(!out.used)await c.state.ticketFiles.remove(out.removed.sha256);return {subject:out.ticket.id,body:out.ticket};}),
   write('/api/tickets/projects',c=>c.input?.rev===undefined?201:200,async c=>{const saved=await c.state.tickets.saveProject(c.input,who(c));return {subject:saved.id||saved.project,body:saved};}),
-  {method:'GET',path:'/api/tickets',error:ticketsError,handler:async c=>c.json(200,await c.state.tickets.list(c.query))},
+  {method:'GET',path:'/api/tickets',error:ticketsError,handler:async c=>c.json(200,await listed(c))},
   // Full-text search inside tickets with the list's field filters (status, assignee, label, release, …).
   {method:'GET',path:'/api/tickets/search',error:ticketsError,handler:async c=>c.json(200,await c.state.tickets.search(c.query))},
   {method:'GET',path:'/api/tickets/people',error:ticketsError,handler:async c=>c.json(200,{people:await people(c)})},
@@ -92,7 +103,7 @@ export default {
     res.writeHead(200,{'Content-Type':a.type==='text/plain'?'text/plain; charset=utf-8':show?a.type:'application/octet-stream','Content-Length':f.size,
      'Content-Disposition':`${show?'inline':'attachment'}; filename="${a.name.replace(/[^\x20-\x7e]/g,'_')}"; filename*=UTF-8''${encodeURIComponent(a.name)}`});
     try{await pipeline(createReadStream(f.path),res);}catch{res.destroy();}}},
-  {method:'GET',match:/^\/api\/tickets\/(.*)$/,error:ticketsError,async handler({params,json,state}){if(!TICKET_ID.test(params[1]))throw new Error('not-found');return json(200,await state.tickets.get(params[1]));}},
+  {method:'GET',match:/^\/api\/tickets\/(.*)$/,error:ticketsError,async handler(c){const {params,json,state}=c;if(!TICKET_ID.test(params[1]))throw new Error('not-found');return json(200,withProvenance(c,await state.tickets.get(params[1])));}},
   // Full-text search over tickets and review sets (title, description, comments, notes); plain words, diacritics ignored.
   // `indexed` counts what the index holds per kind (0 everywhere = nothing to search yet); each hit carries `meta`.
   {method:'GET',path:'/api/search',error:searchError,async handler(c){const {query,json,hub}=c;if(Object.keys(query).some(k=>!['q','kind','project','limit'].includes(k)))throw new Error('invalid');

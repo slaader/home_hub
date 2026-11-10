@@ -29,7 +29,7 @@ test('an entry hash is sha256 of the stored JSON and survives writes to its neig
  const old={schema:1,updated_at:'2026-11-01',about:'written by hand',entries:[{id:'mini',kind:'machine',name:'Mac mini',verified_at:'2026-11-01'},gw,{id:'sync',kind:'tool',machine:'mini',name:'Cert sync',verified_at:'2026-11-01'},odd]};
  await writeFile(path.join(h.dir,'knowledge.json'),JSON.stringify(old));
  const before=await get(h,'/api/inventory',h.admin);
- assert.equal(before.status,200,'the old shape loads unchanged');assert.deepEqual(Object.keys(before.body),['doc','gaps','hashes'],'the read API keeps its fields');
+ assert.equal(before.status,200,'the old shape loads unchanged');assert.deepEqual(Object.keys(before.body),['doc','gaps','hashes','provenance'],'the read API keeps its fields (provenance is an addition)');
  assert.equal(before.body.hashes.gw,entryHash(gw));assert.equal(before.body.hashes.odd,entryHash(odd));
  // Every kind of write to other entries: a field edit, a whole-entry put, a bulk upsert, a delete.
  assert.equal((await post(h,'/api/inventory/entry',{id:'sync',base:before.body.hashes.sync,fields:{version:'2'}},h.admin)).status,200);

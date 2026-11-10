@@ -1,9 +1,11 @@
 // Overview → Add device / Edit device / Remove device: one dialog for a machine that is not in the site
 // configuration. Three parts: the picture (a built-in one, or your own with a 3:2 frame you move and resize,
-// cropped here to JPEG), what the machine is, and telemetry. Telemetry is optional. Connecting Thermo is
-// checked before anything is stored: "Check connection" reads the certificate fingerprint without sending
-// anything, you confirm it matches the one Thermo shows, and only then the password goes to the server
-// (which logs in once, pinned). Every field is checked here first (validateDevice) and again on the server.
+// cropped here to JPEG), what the machine is, and telemetry. Telemetry is optional, and the choices come
+// from the server: /api/home → telemetry.adapters lists the agents this hub can connect a device to, and
+// each one that has a form here (ADAPTER_FORMS) is offered. Connecting Thermo is checked before anything
+// is stored: "Check connection" reads the certificate fingerprint without sending anything, you confirm it
+// matches the one Thermo shows, and only then the password goes to the server (which logs in once, pinned).
+// Every field is checked here first (validateDevice) and again on the server.
 import {el} from './views.js';
 import {authGuard} from './session-cache.js';
 import {t} from './i18n.js';
@@ -134,9 +136,9 @@ function picturePart({machine,role}){
 }
 
 // Part 3: connecting Thermo. host() = where to connect (the form's hostname). value() → the fields.
-function thermoPart({host,agent}){
+function thermoPart({host,agent,defaultPort=49286}){
  let fingerprint=null;
- const port=input({type:'number',min:'1024',max:'65535',value:'49286',inputmode:'numeric'}),user=input({maxlength:'32',value:'homehub'}),pass=input({type:'password',minlength:'12',maxlength:'256',autocomplete:'new-password'});
+ const port=input({type:'number',min:'1024',max:'65535',value:String(defaultPort),inputmode:'numeric'}),user=input({maxlength:'32',value:'homehub'}),pass=input({type:'password',minlength:'12',maxlength:'256',autocomplete:'new-password'});
  const fields={port:field(t('Port'),port),username:field(t('Uživatel v Thermo'),user),password:field(t('Heslo v Thermo'),pass,t('aspoň 12 znaků; uloží se jen na serveru'))};
  const out=el('div',{class:'had-probe',hidden:''}),confirm=el('input',{type:'checkbox'}),message=el('small',{class:'had-err',role:'alert'});
  const reset=()=>{fingerprint=null;out.hidden=true;out.replaceChildren();confirm.checked=false;};
@@ -145,30 +147,37 @@ function thermoPart({host,agent}){
   reset();message.textContent='';
   if(!host())return void(message.textContent=t('Nejdřív vyplň hostname nebo IP.'));
   probe.disabled=true;probe.textContent=t('Zkouším spojení…');
-  try{const r=await post('/api/home/devices/probe',{host:host(),port:Number(port.value)||49286});fingerprint=r.fingerprint;
+  try{const r=await post('/api/home/devices/probe',{host:host(),port:Number(port.value)||defaultPort});fingerprint=r.fingerprint;
    out.replaceChildren(el('div',{class:'had-dim'},t('Thermo odpovídá. Otisk certifikátu (SHA-256):')),el('code',{class:'had-fp'},groups(r.fingerprint)),
     r.subject?el('div',{class:'had-dim'},`CN ${r.subject}${r.validTo?' · '+t('platí do')+' '+r.validTo:''}`):null,
     el('label',{class:'had-check'},confirm,t('Otisk sedí s tím, co ukazuje Thermo na tom zařízení (Nastavení → Síť).')));out.hidden=false;}
   catch(e){message.textContent=e.message;}finally{probe.disabled=false;probe.textContent=t('Ověřit spojení');}}},t('Ověřit spojení'));
  const needs=el('ol',{class:'had-needs'},
-  el('li',{},t('Na zařízení běží {name} a má zapnutý přístup po síti (výchozí port 49286).',{name:agent})),
-  el('li',{},t('V {name} je účet pro Home Hub: uživatel (třeba homehub) a heslo aspoň 12 znaků. Heslo se uloží jen na serveru (soubor 0600), ne do prohlížeče ani gitu.',{name:agent})),
-  el('li',{},t('Home Hub na zařízení dosáhne: hostname nebo IP v domácí síti, port povolený ve firewallu.')),
-  el('li',{},t('Ověř spojení a porovnej otisk certifikátu s tím, co ukazuje {name}. Heslo pak chodí jen na tenhle certifikát.',{name:agent})));
+  el('li',{},t('{name} na zařízení běží a má zapnutý přístup po síti (výchozí port {port}).',{name:agent,port:defaultPort})),
+  el('li',{},t('V {name} je účet pro Home Hub: uživatel a heslo aspoň 12 znaků. Heslo se uloží jen na serveru Home Hubu.',{name:agent})),
+  el('li',{},t('Po ověření spojení porovnej otisk certifikátu s tím, který ukazuje {name}. Heslo pak jde jen na tenhle certifikát.',{name:agent})));
  return {node:el('fieldset',{class:'had-thermo'},el('legend',{},agent),needs,
    el('div',{class:'had-grid'},fields.port.node,fields.username.node,fields.password.node),el('div',{class:'had-row'},probe,message),out),
   reset,fields,setProbe:text=>{message.textContent=text||'';},
   value:()=>({port:port.value,username:user.value,password:pass.value,fingerprint,confirmed:confirm.checked}),
-  body:()=>({port:Number(port.value)||49286,username:user.value.trim(),password:pass.value,pin:fingerprint}),
+  body:()=>({port:Number(port.value)||defaultPort,username:user.value.trim(),password:pass.value,pin:fingerprint}),
   clear:()=>{pass.value='';}};
 }
+// The telemetry agents this dialog can connect, by adapter id. The server lists what the hub supports
+// (/api/home → telemetry.adapters, server/home-data.mjs → TELEMETRY_ADAPTERS); an adapter is offered when
+// both know it. A server from before the list is taken to support the one agent it names.
+const ADAPTER_FORMS={thermo:thermoPart};
+export const telemetryChoices=meta=>(Array.isArray(meta?.adapters)?meta.adapters:[{id:'thermo',name:meta?.agent||'Thermo'}])
+ .filter(a=>a&&typeof a.id==='string'&&Object.hasOwn(ADAPTER_FORMS,a.id)).map(a=>({id:a.id,name:String(a.name||a.id),summary:typeof a.summary==='string'?a.summary:'',defaultPort:Number.isInteger(a.defaultPort)?a.defaultPort:49286}));
 
 // machine = null adds a device; a machine from /api/home (added:true) edits it. meta = /api/home → telemetry.
-// focus: 'telemetry' opens with the Thermo part chosen. onSaved() after everything asked for is stored.
+// focus: 'telemetry' opens with the first agent chosen. onSaved() after everything asked for is stored.
 function deviceDialog({machine=null,meta,focus,onSaved}){
- const adding=!machine,agent=meta?.agent||'Thermo',lan=site().lanCidrs||[];
+ const adding=!machine,agent=meta?.agent||'Thermo',lan=site().lanCidrs||[],offered=telemetryChoices(meta);
  const p=machine?.props||{},connected=Boolean(machine&&machine.telemetry?.thermoId===machine.id&&machine.telemetry?.reason!=='no-login');
- let hash=machine?.hash||null,wantThermo=!connected&&focus==='telemetry';
+ // chosen: the id of the agent to connect, or null for none. Thermo is the only one with a form so far.
+ let hash=machine?.hash||null,chosen=!connected&&focus==='telemetry'?offered[0]?.id||null:null;
+ const wantThermo=()=>chosen==='thermo';
  const status=el('p',{class:'had-msg',role:'status'});
  const say=(text,error=false)=>{status.textContent=text||'';status.classList.toggle('error',error);};
  const name=input({required:'',maxlength:'60',placeholder:t('Mac mini (pracovna)'),value:machine?.name||''}),host=input({maxlength:'253',placeholder:'mini.example.lan',value:machine?.hostname||''}),
@@ -177,14 +186,13 @@ function deviceDialog({machine=null,meta,focus,onSaved}){
  const role=el('select',{},ROLES.map(([id,label])=>el('option',{value:id,selected:(machine?.role||'computer')===id?'':null},t(label))));
  const picture=picturePart({machine,role:()=>role.value});
  role.addEventListener('change',()=>picture.roleChanged());
- const thermo=thermoPart({host:()=>host.value.trim()||ip.value.trim(),agent});
+ const thermo=thermoPart({host:()=>host.value.trim()||ip.value.trim(),agent,defaultPort:offered.find(a=>a.id==='thermo')?.defaultPort});
  host.addEventListener('input',()=>thermo.reset());
  const fields={name:field(t('Název'),name),hostname:field(t('Hostname nebo IP'),host,adding?null:t('kde je stroj v síti k zastižení')),
   ip:field(t('IP adresa'),ip,lan.length?t('v síti {networks}',{networks:lan.join(', ')}):t('když výše je jméno')),role:field(t('Role'),role),
   cpu:field(t('CPU'),cpu),gpu:field(t('GPU'),gpu),ramGb:field(t('RAM (GB)'),ram),diskGb:field(t('Disk (GB)'),disk)};
- // Telemetry: a new or unconnected device chooses; a connected one can be disconnected.
- const none=el('p',{class:'had-note'},t('Zařízení dostane dlaždici s obrázkem, adresou a parametry. Telemetrii ({name}) připojíš kdykoli později tady v úpravě zařízení.',{name:agent}));
- const sync=()=>{thermo.node.hidden=!wantThermo;none.hidden=wantThermo;};
+ // Telemetry: a new or unconnected device chooses among what the server offers; a connected one can be disconnected.
+ const sync=()=>{thermo.node.hidden=!wantThermo();};
  const disconnect=el('button',{type:'button',class:'ui-button hv-danger',onclick:async()=>{
   if(!await confirmDialog({title:t('Odpojit telemetrii?'),body:t('Home Hub zapomene účet {name} tohoto zařízení a přestane z něj číst. Historie metrik zůstane na disku.',{name:agent}),confirm:t('Odpojit'),danger:true,
    action:()=>post('/api/home/devices/thermo',{id:machine.id,thermo:null})}))return;
@@ -192,15 +200,17 @@ function deviceDialog({machine=null,meta,focus,onSaved}){
  const telemetry=connected
   ?el('section',{class:'had-sec'},el('h3',{},t('3 · Telemetrie')),el('p',{class:'had-note'},t('Zařízení je připojené k {name}. Jiné heslo nebo certifikát: odpoj a připoj znovu.',{name:agent})),el('div',{class:'had-row'},disconnect))
   :el('section',{class:'had-sec',id:'had-telemetry'},el('h3',{},t('3 · Telemetrie')),
-   el('div',{class:'had-choices',role:'radiogroup','aria-label':t('Telemetrie')},
-    choice('had-telemetry','none',!wantThermo,t('Zatím bez telemetrie'),t('dlaždice s údaji, bez živých čísel'),()=>{wantThermo=false;sync();}),
-    choice('had-telemetry','thermo',wantThermo,t('Připojit {name}',{name:agent}),t('živé CPU, GPU, paměť, příkon a teploty'),()=>{wantThermo=true;sync();})),
-   thermo.node,none);
+   el('p',{class:'had-note'},offered.length?t('Volitelné. Živá čísla čte Home Hub z agenta, který na zařízení už běží; sám ho tam nenainstaluje.')
+    :t('Tenhle Home Hub zatím neumí připojit žádného telemetrického agenta. Zařízení bude mít dlaždici bez živých čísel.')),
+   offered.length?el('div',{class:'had-choices',role:'radiogroup','aria-label':t('Telemetrie')},
+    choice('had-telemetry','none',!chosen,t('Bez telemetrie'),t('dlaždice bez živých čísel; připojit jde kdykoli později'),()=>{chosen=null;sync();}),
+    offered.map(a=>choice('had-telemetry',a.id,chosen===a.id,t('Připojit {name}',{name:a.name}),a.summary?t(a.summary):null,()=>{chosen=a.id;sync();}))):null,
+   thermo.node);
  sync();
  const save=el('button',{type:'submit',class:'ui-button primary'},adding?t('Přidat zařízení'):t('Uložit'));
  const values=()=>({name:name.value,hostname:host.value,ip:ip.value,cpu:cpu.value,gpu:gpu.value,ramGb:ram.value,diskGb:disk.value,...thermo.value()});
  function check(){
-  const errors=validateDevice(values(),{lanCidrs:lan,needHost:adding,thermo:wantThermo&&!connected});
+  const errors=validateDevice(values(),{lanCidrs:lan,needHost:adding,thermo:wantThermo()&&!connected});
   for(const [key,f] of Object.entries({...fields,...thermo.fields}))f.set(errors[key]);
   thermo.setProbe(errors.probe);
   const first=Object.keys(errors)[0];
@@ -216,9 +226,9 @@ function deviceDialog({machine=null,meta,focus,onSaved}){
  async function submit(){
   const pic=picture.value();
   if(adding){
-   say(wantThermo?t('Přihlašuji se do Thermo a ukládám…'):t('Ukládám…'));
-   const device=await post('/api/home/devices',{name:name.value.trim(),kind:wantThermo?'thermo':'other',hostname:host.value.trim(),...(ip.value.trim()?{ip:ip.value.trim()}:{}),role:role.value,picture:pic.picture,props:hardware(),
-    ...(wantThermo?{thermo:thermo.body()}:{})});thermo.clear();
+   say(wantThermo()?t('Přihlašuji se do Thermo a ukládám…'):t('Ukládám…'));
+   const device=await post('/api/home/devices',{name:name.value.trim(),kind:wantThermo()?'thermo':'other',hostname:host.value.trim(),...(ip.value.trim()?{ip:ip.value.trim()}:{}),role:role.value,picture:pic.picture,props:hardware(),
+    ...(wantThermo()?{thermo:thermo.body()}:{})});thermo.clear();
    // The device exists from here on: a failed picture upload must not ask to add it again.
    try{if(pic.own)await upload(device.id);}finally{onSaved?.(device);}
    return;
@@ -229,7 +239,7 @@ function deviceDialog({machine=null,meta,focus,onSaved}){
   try{
    if(pic.own)await upload(machine.id);
    else if(machine.image&&!pic.keepOwn)await post('/api/home/devices/image/remove',{id:machine.id});
-   if(wantThermo&&!connected){say(t('Přihlašuji se do Thermo a ukládám…'));await post('/api/home/devices/thermo',{id:machine.id,thermo:thermo.body()});thermo.clear();}
+   if(wantThermo()&&!connected){say(t('Přihlašuji se do Thermo a ukládám…'));await post('/api/home/devices/thermo',{id:machine.id,thermo:thermo.body()});thermo.clear();}
   }finally{onSaved?.();}
  }
  const form=el('form',{class:'had-form',novalidate:'',onsubmit:async e=>{

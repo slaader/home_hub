@@ -1,5 +1,5 @@
 // Shared building blocks for pages. docs/design.md shows each one with its options.
-//   layout    pageHeader
+//   layout    pageHeader, provenanceBadge, setProvenance, provenancePart
 //   states    emptyState, notInstalled, errorState, loadingState, skeleton
 //   pieces    copyBlock, copyButton, tabs, mcpConnect, statusPill, banner, segmented, themeSwitch, icon
 //   feedback  toast, startLoading, track
@@ -8,7 +8,8 @@
 // translate them with t() at the call site, like everywhere else.
 // Existing signatures are a contract for pages and plugins: add optional parameters, never rename.
 import {el} from './views.js';
-import {t} from './i18n.js';
+import {t,tp,locale} from './i18n.js';
+import {timeZone} from './site.js';
 import {icon,ICONS} from './icons.js';
 import {THEMES,getTheme,setTheme} from './theme.js';
 export {icon} from './icons.js';
@@ -107,15 +108,139 @@ export function mcpConnect({token,origin,label}={}){
   items:mcpSnippets(token||undefined,origin).map(s=>({id:s.id,label:s.label,content:()=>copyBlock(s.label,s.text,{note})}))});
 }
 
+// --- provenance: where the data on a page comes from ---------------------------------------------------
+// The server sends one summary with every data answer (docs/API.md → Provenance; server/provenance.mjs):
+//   {kind, kinds: [{kind, id, source, count, unit, changes, accounts, people, host, lastAt, state,
+//    intervalSeconds, schedule, detail}], lastAt, summary}
+// The badge is a small pill next to the page title ("Agent", "Collector · 2 days ago", "Mixed"); pressing
+// it (mouse, Enter or Space) opens the breakdown, Escape or a click elsewhere closes it.
+const PROV_ICON={manual:'users',agent:'cpu',config:'settings',collector:'pulse',telemetry:'bolt',plugin:'puzzle',other:'tag',mixed:'grid'};
+const provLabel=kind=>({manual:t('Ručně'),agent:t('Agent'),config:t('Konfigurace'),collector:t('Kolektor'),telemetry:t('Telemetrie'),plugin:t('Plugin'),other:t('Jiný zdroj'),mixed:t('Smíšený zdroj')})[kind]||kind;
+const provWhat=kind=>({manual:t('Upravil člověk ve webovém rozhraní nebo v aplikaci.'),agent:t('Zapsal agent klíčem servisního účtu, přes MCP nebo API.'),config:t('Načteno z konfiguračního souboru.'),
+ collector:t('Zapsala automatická úloha, která stroje jen čte.'),telemetry:t('Hlásí živě agent na stroji.'),plugin:t('Dodává plugin.'),other:t('Razítko nebo jméno, které tady nenese žádný účet: import, úprava souboru nebo zrušený účet.')})[kind]||'';
+const provCount=(n,unit)=>({entries:()=>tp(n,'{n} záznam|{n} záznamy|{n} záznamů'),rounds:()=>tp(n,'{n} kolo|{n} kola|{n} kol'),
+ machines:()=>tp(n,'{n} stroj|{n} stroje|{n} strojů'),records:()=>tp(n,'{n} zápis|{n} zápisy|{n} zápisů'),projects:()=>tp(n,'{n} projekt|{n} projekty|{n} projektů'),items:()=>tp(n,'{n} položka|{n} položky|{n} položek'),sources:()=>tp(n,'{n} zdroj|{n} zdroje|{n} zdrojů'),clients:()=>tp(n,'{n} klient|{n} klienti|{n} klientů')})[unit]?.()||String(n);
+const provState=state=>({'not-configured':t('nenastaveno'),waiting:t('zatím neběžel'),stale:t('starý snímek'),unavailable:t('poslední pokus selhal')})[state]||'';
+const DAY_ONLY=/^\d{4}-\d{2}-\d{2}$/;
+// "2 days ago" in the reader's language; a calendar day (an inventory stamp) is counted in whole days.
+function provAgo(at,now=Date.now()){
+ const time=Date.parse(at);if(!Number.isFinite(time))return '';
+ const rel=(n,unit)=>new Intl.RelativeTimeFormat(locale(),{numeric:'auto'}).format(n,unit);
+ if(DAY_ONLY.test(at))return rel(Math.min(0,Math.round((time-Date.parse(new Date(now).toISOString().slice(0,10)))/864e5)),'day');
+ const minutes=Math.min(0,Math.round((time-now)/60000));
+ if(minutes>-1)return t('právě teď');if(minutes>-60)return rel(minutes,'minute');
+ const hours=Math.round(minutes/60);return hours>-36?rel(hours,'hour'):rel(Math.round(hours/24),'day');
+}
+const provWhen=at=>!Number.isFinite(Date.parse(at))?'':DAY_ONLY.test(at)
+ ?new Intl.DateTimeFormat(locale(),{day:'numeric',month:'numeric',year:'numeric',timeZone:'UTC'}).format(new Date(at))
+ :new Intl.DateTimeFormat(locale(),{day:'numeric',month:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit',timeZone:timeZone()}).format(new Date(at));
+const provEvery=s=>s>=3600?`${Math.round(s/3600)} h`:`${Math.max(1,Math.round(s/60))} min`;
+const provNames=(list,more)=>`${list.join(', ')}${more?` +${more}`:''}`;
+// The facts of one source, as short texts in reading order.
+function provFacts(s){
+ const out=[];
+ if(Number.isFinite(s.count))out.push(provCount(s.count,s.unit));
+ if(s.changes)out.push(tp(s.changes,'{n} pozdější změna|{n} pozdější změny|{n} pozdějších změn'));
+ if(s.accounts?.length)out.push(t('servisní účty: {names}',{names:provNames(s.accounts,s.accountsMore)}));
+ if(s.people?.length)out.push(t('lidé: {names}',{names:provNames(s.people,s.peopleMore)}));
+ if(s.host)out.push(t('ze stroje {host}',{host:s.host}));
+ if(s.schedule)out.push(s.schedule.trigger==='manual'?t('spuštěno ručně'):s.schedule.scheduler?t('plánovaně ({scheduler})',{scheduler:s.schedule.label?`${s.schedule.scheduler} ${s.schedule.label}`:s.schedule.scheduler}):t('plánovaně'));
+ if(s.intervalSeconds)out.push(t('každých {every}',{every:provEvery(s.intervalSeconds)}));
+ if(provState(s.state))out.push(provState(s.state));
+ if(s.lastAt)out.push(t('naposledy {when} ({ago})',{when:provWhen(s.lastAt),ago:provAgo(s.lastAt)}));
+ if(s.detail)out.push(s.detail);
+ return out;
+}
+// What the pill says: the kind, and for a source with a clock or a single author the one fact that matters most.
+function provSummary(p){
+ const label=provLabel(p.kind);if(p.kind==='mixed')return label;
+ const sources=p.kinds,timed=['collector','telemetry','plugin'].includes(p.kind);
+ const state=sources.map(s=>s.state).find(s=>s==='not-configured'||s==='waiting');
+ if(timed&&!p.lastAt&&state)return `${label} · ${provState(state)}`;
+ if(timed&&p.lastAt)return `${label} · ${provAgo(p.lastAt)}`;
+ const names=[...new Set(sources.flatMap(s=>s.accounts||[]))];
+ return p.kind==='agent'&&names.length===1&&!sources.some(s=>s.accountsMore)?`${label} · ${names[0]}`:label;
+}
+/**
+ * A part of a provenance: only the sources with these ids (a page that draws one part of an answer).
+ * provenancePart(provenance, ['systems']) → the same shape, with kind and lastAt worked out again
+ */
+export function provenancePart(provenance,ids){
+ if(!provenance||!Array.isArray(provenance.kinds))return null;
+ const kinds=provenance.kinds.filter(s=>ids.includes(s.id)),distinct=[...new Set(kinds.map(s=>s.kind))];
+ const lastAt=kinds.map(s=>s.lastAt).filter(Boolean).reduce((a,b)=>a&&Date.parse(a)>=Date.parse(b)?a:b,null);
+ return {...provenance,kinds,kind:!kinds.length?'none':distinct.length===1?distinct[0]:'mixed',lastAt};
+}
+/**
+ * The provenance pill with its breakdown. Returns null when there is nothing to say (no provenance in the
+ * answer, or no data yet), so a caller can pass the result straight into el().
+ * provenanceBadge(provenance)
+ */
+export function provenanceBadge(provenance){
+ const p=provenance&&Array.isArray(provenance.kinds)?provenance:null;
+ if(!p||!p.kinds.length||!PROV_ICON[p.kind])return null;
+ const id=`ui-prov-${++serial}`,summary=provSummary(p);
+ const tone=p.kinds.some(s=>s.state==='stale'||s.state==='unavailable')?' warn':p.kinds.every(s=>s.state==='not-configured'||s.state==='waiting')?' idle':'';
+ const pop=el('div',{class:'ui-prov-pop',id,role:'group','aria-label':t('Původ dat'),hidden:''},
+  el('p',{class:'ui-prov-title'},t('Odkud jsou data na téhle stránce')),
+  el('ul',{class:'ui-prov-list'},p.kinds.map(s=>el('li',{class:'ui-prov-item'},
+   el('span',{class:'ui-prov-mark','aria-hidden':'true'},icon(PROV_ICON[s.kind]||'tag')),
+   el('div',{},
+    el('div',{class:'ui-prov-head'},el('b',{},provLabel(s.kind)),s.source?el('code',{},s.source):null),
+    el('p',{class:'ui-prov-what'},provWhat(s.kind)),
+    el('ul',{class:'ui-prov-facts'},provFacts(s).map(f=>el('li',{},f))))))),
+  el('p',{class:'ui-prov-note'},t('Odvozeno z dat samotných: z razítek záznamů, jejich autorů a ze snímků kolektorů.')));
+ const button=el('button',{type:'button',class:`ui-prov${tone}`,'aria-expanded':'false','aria-controls':id,'aria-label':t('Původ dat: {summary}',{summary}),title:t('Odkud jsou data na téhle stránce'),
+   onclick:e=>{e.stopPropagation();toggle(pop.hasAttribute('hidden'));}},
+  icon(PROV_ICON[p.kind]),el('span',{class:'ui-prov-text'},summary),el('span',{class:'ui-prov-caret','aria-hidden':'true'},icon('chevron')));
+ const wrap=el('span',{class:'ui-prov-wrap','data-kind':p.kind},button,pop);
+ const inside=node=>{for(let n=node;n;n=n.parentNode)if(n===wrap)return true;return false;};
+ const outside=e=>{if(!wrap.isConnected||!inside(e.target))toggle(false);};
+ const keys=e=>{if(e.key==='Escape'&&!pop.hasAttribute('hidden')){e.stopPropagation();toggle(false);button.focus();}};
+ function toggle(open){
+  if(open===!pop.hasAttribute('hidden'))return;
+  if(open)pop.removeAttribute('hidden');else pop.setAttribute('hidden','');
+  button.setAttribute('aria-expanded',String(open));
+  const doc=globalThis.document;
+  if(open){doc?.addEventListener?.('click',outside);doc?.addEventListener?.('keydown',keys,true);place();}
+  else{doc?.removeEventListener?.('click',outside);doc?.removeEventListener?.('keydown',keys,true);}
+ }
+ // Keeps the breakdown inside the window: it opens under the pill and moves left as far as it has to.
+ function place(){
+  pop.style?.removeProperty?.('left');
+  const box=pop.getBoundingClientRect?.(),width=globalThis.document?.documentElement?.clientWidth;
+  if(!box||!Number.isFinite(width))return;
+  const over=box.right-(width-8);
+  if(over>0)pop.style.left=`${-Math.min(over,Math.max(0,box.left-8))}px`;
+ }
+ // Leaving it with the keyboard closes it too.
+ wrap.addEventListener('focusout',e=>{if(e.relatedTarget&&!inside(e.relatedTarget))toggle(false);});
+ return wrap;
+}
+/**
+ * Puts (or replaces, or with null removes) the provenance pill of a page header that is already drawn:
+ * for a page whose header is on screen before its data arrives.
+ * setProvenance(headerNode, provenance)
+ */
+export function setProvenance(header,provenance){
+ const slot=header?.querySelector?.('.ui-prov-slot');if(!slot)return;
+ const badge=provenanceBadge(provenance);
+ slot.replaceChildren(...(badge?[badge]:[]));
+}
+
 /**
  * The top of a page: optional eyebrow (section name), the title, one lead sentence, actions on the right.
- * pageHeader({eyebrow, title, lead, actions:[{label, href|onclick, primary}], back:{label, href}})
+ * pageHeader({eyebrow, title, lead, actions:[{label, href|onclick, primary}], back:{label, href}, provenance})
+ *   provenance   the `provenance` of the page's data answer: a pill next to the title that says where the
+ *                data comes from (see provenanceBadge); leave it out, or fill it later with setProvenance
  */
-export function pageHeader({eyebrow,title,lead,actions,back}={}){
+export function pageHeader({eyebrow,title,lead,actions,back,provenance}={}){
  return el('header',{class:'ui-head'},
   el('div',{class:'ui-head-text'},
    back?.href?el('a',{class:'ui-back',href:back.href},`← ${back.label||''}`):null,
-   eyebrow?el('p',{class:'ui-eyebrow'},eyebrow):null,el('h1',{},title||''),lead?el('p',{class:'ui-lead'},lead):null),
+   eyebrow?el('p',{class:'ui-eyebrow'},eyebrow):null,
+   el('div',{class:'ui-title'},el('h1',{},title||''),el('span',{class:'ui-prov-slot'},provenanceBadge(provenance))),
+   lead?el('p',{class:'ui-lead'},lead):null),
   actionsRow(actions,'ui-head-actions'));
 }
 

@@ -276,7 +276,7 @@ test('/api/systems and /api/security: the answer says where the collector stands
  const legacy={schemaVersion:1,collectedAt:'2026-01-01T00:00:00.000Z',collectedFrom:'studio',machines:[],keys:[],otherKeys:[],unknownAuthorized:[],forgejo:null,findings:[{level:'info',title:'x: nikam nevede',detail:'y'}]};
  await writeFile(path.join(h.dir,'security','ssh-keys.json'),JSON.stringify(legacy));
  const keys=await (await fetch(h.origin+'/api/security',{headers:h.admin})).json();
- assert.deepEqual({...keys,collector:undefined},{...legacy,collector:undefined});assert.equal(keys.collector.state,'stale');assert.equal(keys.collector.intervalSeconds,86400);
+ assert.deepEqual({...keys,collector:undefined,provenance:undefined},{...legacy,collector:undefined,provenance:undefined});assert.equal(keys.collector.state,'stale');assert.equal(keys.collector.intervalSeconds,86400);
  assert.deepEqual(await loadSecurity(h.dir),legacy);
 });
 

@@ -98,7 +98,7 @@ const STACK_SCHEMA={type:['object','null'],required:['cols','blocks'],additional
 
 export default {
  id:'home',title:'Overview',
- assets:['home-view.js','home-charts.js','home-add-device.js','home-order.js','home-telemetry.js','home.css','vendor/echarts.esm.min.mjs',...PICTURES.map(id=>`images/generic/${id}.svg`)],
+ assets:['home-view.js','home-charts.js','home-add-device.js','home-order.js','home-drag.js','home-telemetry.js','home.css','vendor/echarts.esm.min.mjs',...PICTURES.map(id=>`images/generic/${id}.svg`)],
  nav:[{groupKey:'Domov',hash:'overview',labelKey:'Přehled',view:'home-view.js#homePage',order:10}],
  apiDocs:[{title:'Domov',routes:[
   ['GET','/api/home/machines','read','Stroje: z konfigurace webu (jen ke čtení) a přidané, s otiskem. MCP machine_list.'],

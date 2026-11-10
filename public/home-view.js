@@ -1,29 +1,32 @@
-// Overview: machine tiles (picture, state, hardware, live gauges, a 30-minute CPU trend) and one page per
-// machine (telemetry charts and volumes, the runtime stack as a position-bound grid, local LLM runtimes).
+// Overview: machine tiles (picture, state, hardware, live gauges, a small utilisation chart) that are put
+// in order by dragging them, and one page per machine (telemetry charts and volumes, the runtime stack as a
+// position-bound grid, and the local LLM runtimes when a provider reports them).
 // Renders /api/home. Machines come from the site configuration, from "Add device" here, or from an agent
 // over MCP (machine_upsert); an empty hub says so and how to fill it. Live numbers need the telemetry agent
 // (home-telemetry.js says what a machine shows without it). Deep link: #host-<id>/<stack block>.
 // Text-safe DOM only: el() for HTML, svg() for drawings; colours come from the design tokens (home.css).
-import {el,date} from './views.js';
-import {SERIES,renderCharts,disposeCharts,loadECharts,level} from './home-charts.js';
+import {el,date,onLeave} from './views.js';
+import {SERIES,renderCharts,disposeCharts,loadECharts,level,renderSpark,disposeSparks} from './home-charts.js';
 import {onSessionReset,sessionCache,authGuard} from './session-cache.js';
 import {createOrderSaver} from './home-order.js';
+import {tileDrag} from './home-drag.js';
 import {t,tp,locale,say} from './i18n.js';
 import {openAddDevice,openEditDevice,removeDevice} from './home-add-device.js';
 import {timeZone} from './site.js';
-import {emptyState,pageHeader} from './ui.js';
+import {emptyState,pageHeader,toast} from './ui.js';
 import {statusPill,hasReadings,tileNotice,telemetryNotice,runtimesSection} from './home-telemetry.js';
 // Adding, editing and removing devices needs write access (the server checks it again).
 let canEdit=false,canAdmin=false;
 let cache=null,historyCache=new Map(),state={machine:null,blk:null,range:'30m'};
 // A different account must not be shown the previous one's tiles or history.
-onSessionReset(()=>{cache=null;historyCache.clear();editing=false;orderNote='';});
+onSessionReset(()=>{cache=null;historyCache.clear();});
 
 // Tile order, per signed-in account on the server (GET/POST /api/profile/home-order, password sign-in
 // only). Cached per principal like other account data; when it cannot be read, tiles keep the default
-// order and "Reorder" is not offered.
+// order and cannot be moved.
 const orderCache=sessionCache(43200000);// as long as a sign-in lives (12 h)
-let editing=false,orderNote='';
+// sortable: this account can save an order and there is more than one tile. dragger: home-drag.js on the grid.
+let sortable=false,dragger=null;
 async function loadOrder(){
  const hit=orderCache.get();if(hit)return hit;
  const store=orderCache.begin(),lost=authGuard();
@@ -128,10 +131,11 @@ function propsLine(m){
 }
 const hostLine=m=>[m.hostname,m.ip&&m.ip!==m.hostname?m.ip:null].filter(Boolean).join(' · ');
 // What decides a tile's structure; while it stays the same a refresh only swaps the numbers.
-const tileShape=m=>[m.kind,hasReadings(m),m.name,hostLine(m),m.image||m.picture||'',JSON.stringify(m.props||{})].join('|');
+const tileShape=m=>[m.kind,hasReadings(m),m.name,hostLine(m),m.image||m.picture||'',JSON.stringify(m.props||{}),m.spark?.series||'',sortable].join('|');
 function tile(m){
  const prefetch=()=>{if(hasReadings(m))void loadHistory(m.id,state.range).catch(()=>{});void loadECharts().catch(()=>{});};
- const node=el('a',{class:'hv-tile',href:`#host-${m.id}`,'data-id':m.id,onmouseenter:prefetch,onfocus:prefetch},
+ // draggable=false: the browser's own drag of a link would take the pointer away from ours (home-drag.js).
+ const node=el('a',{class:'hv-tile',href:`#host-${m.id}`,'data-id':m.id,draggable:'false','aria-describedby':sortable?'hv-order-hint':null,onmouseenter:prefetch,onfocus:prefetch},
   art(m),
   el('div',{class:'hv-tile-body'},
    el('div',{class:'hv-tile-head'},el('h3',{},m.name),statusPill(m)),
@@ -141,31 +145,26 @@ function tile(m){
    tileSpark(m)));
  node.dataset.shape=tileShape(m);return node;
 }
-// In-place refresh of one tile: state, gauges and trend; the picture and layout stay put.
+// In-place refresh of one tile: state, gauges and the small chart; the picture and layout stay put.
 function updateTile(node,m){
  if(node.dataset.shape!==tileShape(m)){node.replaceWith(tile(m));return;}
  node.querySelector('.hv-status')?.replaceWith(statusPill(m));
  node.querySelector('.hv-live')?.replaceChildren(...[liveBlock(m)].filter(Boolean));
- const spark=node.querySelector('.hv-trend');
- if(spark)loadHistory(m.id,'30m',true).then(h=>{spark.querySelector('.hv-spark,.hv-spark-empty')?.remove();spark.append(sparkline(h.points||[],p=>p.cpu,100));}).catch(()=>{});
+ const trend=node.querySelector('.hv-trend');
+ if(trend&&m.spark){const label=sparkLabel(m.spark);trend.setAttribute('aria-label',label);trend.setAttribute('title',label);void renderSpark(trend.firstChild,m.spark).catch(()=>{});}
 }
-// 30-minute CPU trend on tiles with readings (same history endpoint as the machine page, cached 30 s).
+// The small chart at the foot of a tile with readings: one utilisation series over the hub's live window
+// (m.spark: the server picks CPU or GPU and buckets it; home-charts.js draws it, bare). It has no caption:
+// what it shows, and the newest value, are in its label and tooltip.
+export function sparkLabel(spark){
+ const name=spark.series==='gpu'?'GPU':'CPU',min=Math.round(spark.windowSeconds/60),last=spark.values.at(-1);
+ return last==null?t('{name} za posledních {min} min',{name,min}):t('{name} za posledních {min} min, teď {v} %',{name,min,v:Math.round(last)});
+}
 function tileSpark(m){
- if(!hasReadings(m))return null;
- const box=el('div',{class:'hv-trend'},el('span',{class:'hv-k'},t('CPU load · 30 min')));
- loadHistory(m.id,'30m').then(h=>{box.append(sparkline(h.points||[],p=>p.cpu,100));}).catch(()=>{});
- return box;
-}
-// One line in the CPU series colour on a 0–scale band with a mid rule; gaps in the data stay gaps.
-function sparkline(points,pick,scale){
- const vals=points.map(pick).filter(v=>v!=null);if(!vals.length)return el('div',{class:'hv-spark-empty'},t('zatím žádná data'));
- const max=Math.max(scale||0,...vals)*1.08||1,w=300,h=44,pd=2;
- const x=i=>pd+i*(w-2*pd)/Math.max(1,points.length-1),y=v=>h-pd-(v/max)*(h-2*pd);
- let d='',open=false;
- points.forEach((p,i)=>{const v=pick(p);if(v==null){open=false;return;}d+=(open?'L':'M')+x(i).toFixed(1)+' '+y(v).toFixed(1)+' ';open=true;});
- const mid=y((scale||max)/2).toFixed(1);
- return svg('svg',{class:'hv-spark',viewBox:`0 0 ${w} ${h}`,preserveAspectRatio:'none',role:'img','aria-label':t('CPU za posledních 30 minut, teď {v} %',{v:Math.round(vals.at(-1))})},
-  svg('line',{class:'rule',x1:pd,x2:w-pd,y1:mid,y2:mid}),svg('path',{class:'line',d:d.trim()}));
+ if(!hasReadings(m)||!m.spark)return null;
+ const label=sparkLabel(m.spark),chart=el('div',{class:'hv-spark'});
+ void renderSpark(chart,m.spark).catch(()=>{});
+ return el('div',{class:'hv-trend',role:'img','aria-label':label,title:label},chart);
 }
 
 // --- machine page: runtime stack ---------------------------------------------------------------
@@ -283,7 +282,7 @@ function services(m){
  return el('div',{class:'hv-services'},el('span',{class:'hv-k'},t('Služby')),el('div',{class:'hv-chips'},m.services.map(s=>el('span',{class:`hv-status ${s.status==='reachable'?'ok':'dim'}`},el('i',{'aria-hidden':'true'}),s.name||s.id))));
 }
 // What must be drawn again when it changes; anything else is refreshed in place.
-const hostShape=m=>[m.name,hostLine(m),m.telemetry?.state,m.telemetry?.reason,m.hash||'',m.image||m.picture||'',Boolean(m.stack),m.stack?.source,m.stack?.hash||'',m.runtimes?JSON.stringify(m.runtimes).length:0,canEdit].join('|');
+const hostShape=m=>[m.name,hostLine(m),m.telemetry?.state,m.telemetry?.reason,m.hash||'',m.image||m.picture||'',Boolean(m.stack),m.stack?.source,m.stack?.hash||'',Boolean(m.runtimes),canEdit].join('|');
 function renderChild(slot,machine,{repaint:again,focus}={}){
  disposeCharts();childCards=null;
  const meta=cache?.telemetry;
@@ -324,7 +323,8 @@ function renderChild(slot,machine,{repaint:again,focus}={}){
  slot.replaceChildren(head,
   section(t('Telemetrie'),hasReadings(machine)?t('Živá čísla a historie z agenta {name}.',{name:meta?.agent||'Thermo'}):null,telemetry),
   stackSection(machine),
-  machine.kind==='router'?null:section(t('Lokální LLM runtimy'),machine.runtimes?null:t('Místo pro to, co o runtimech na stroji ohlásí telemetrický agent.'),runtimesSection(machine,meta)));
+  // Only where a provider reports on this machine; a machine nobody reports on has no such section.
+  machine.runtimes?section(t('Lokální LLM runtimy'),null,runtimesSection(machine,meta)):null);
  slot.dataset.shape=hostShape(machine);
  // The router's machine page ends with the adapter's census and health (router-view.js, module "router").
  if(machine.kind==='router')import('./router-view.js').then(v=>{if(slot.isConnected)slot.append(v.routerPanel());}).catch(()=>{});
@@ -341,6 +341,9 @@ function refreshChild(slot,machine,again){
  // Services/models change while the page is open: rebuild the stack from the latest data
  // (selection kept, no panel animation).
  const old=document.querySelector('#hv-stack-slot');if(old&&machine.stack)old.replaceWith(stackGrid(machine));
+ // The runtimes too: what is loaded and the counters change; an opened model list stays open.
+ const cards=slot.querySelector('.hv-runtimes');
+ if(cards&&machine.runtimes)cards.replaceWith(runtimesSection(machine,cache?.telemetry,{open:[...cards.querySelectorAll('details[open]')].map(d=>d.dataset.id)}));
 }
 
 // --- overview ----------------------------------------------------------------------------------
@@ -359,29 +362,38 @@ function emptyOverview(add){
 const summary=list=>{const counted=list.filter(m=>m.telemetry?.state!=='not-applicable'),ok=counted.filter(m=>m.telemetry?.state==='ok').length;
  return `${tp(list.length,'{n} stroj|{n} stroje|{n} strojů')} · ${t('telemetrie běží na {ok} z {all}',{ok,all:counted.length})}`;};
 export function homeView(machineId,me){
- editing=false;orderNote='';canEdit=me?.canWrite===true;canAdmin=me?.canAdmin===true;
- viewGen++;disposeCharts();childCards=null;built=false;
+ canEdit=me?.canWrite===true;canAdmin=me?.canAdmin===true;
+ viewGen++;disposeCharts();disposeSparks();dragger?.destroy();dragger=null;childCards=null;built=false;
+ onLeave(()=>{dragger?.destroy();dragger=null;disposeSparks();});
  const slot=el('div',{id:'home-slot',class:'hv-page'});
  const loading=text=>el('p',{class:'hv-loading',role:'status'},text);
  const reload=()=>load().then(()=>{built=false;paint();}).catch(()=>{});
  const add=()=>openAddDevice({meta:cache?.telemetry,onSaved:reload});
+ const headActions=()=>el('div',{class:'ui-head-actions'},canEdit?el('button',{type:'button',class:'ui-button primary',onclick:add},t('⊕ Přidat zařízení')):null);
  const paint=()=>{
   notifyShell();
   if(!cache){slot.replaceChildren(loading(t('Načítám data domovské stránky…')));return;}
   if(!machineId){
-   const list=orderedMachines(cache.machines,orderCache.get()?.order);
+   if(dragger?.busy())return;// a tile is in the hand: this refresh waits for the drop
+   const saved=orderCache.get(),list=orderedMachines(cache.machines,saved?.order);
    // A hub without machines yet: say what belongs here and how to add it.
    if(!list.length){const head=pageHeader({eyebrow:t('Domov'),title:t('Přehled'),lead:t('Stroje, jejich stav a živé metriky na jednom místě.')});head.append(headActions());
     slot.replaceChildren(head,emptyOverview(add));built=false;return;}
-   const grid=slot.querySelector('.hv-tiles');
-   const ids=list.map(m=>m.id).join(',')+(editing?'|edit':'');
-   if(built&&grid&&grid.dataset.ids===ids){
+   const movable=saved?.available===true&&list.length>1,ids=list.map(m=>m.id);
+   const grid=slot.querySelector('.hv-tiles'),shown=grid?[...grid.children].map(n=>n.dataset.id):[];
+   if(built&&grid&&movable===sortable&&shown.length===ids.length&&ids.every(id=>shown.includes(id))){
+    // The same tiles: put them in order (a move keeps every tile, its picture and its chart), then the numbers.
+    if(shown.join()!==ids.join())for(const id of ids)grid.append(grid.querySelector(`[data-id="${id}"]`));
     const lead=slot.querySelector('.ui-lead');if(lead)lead.textContent=summary(list);
-    if(!editing)for(const m of list){const n=grid.querySelector(`[data-id="${m.id}"]`);if(n)updateTile(n,m);}
+    for(const m of list){const n=grid.querySelector(`[data-id="${m.id}"]`);if(n)updateTile(n,m);}
     return;}
-   const g=el('div',{class:`hv-tiles${editing?' reordering':''}`},list.map((m,i)=>editing?reorderTile(m,i,list):tile(m)));g.dataset.ids=ids;
+   sortable=movable;disposeSparks();dragger?.destroy();
+   const g=el('div',{class:`hv-tiles${sortable?' sortable':''}`},list.map(tile));
+   dragger=tileDrag({grid:g,enabled:()=>sortable,onDrop:commit,onEnd:()=>paint()});
    const head=pageHeader({eyebrow:t('Domov'),title:t('Přehled'),lead:summary(list)});head.append(headActions());
-   slot.replaceChildren(head,...[orderBar()].filter(Boolean),g);built=true;return;
+   // What a screen reader hears on a tile: how it moves. Nothing on the page has to be switched on first.
+   const hint=sortable?el('p',{id:'hv-order-hint',class:'ui-sr'},t('Pořadí změníš přetažením dlaždice, na dotykové obrazovce po jejím podržení, nebo šipkami na vybrané dlaždici.')):null;
+   slot.replaceChildren(...[head,hint,g].filter(Boolean));built=true;return;
   }
   const machine=cache.machines.find(m=>m.id===machineId);
   if(!machine){slot.replaceChildren(emptyState({icon:'◌',title:t('Neznámý stroj.'),body:t('Stroj s tímhle id v přehledu není. Mohl být odebrán.'),actions:[{label:t('← přehled'),href:'#overview',primary:true}]}));return;}
@@ -391,55 +403,23 @@ export function homeView(machineId,me){
   renderChild(slot,machine,{repaint:paint});built=true;
  };
  repaint=paint;
- // Reorder mode: drag and drop with a mouse; ↑/↓ buttons, or the arrow keys on a focused tile, for keyboard,
- // touch and phones. Every move shows at once and is saved one at a time, newest wins; a failed save goes
- // back to the last saved order (home-order.js).
- const rebuild=focus=>{built=false;paint();if(!focus)return;
-  const target=focus.startsWith('tile:')?slot.querySelector(`.hv-tile[data-id="${focus.slice(5)}"]`):slot.querySelector(`[data-move="${focus}"]:not([disabled])`)||slot.querySelector(`[data-move^="${focus.split(':')[0]}:"]:not([disabled])`);
-  target?.focus();};
- const commit=async(order,focus)=>{
-  const gen=viewGen,saving=orderSaver.save(order);orderNote='Ukládám…';rebuild(focus);
+ // A tile was dropped somewhere else, or moved with the arrow keys (home-drag.js): the new order shows at
+ // once and is saved for this account, one save at a time, newest wins; a failed save goes back to the last
+ // saved order (home-order.js). The confirmation carries an undo, so a slip costs one click.
+ let said=null;
+ async function commit(order,id){
+  const gen=viewGen,before=orderCache.get()?.order??null,saving=orderSaver.save(order);
+  const held=document.activeElement?.classList?.contains('hv-tile')?document.activeElement.dataset.id:null;
+  paint();
+  if(held)slot.querySelector(`.hv-tile[data-id="${held}"]`)?.focus();// moving a node drops its focus
   const outcome=await saving;
   // A newer move or another account owns the screen now. A page opened since then only repaints a rollback.
   if(outcome==='stale'||outcome==='superseded')return;
   if(gen!==viewGen||!slot.isConnected){if(outcome==='failed')repaint?.();return;}
-  if(outcome==='failed'){orderNote='Uložení selhalo, pořadí zůstalo původní.';rebuild(focus);return;}
-  orderNote=order.length?'Uloženo pro tvůj účet.':'Zpět na výchozí pořadí.';
-  const note=slot.querySelector('.hv-order-note');if(note)note.textContent=t(orderNote);
- };
- // Top right of the header: Add device and Reorder; in reorder mode the bar below takes over.
- function headActions(){
-  const saved=orderCache.get(),button=(label,onclick,cls='')=>el('button',{type:'button',class:`ui-button${cls}`,onclick},label);
-  return el('div',{class:'ui-head-actions'},editing?null:[
-   saved?.available&&cache.machines.length>1?button(t('⇅ Upravit pořadí'),()=>{editing=true;orderNote='Přetáhni dlaždici myší, nebo ji posuň šipkami ↑ ↓.';rebuild();slot.querySelector('[data-move]:not([disabled])')?.focus();}):null,
-   canEdit?button(t('⊕ Přidat zařízení'),add,' primary'):null]);
- }
- function orderBar(){
-  if(!editing)return null;
-  const saved=orderCache.get();
-  return el('div',{class:'hv-orderbar'},el('span',{class:'hv-order-note',role:'status'},t(orderNote)),
-   el('button',{type:'button',class:'ui-button',disabled:saved?.order==null||saved.order.join()===cache.machines.map(m=>m.id).join()?'':null,onclick:()=>commit([],null)},t('Výchozí pořadí')),
-   el('button',{type:'button',class:'ui-button primary',onclick:()=>{editing=false;orderNote='';rebuild();}},t('Hotovo')));
- }
- function reorderTile(m,i,list){
-  const ids=list.map(x=>x.id),last=list.length-1;
-  const move=(dir,label,to,off)=>el('button',{type:'button',class:'hv-move','data-move':`${m.id}:${dir}`,'aria-label':`${label}: ${m.name}`,title:label,disabled:off?'':null,onclick:()=>commit(moveId(ids,m.id,to),`${m.id}:${dir}`)},dir==='up'?'↑':'↓');
-  const card=tile(m),box=el('div',{class:`${card.className} reorder`,draggable:'true',tabindex:'0','data-id':m.id,role:'group','aria-label':t('{pos}. {name} — šipky mění pořadí',{pos:i+1,name:m.name})});
-  box.append(...card.childNodes);
-  box.prepend(el('div',{class:'hv-order'},el('span',{class:'hv-pos'},`${i+1}.`),move('up',t('Posunout dopředu'),i-1,i===0),move('down',t('Posunout dozadu'),i+1,i===last)));
-  // Arrow keys on the tile itself: left/up = earlier, right/down = later; Home and End jump to the ends.
-  box.addEventListener('keydown',e=>{if(e.target!==box)return;
-   const to={ArrowLeft:i-1,ArrowUp:i-1,ArrowRight:i+1,ArrowDown:i+1,Home:0,End:last}[e.key];if(to===undefined)return;e.preventDefault();
-   if(to<0||to>last||to===i)return;commit(moveId(ids,m.id,to),`tile:${m.id}`);});
-  box.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',m.id);e.dataTransfer.effectAllowed='move';box.classList.add('dragging');});
-  box.addEventListener('dragend',()=>{box.classList.remove('dragging');slot.querySelectorAll('.drop-before,.drop-after').forEach(n=>n.classList.remove('drop-before','drop-after'));});
-  // One column (phone): above/below the middle; a grid: left/right of it.
-  const after=e=>{const r=box.getBoundingClientRect();return getComputedStyle(box.parentNode).gridTemplateColumns.split(' ').length<2?e.clientY>r.top+r.height/2:e.clientX>r.left+r.width/2;};
-  box.addEventListener('dragover',e=>{e.preventDefault();e.dataTransfer.dropEffect='move';const a=after(e);box.classList.toggle('drop-after',a);box.classList.toggle('drop-before',!a);});
-  box.addEventListener('dragleave',()=>box.classList.remove('drop-before','drop-after'));
-  box.addEventListener('drop',e=>{e.preventDefault();const id=e.dataTransfer.getData('text/plain');box.classList.remove('drop-before','drop-after');if(!ids.includes(id)||id===m.id)return;
-   const rest=ids.filter(x=>x!==id),at=rest.indexOf(m.id)+(after(e)?1:0);commit(moveId(ids,id,at),`tile:${id}`);});
-  return box;
+  said?.close();
+  if(outcome==='failed'){paint();said=toast.bad(t('Pořadí se neuložilo, dlaždice jsou zpátky.'));return;}
+  const name=cache?.machines.find(m=>m.id===id)?.name||id,pos=(orderCache.get()?.order||[]).indexOf(id)+1;
+  said=toast.good(pos?t('{name} je {pos}. v pořadí. Uloženo pro tvůj účet.',{name,pos}):t('Pořadí uloženo pro tvůj účet.'),{timeout:8000,action:{label:t('Vrátit zpět'),onclick:()=>commit(before||[],id)}});
  }
  const orderReady=machineId||orderCache.get()?null:loadOrder();
  const failed=()=>slot.replaceChildren(emptyState({icon:'⚠',title:t('Data nejsou dostupná.'),body:t('Home Hub teď přehled nevrátil. Zkus to znovu.'),actions:[{label:t('Zkusit znovu'),onclick:()=>{slot.replaceChildren(loading(t('Načítám data domovské stránky…')));load().then(paint).catch(failed);},primary:true}]}));

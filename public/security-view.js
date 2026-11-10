@@ -191,7 +191,7 @@ function render(box,doc,now=Date.now()){
  const paint=()=>{fill(content,!doc.keys.length&&(tab==='matrix'||tab==='keys')?el('p',{class:'col-empty'},t('Sonda na prověřených strojích nenašla žádný SSH klíč.')):tab==='keys'?keysTable(doc,m,now):tab==='accounts'?accounts(doc,m):tab==='other'?otherKeys(doc,m):matrix(doc,m,now));
   for(const [id,b] of buttons){b.classList.toggle('on',id===tab);b.setAttribute('aria-selected',String(id===tab));}};
  fill(box,
-  pageHeader({eyebrow:t('Bezpečnost'),title:t('SSH klíče'),lead:t('Kde leží každý privátní klíč, jakého je typu a stáří a kam se s ním dá přihlásit. Sběr posílá jen otisky a veřejné řádky; klíče samotné stroj neopouštějí.'),
+  pageHeader({eyebrow:t('Bezpečnost'),title:t('SSH klíče'),lead:t('Kde leží každý privátní klíč, jakého je typu a stáří a kam se s ním dá přihlásit. Sběr posílá jen otisky a veřejné řádky; klíče samotné stroj neopouštějí.'),provenance:doc.provenance,
    actions:[{label:t('Ochrana strojů'),href:'#hardening'}]}),
   freshnessBanner([{label:doc.collectedFrom?t('Snímek z {from}:',{from:doc.collectedFrom}):t('Snímek:'),...(doc.collector||{}),collectedAt:doc.collectedAt}]),
   el('div',{class:'col-stats'},
@@ -225,13 +225,14 @@ function setupState(collector){
 
 export function securityView(){
  const box=el('div',{class:'col'},el('p',{class:'loading',role:'status'},t('Načítám inventář klíčů…')));
- const head=()=>pageHeader({eyebrow:t('Bezpečnost'),title:t('SSH klíče')});
+ // provenance: where the page's data comes from, as the answer says it (also without a snapshot).
+ const head=provenance=>pageHeader({eyebrow:t('Bezpečnost'),title:t('SSH klíče'),provenance});
  const draw=async()=>{
   const retry=[{label:t('Zkusit znovu'),onclick:()=>{fill(box,el('p',{class:'loading',role:'status'},t('Načítám inventář klíčů…')));draw();},primary:true}];
   try{
    const lost=authGuard(),r=await fetch('/api/security');
    if(!r.ok){lost(r);const e=await r.json().catch(()=>({}));
-    if(r.status===404)fill(box,head(),setupState(e.collector));
+    if(r.status===404)fill(box,head(e.provenance),setupState(e.collector));
     else fill(box,head(),emptyState({icon:'⚠',title:r.status===403?t('Jen pro administrátora'):t('Inventář se nepodařilo načíst'),body:r.status===403?t('Tahle stránka je dostupná jen správci.'):t(e.error?.message)||t('Zkus to znovu.'),actions:r.status===403?[]:retry}));
     return;}
    render(box,await r.json());

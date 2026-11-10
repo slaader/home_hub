@@ -163,17 +163,42 @@ export function telemetryFor(def,thermo,nowSec){
  const reason=state==='ok'?null:Array.isArray(hosts)&&!hosts.includes(def.thermo)?'no-login':status==='denied'?'denied':status==='down'?'down':status==='up'?'no-data':'waiting';
  return {state,thermoId:def.thermo,lastSampleAt:newest===null?null:new Date(newest*1000).toISOString(),ageSeconds:age,reason};
 }
-// What the per-machine agent will report about local LLM runtimes (extension point home.runtimes, see
-// docs/plugins.md). Core only bounds and cleans it; without a provider a machine carries runtimes: null.
+// Local LLM runtimes on a machine, as a provider reported them (extension point home.runtimes, see
+// docs/plugins.md). Core reads no runtime itself: it only bounds and cleans what a provider hands over. A
+// machine no provider reports on carries runtimes: null, and its page then has no such section at all.
 const RUNTIME_STATES=['running','stopped','unknown'];
 export function runtimesFor(entry){
  if(!entry||typeof entry!=='object'||!Array.isArray(entry.runtimes))return null;
  return {source:text(entry.source,40),observedAt:text(entry.observedAt,40)||null,
   runtimes:entry.runtimes.filter(r=>r&&typeof r==='object').slice(0,20).map(r=>({id:text(r.id,60),name:text(r.name,60)||text(r.id,60),kind:text(r.kind,40),
    status:RUNTIME_STATES.includes(r.status)?r.status:'unknown',url:text(r.url,120)||null,version:text(r.version,40)||null,
-   models:Array.isArray(r.models)?r.models.filter(m=>m&&typeof m==='object').slice(0,30).map(m=>({id:text(m.id,120),state:text(m.state,16),sizeGb:number(m.sizeGb,100000)})):[],
+   models:Array.isArray(r.models)?r.models.filter(m=>m&&typeof m==='object').slice(0,30).map(m=>({id:text(m.id,120),state:text(m.state,16),sizeGb:number(m.sizeGb,100000),
+    contextTokens:number(m.contextTokens,1e9),ttlRemainingSeconds:number(m.ttlRemainingSeconds,1e9)})):[],
    stats:Array.isArray(r.stats)?r.stats.filter(x=>x&&typeof x==='object').slice(0,12).map(x=>({label:text(x.label,40),value:text(String(x.value??''),40)})):[]}))};
 }
+// The small chart on a tile: one utilisation series over the hub's live window, the last ten minutes of the
+// 1-second readings it holds, in 10 s steps that end on the last full step of the clock (two reads a few
+// seconds apart then agree, and the newest step is never half empty). A step without a reading is null: the
+// chart leaves a gap there, never a guess. prefer: the series to draw when the machine has it; CPU otherwise.
+// null when the window holds nothing for it.
+export const SPARK_WINDOW_SECONDS=600,SPARK_STEP_SECONDS=10;
+export function sparkFor(thermo,machine,nowSec,prefer='cpu'){
+ const step=SPARK_STEP_SECONDS,n=SPARK_WINDOW_SECONDS/step,end=Math.floor(nowSec/step)*step,start=end-n*step;
+ const sums={cpu:Array(n).fill(0),gpu:Array(n).fill(0)},counts={cpu:Array(n).fill(0),gpu:Array(n).fill(0)};
+ for(const r of thermo?.seconds?.(machine,start)||[]){
+  if(!Number.isFinite(r?.t)||r.t<=start||r.t>end)continue;const i=Math.ceil((r.t-start)/step)-1;
+  for(const key of ['cpu','gpu'])if(Number.isFinite(r[key])){sums[key][i]+=r[key];counts[key][i]++;}
+ }
+ const series=prefer==='gpu'&&counts.gpu.some(Boolean)?'gpu':'cpu';
+ if(!counts[series].some(Boolean))return null;
+ return {series,end,stepSeconds:step,windowSeconds:SPARK_WINDOW_SECONDS,values:sums[series].map((v,i)=>counts[series][i]?Math.round(v/counts[series][i]*10)/10:null)};
+}
+// Telemetry agents this hub can connect a device to. The "Telemetry" step of Add device offers exactly these,
+// so an adapter added here (with its form in public/home-add-device.js) appears there by itself. One today.
+// connect: how the hub gets in ("account" = a user and password on the agent, sent only to a pinned certificate).
+// summary: what it measures, in the source language (English in public/i18n-en-home.js).
+export const TELEMETRY_ADAPTERS=Object.freeze([Object.freeze({id:'thermo',name:TELEMETRY_AGENT_NAME,repoUrl:TELEMETRY_REPO_URL,connect:'account',defaultPort:49286,summary:'CPU, GPU, paměť, příkon, teploty a disky'})]);
+export const telemetryMeta=()=>({agent:TELEMETRY_AGENT_NAME,repoUrl:TELEMETRY_REPO_URL,staleAfterSeconds:TELEMETRY_STALE_SECONDS,adapters:TELEMETRY_ADAPTERS.map(a=>({...a}))});
 // Whole /api/home payload. site = the site configuration; thermo = createThermoPoller(); router =
 // readRouter() result. Two optional feeds come from plugins (docs/plugins.md → extension points):
 // snapshots = {machineId: {snapshot, bridge}} (what a host agent reports: services, memory, uptime) and
@@ -181,6 +206,7 @@ export function runtimesFor(entry){
 // Missing pieces degrade to offline tiles, never throw.
 // published = {machineId: {stack, publishedAt, publishedBy}} (runtime_publish): it replaces the stack of the
 // site configuration or of a collected descriptor. runtimes = {machineId: {...}} from home.runtimes providers.
+// Each machine with telemetry also carries spark, the series of its tile's small chart (sparkFor).
 // sitePictures = {machineId: url} for the site machines that have their own tile picture.
 export function buildHome({site,snapshots:computeLatest={},thermo,router=null,probed={},descriptors={},added=[],published={},runtimes={},sitePictures=null,now=Date.now()}={}){
  const layouts=stackLayouts(site);
@@ -216,6 +242,7 @@ export function buildHome({site,snapshots:computeLatest={},thermo,router=null,pr
   // No live router feed yet: show the freshly collected census, marked stale with its time.
   const census=def.kind==='router'&&Array.isArray(descriptors[def.id]?.clients)?descriptors[def.id].clients:null;
   if(def.kind==='router'&&!routerQuad&&census){routerQuad={clients:census.length,wifi:census.filter(c=>c.connection==='wifi'||c.connection==='wireless').length,power:null,temp:null};online='stale';lastSeen=collected?.collectedAt||null;}
+  const reported=runtimesFor(Object.hasOwn(runtimes||{},def.id)?runtimes[def.id]:null);
   return {...def,hostname:def.hostname||'',ip:def.ip,online,lastSeen,
    thermo:thermoStatus||null,bridge:entry.bridge||null,
    quad:live||routerQuad,
@@ -225,12 +252,14 @@ export function buildHome({site,snapshots:computeLatest={},thermo,router=null,pr
    services:services.map(s=>({id:s.id,name:s.name,status:s.status,url:s.url,models:(s.models||[]).filter(m=>m.state==='loaded').map(m=>m.id)})),
    collectedAt:collected?.collectedAt||null,reviewNeeded:collected?.reviewNeeded||[],
    telemetry:telemetryFor(def,thermo,nowSec),
-   runtimes:runtimesFor(Object.hasOwn(runtimes||{},def.id)?runtimes[def.id]:null),
+   runtimes:reported,
+   // A machine that reports LLM runtimes works on its GPU; anywhere else the CPU says more.
+   spark:def.thermo?sparkFor(thermo,def.thermo,nowSec,reported?.runtimes.length?'gpu':'cpu'):null,
    stack:mergeStack(def.id,services,publishedStack||collected?.stack||layouts[def.id]||null)};
  });
  const routerClients=router&&Array.isArray(router.devices)?router.devices.filter(d=>['associated','reachable','lease-only'].includes(d.presence)).length:null;
  return {poll,schemaVersion:1,generatedAt:new Date(now).toISOString(),machines,
-  telemetry:{agent:TELEMETRY_AGENT_NAME,repoUrl:TELEMETRY_REPO_URL,staleAfterSeconds:TELEMETRY_STALE_SECONDS},
+  telemetry:telemetryMeta(),
   router:router?{status:router.status,freshness:router.freshness,observedAt:router.observedAt,model:router.model,firmware:router.firmware,clients:routerClients}:null};
 }
 export function homeHistoryQuery(input,added=[],site={machines:[]}){
@@ -290,5 +319,5 @@ export function machineList({site,added=[],published={},home=null,withStack=fals
   ...added.map(d=>({...machineFields(d),source:d.source,readOnly:false,hash:machineHash(d),customPicture:d.image===true,
    createdAt:d.createdAt||null,createdBy:d.createdBy||null,updatedAt:d.updatedAt||null,updatedBy:d.updatedBy||null,telemetry:telemetry(d.id),runtime:runtime(d.id)}))];
  return {machines,pictures:PICTURES.map(id=>({id,url:pictureUrl(id)})),roles:[...MACHINE_ROLES],runtimeLayers:[...RUNTIME_LAYERS],lanCidrs:[...site.lanCidrs],
-  limits:{machines:DEVICE_LIMITS.devices},telemetry:{agent:TELEMETRY_AGENT_NAME,repoUrl:TELEMETRY_REPO_URL,staleAfterSeconds:TELEMETRY_STALE_SECONDS}};
+  limits:{machines:DEVICE_LIMITS.devices},telemetry:telemetryMeta()};
 }

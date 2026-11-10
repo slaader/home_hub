@@ -9,11 +9,13 @@ const bus=new EventTarget();
 globalThis.addEventListener=bus.addEventListener.bind(bus);
 globalThis.dispatchEvent=bus.dispatchEvent.bind(bus);
 const {statusOf,hasReadings,installSteps}=await import('../public/home-telemetry.js');
-const {validateDevice,inNetworks,PICTURES}=await import('../public/home-add-device.js');
-const {pictureChain,orderedMachines,moveId}=await import('../public/home-view.js');
+const {validateDevice,inNetworks,PICTURES,telemetryChoices}=await import('../public/home-add-device.js');
+const {pictureChain,orderedMachines,moveId,sparkLabel}=await import('../public/home-view.js');
 const server=await import('../server/home-devices.mjs');
 const {inCidrs}=await import('../server/site-config.mjs');
 const {TELEMETRY_REPO_URL}=await import('../server/thermo-client.mjs');
+const {TELEMETRY_ADAPTERS}=await import('../server/home-data.mjs');
+const {dictionary}=await import('../public/i18n.js');
 
 test('a machine\'s state: readings decide for telemetry machines, a failed read is never "off"',()=>{
  const mac=telemetry=>({kind:'thermo',online:'offline',telemetry});
@@ -45,7 +47,7 @@ test('a tile tries the machine\'s own picture first, then the built-in one for w
  assert.deepEqual(pictureChain({id:'old',kind:'router'}),['/images/home/old.jpg','/images/generic/router.svg'],'an older server did not say: the site picture is tried');
  assert.deepEqual(pictureChain({id:'pi',added:true,role:'other',kind:'other',image:null,picture:'/images/generic/board.svg'}),['/images/generic/board.svg','/images/generic/generic.svg']);
  assert.deepEqual(pictureChain({id:'m',added:true,role:'computer',kind:'thermo',image:'/images/home/m.jpg?v=1',picture:'/images/generic/desktop.svg'}),['/images/home/m.jpg?v=1','/images/generic/desktop.svg']);
- // Order helpers used by the reorder mode.
+ // Order helpers behind a moved tile.
  assert.deepEqual(orderedMachines([{id:'a'},{id:'b'},{id:'c'}],['c','a']).map(m=>m.id),['c','a','b']);
  assert.deepEqual(moveId(['a','b','c'],'c',0),['c','a','b']);assert.deepEqual(moveId(['a','b','c'],'a',9),['b','c','a']);
 });
@@ -109,4 +111,61 @@ test('machine charts are drawn again with the new colours when the theme changes
   disposeCharts();dispatchEvent(new Event('themechange'));
   assert.equal(options.length,2,'a chart that left the page is not drawn again');
  }finally{Object.assign(globalThis,before);}
+});
+
+// Add device → 3 · Telemetry: the choices are the agents the server lists, as far as the dialog has a form
+// for them. Nothing is offered that the hub cannot connect, and a later adapter needs no change to the list.
+test('the telemetry choices of the device dialog come from the server',async()=>{
+ const thermo={id:'thermo',name:'Thermo',summary:'CPU, GPU, paměť, příkon, teploty a disky',defaultPort:49286};
+ assert.deepEqual(telemetryChoices({adapters:TELEMETRY_ADAPTERS}),[thermo],'every adapter the server lists today has a form');
+ assert.deepEqual(telemetryChoices({adapters:[{id:'future-agent',name:'Later'},{...thermo,name:'Renamed',defaultPort:50000},null,{name:'no id'}]}),[{...thermo,name:'Renamed',defaultPort:50000}],'an adapter without a form here is not offered; names and ports are the server\'s');
+ assert.deepEqual(telemetryChoices({adapters:[]}),[],'a hub that supports none offers none');
+ assert.deepEqual(telemetryChoices({agent:'Thermo'}),[{id:'thermo',name:'Thermo',summary:'',defaultPort:49286}],'a server from before the list: the one agent it names');
+ for(const a of TELEMETRY_ADAPTERS)assert.ok(dictionary[a.summary],`English for "${a.summary}"`);
+ const src=await readFile(new URL('../public/home-add-device.js',import.meta.url),'utf8');
+ assert.match(src,/offered\.map\(a=>choice\('had-telemetry',a\.id,/,'one choice per offered adapter');
+ assert.doesNotMatch(src,/Zatím bez telemetrie|živé CPU, GPU, paměť, příkon a teploty/,'the old fixed pair is gone');
+});
+
+// The small chart on a tile: a bare line on a canvas. Nothing but the series is drawn, a step without a
+// reading stays a gap, and like the big charts it is drawn again when the theme changes.
+test('the tile chart is a bare, smooth line with gaps, in the measure\'s colour of the current theme',async()=>{
+ const COLORS={dark:{'--home-cpu':'#d95926','--home-gpu':'#9085e9'},light:{'--home-cpu':'#eb6834','--home-gpu':'#6250d6'}};
+ let theme='dark';
+ const before={getComputedStyle:globalThis.getComputedStyle,document:globalThis.document,ResizeObserver:globalThis.ResizeObserver};
+ globalThis.getComputedStyle=()=>({getPropertyValue:name=>COLORS[theme][name]||''});
+ globalThis.document={documentElement:{}};
+ const observed=[];globalThis.ResizeObserver=class{observe(n){observed.push(n);}unobserve(){}disconnect(){}};
+ try{
+  const {renderSpark,disposeSparks,sparkOption}=await import('../public/home-charts.js');
+  const spark={series:'gpu',end:1_800_000_000,stepSeconds:10,windowSeconds:600,values:[null,5,7,null,null,30,12]};
+  const o=sparkOption(spark),line=o.series[0];
+  assert.deepEqual([o.xAxis.show,o.yAxis.show,o.legend,o.tooltip,o.title,o.series.length,line.markLine],[false,false,undefined,undefined,undefined,1,undefined],'no axes, labels, legend, grid lines or annotations');
+  assert.deepEqual([o.grid.left,o.grid.right],[1,1]);assert.equal(o.animation,false);
+  assert.deepEqual(line.data.map(d=>d[1]),spark.values,'empty steps stay null');assert.equal(line.connectNulls,false,'and are not bridged');
+  assert.deepEqual([line.data[0][0],line.data.at(-1)[0],line.data[1][0]-line.data[0][0]],[(spark.end-60)*1000,spark.end*1000,10000]);
+  assert.deepEqual([line.showSymbol,line.silent,line.smooth>0,line.lineStyle.cap,line.lineStyle.join],[false,true,true,'round','round']);
+  assert.deepEqual([line.lineStyle.color,line.areaStyle.color.colorStops.at(-1).color],['#9085e9','rgba(144,133,233,0)'],'the GPU token, fading out below the line');
+  assert.equal(sparkOption({...spark,series:'cpu'}).series[0].lineStyle.color,'#d95926');
+  // The scale: from zero to the next quarter above the peak, never tighter than 25 %.
+  assert.deepEqual([o.yAxis.min,o.yAxis.max],[0,50]);
+  assert.equal(sparkOption({...spark,values:[1,2,3]}).yAxis.max,25,'an idle machine is a low line, not magnified noise');assert.equal(sparkOption({...spark,values:[96]}).yAxis.max,100);
+  // Drawn on the tile, kept across refreshes, redrawn on a theme change, dropped with the tile.
+  const options=[],made=[];
+  const echarts={init(node){const chart={node,setOption:x=>options.push(x),dispose(){chart.gone=true;},resize(){}};made.push(chart);return chart;}};
+  const tile={isConnected:true},other={isConnected:true};
+  await renderSpark(tile,spark,{echarts});await renderSpark(tile,{...spark,values:[1,2,3]},{echarts});await renderSpark(other,spark,{echarts});
+  assert.equal(made.length,2,'a refresh draws into the chart that is there');assert.equal(options.length,3);assert.deepEqual(observed,[tile,other]);
+  theme='light';dispatchEvent(new Event('themechange'));
+  assert.equal(options.length,5);assert.deepEqual(options.slice(3).map(x=>x.series[0].lineStyle.color),['#6250d6','#6250d6']);
+  assert.deepEqual(options[3].series[0].data.map(d=>d[1]),[1,2,3],'the newest data, in the new colours');
+  other.isConnected=false;await renderSpark(tile,spark,{echarts});
+  assert.equal(made[1].gone,true,'a tile that left the page takes its chart along');
+  disposeSparks();dispatchEvent(new Event('themechange'));assert.equal(options.length,6);assert.equal(made[0].gone,true);
+ }finally{Object.assign(globalThis,before);}
+ // No caption on the tile: the chart is named in its label and tooltip.
+ assert.equal(sparkLabel({series:'gpu',windowSeconds:600,values:[1,12.4]}),'GPU over the last 10 min, now 12 %');
+ assert.equal(sparkLabel({series:'cpu',windowSeconds:600,values:[3,null]}),'CPU over the last 10 min','no "now" when the newest step has no reading');
+ const view=await readFile(new URL('../public/home-view.js',import.meta.url),'utf8');
+ assert.doesNotMatch(view,/CPU load · 30 min|class:'rule'|loadHistory\(m\.id,'30m'/,'no caption, no rule line, no 30-minute history per tile');
 });

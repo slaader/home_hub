@@ -2,19 +2,20 @@
 //   #projects        projects overview: health ring, activity, next release, create / edit a project
 //   #projects/<id>   one project: health, activity, next release and a board of its items
 //   #items           items (tickets) with project chips and quick filters, as a table or a board
-//   #items/<ID>      one item: description, attachments, comments, history, editing
+//   #items/<ID>      one item, read view first: description, attachments, comments, history; "Edit" (or e)
+//                    swaps the description for the edit form, so every field is on the page once
 //   #releases        releases per project as a timeline with progress, countdown and their items
 // Reads need any sign-in; writes need canWrite (the server checks again, API keys need tickets:write).
 // Every edit sends the rev it read; a 409 means someone else changed it — reload and redo.
 // Text: Czech source strings through t() (English in i18n-en-tracker.js); dates follow the active language and
 // the site's time zone. A ticket is called `tk` in this file, because `t` is the translation function.
-// Keys on the list pages: / filter, n new item, j / k move, Enter open, v table ↔ board; on an item: c comment.
+// Keys on the list pages: / filter, n new item, j / k move, Enter open, v table ↔ board; on an item: c comment, e edit.
 import {el,onLeave} from './views.js';
 import {onSessionReset,authGuard} from './session-cache.js';
 import {markdown} from './tracker-md.js';
 import {timeZone} from './site.js';
 import {t,tp,locale} from './i18n.js';
-import {pageHeader,emptyState} from './ui.js';
+import {pageHeader,emptyState,provenanceBadge} from './ui.js';
 
 // Label lists are functions: t() has to run when the page is drawn, in the language active then.
 const TYPES=()=>[['bug',t('Chyba'),'crit'],['feature',t('Funkce'),'ok'],['task',t('Úkol'),'']];
@@ -90,7 +91,8 @@ const status=()=>el('p',{class:'acc-status',role:'status'});
 // replaceChildren() would print a null child as the text "null"; optional parts are skipped instead.
 const show=(wrap,...nodes)=>wrap.replaceChildren(...nodes.flat().filter(n=>n!=null&&n!==false));
 const fail=(node,e)=>{node.textContent=e.message;node.classList.add('error');};
-const head=(title,lead,actions)=>pageHeader({eyebrow:'Project Tracker',title,lead,actions:(actions||[]).filter(Boolean)});
+// provenance: where the page's data comes from (the `provenance` of the tickets answer), shown next to the title.
+const head=(title,lead,actions,provenance)=>pageHeader({eyebrow:'Project Tracker',title,lead,actions:(actions||[]).filter(Boolean),provenance});
 
 // Keyboard shortcuts of one page: plain keys, never while typing or with a dialog open. A handler returns
 // false to let the key through. The listener goes away with the page (onLeave) or when its view is replaced.
@@ -158,7 +160,7 @@ async function listPage(wrap,ctx){
  const [data,all]=result;
  const redraw=()=>listPage(wrap,ctx).catch(e=>fail(msg,e)),msg=status();
  const add=canWrite&&data.projects.length?{label:t('+ Nová položka'),primary:true,onclick:()=>newTicket(data.projects,null,ctx)}:null;
- const title=head(t('Položky'),t('Chyby, funkce a úkoly všech projektů. Filtry zůstávají, dokud stránku neopustíš.'),[add]);
+ const title=head(t('Položky'),t('Chyby, funkce a úkoly všech projektů. Filtry zůstávají, dokud stránku neopustíš.'),[add],all.provenance);
  if(!data.projects.length)return show(wrap,title,noProjects(ctx,redraw));
  const count=s=>all.tickets.filter(x=>s.includes(x.status)).length,bugs=activeBugs(all.tickets);
  const setView=v=>{if(prefs.view===v)return;prefs.view=v;try{globalThis.localStorage?.setItem('tk-view',v);}catch{}redraw();};
@@ -335,12 +337,13 @@ async function ticketPage(wrap,ctx){
  const result=await load(wrap,Promise.all([api('/api/tickets/'+encodeURIComponent(ctx.id)),api('/api/tickets?limit=1'),api('/api/tickets/people').catch(()=>null)]));if(!result)return;
  const [tk,meta,people]=result;renderTicket(wrap,{...ctx,meta,people:peopleNames(people)},tk,{fields:{},comment:''});
 }
-// Unsaved input on a ticket page: the comment box and every edit-form field that differs from what was rendered.
-// A write re-renders from the ticket the server returned (no second request that could fail), carrying these over.
+// Unsaved input on a ticket page: the comment box and every edit-form field that differs from what was rendered,
+// and whether the edit form is open. A write re-renders from the ticket the server returned (no second request
+// that could fail), carrying these over.
 const pages=new WeakMap(),pastes=new WeakMap();
 function drafts(wrap){
- const page=pages.get(wrap);if(!page)return {fields:{},comment:''};
- return {comment:page.comment?.value||'',fields:Object.fromEntries(Object.entries(page.inputs).filter(([k,input])=>input.value!==page.initial[k]).map(([k,input])=>[k,input.value]))};
+ const page=pages.get(wrap);if(!page)return {fields:{},comment:'',editing:false};
+ return {comment:page.comment?.value||'',editing:page.editing===true,fields:Object.fromEntries(Object.entries(page.inputs).filter(([k,input])=>input.value!==page.initial[k]).map(([k,input])=>[k,input.value]))};
 }
 const fileSize=n=>n<1024?`${n} B`:n<1048576?`${Math.round(n/1024)} kB`:`${(n/1048576).toFixed(1)} MB`;
 // Pictures of a ticket in one dialog: arrows (and the arrow keys) step through them, a click outside closes it.
@@ -364,21 +367,32 @@ function renderTicket(wrap,ctx,tk,keep){
   const shown=pages.get(wrap)?.ticket||tk,next=drafts(wrap);saved(next);next.notice=t('Uloženo.');
   renderTicket(wrap,ctx,updated.updatedAt>=shown.updatedAt?updated:shown,next);
  };
- const save=(change,button,fromEdit=false)=>write(button,()=>api('/api/tickets/update',{id:tk.id,rev:tk.rev,...change}),next=>{if(fromEdit)next.fields={};else for(const k of Object.keys(change))delete next.fields[k];});
- const quick=[];
+ // A save from the edit form closes it (back to the read view); any other write leaves it as it is.
+ const save=(change,button,fromEdit=false)=>write(button,()=>api('/api/tickets/update',{id:tk.id,rev:tk.rev,...change}),next=>{if(fromEdit){next.fields={};next.editing=false;}else for(const k of Object.keys(change))delete next.fields[k];});
+ // The read view is the default. The edit form is drawn only while editing: opened with the button or e, and
+ // kept open across a re-render while it is open or still holds unsaved changes.
+ const editing=canWrite&&(keep.editing===true||Object.keys(keep.fields||{}).length>0);
+ const shownTicket=()=>pages.get(wrap)?.ticket||tk;
+ const openEdit=()=>{if(!canWrite||pages.get(wrap)?.editing)return false;renderTicket(wrap,ctx,shownTicket(),{...drafts(wrap),editing:true,focus:'title'});};
+ const closeEdit=()=>{
+  if(Object.keys(drafts(wrap).fields).length&&!confirm(t('Zahodit neuložené úpravy?')))return;
+  renderTicket(wrap,ctx,shownTicket(),{...drafts(wrap),fields:{},editing:false,focus:'edit'});
+ };
+ const quick=[],editButton=canWrite&&!editing?el('button',{type:'button',class:'acc-btn small tk-edit-open','aria-keyshortcuts':'e',onclick:()=>void openEdit()},`✎ ${t('Upravit')}`):null;
  if(canWrite){
   const b=(text,next,cls='')=>el('button',{type:'button',class:`acc-btn small ${cls}`,onclick:e=>save({status:next},e.currentTarget)},text);
   if(tk.status==='open')quick.push(b(`▶ ${t('Začít')}`,'in-progress'));
   if(ACTIVE.includes(tk.status))quick.push(b(`✓ ${t('Hotovo')}`,'done','primary'),b(t('Zrušit položku'),'cancelled'));
   if(CLOSED.includes(tk.status))quick.push(b(`↺ ${t('Znovu otevřít')}`,'open'));
+  if(editButton)quick.push(editButton);
  }
  const fact=(k,v)=>[el('dt',{},k),el('dd',{},v)];
  const commentBox=canWrite?el('textarea',{name:'text',rows:'3',required:'',maxlength:'8000',placeholder:t('Komentář, postup, commit…'),'aria-label':t('Nový komentář'),'aria-keyshortcuts':'c'}):null;
  if(commentBox)commentBox.value=keep.comment||'';
  const commentEditor=commentBox?mdEditor(commentBox,keys):null;
- const edit=canWrite?editForm(tk,meta,save,ctx):null;
+ const edit=editing?editForm(tk,meta,save,ctx,closeEdit):null;
  if(edit)for(const [k,v] of Object.entries(keep.fields||{}))if(edit.inputs[k])edit.inputs[k].value=v;
- pages.set(wrap,{ticket:tk,comment:commentBox,inputs:edit?.inputs||{},initial:edit?.initial||{}});
+ pages.set(wrap,{ticket:tk,comment:commentBox,editing,inputs:edit?.inputs||{},initial:edit?.initial||{}});
  const comments=el('section',{class:'acc-card'},el('h3',{},t('Komentáře ({n})',{n:tk.comments.length})),
   tk.comments.length?el('ol',{class:'tk-comments'},tk.comments.map(c=>el('li',{class:'tk-comment'},
    el('div',{class:'tk-comment-head'},el('span',{class:'tk-avatar','aria-hidden':'true'},initials(c.by)||'?'),el('b',{},c.by),el('span',{class:'tk-dim',title:when(c.at)},ago(c.at))),
@@ -415,21 +429,26 @@ function renderTicket(wrap,ctx,tk,keep){
  const assignMe=canWrite&&user&&tk.assignee!==user&&!CLOSED.includes(tk.status)?el('button',{type:'button',class:'tk-inline-btn',onclick:e=>save({assignee:user},e.currentTarget)},t('Vezmu si to')):null;
  show(wrap,
   backPath(tk,meta.projects),
-  el('div',{class:'tk-head'},el('div',{},el('div',{class:'tk-mono tk-dim'},`${tk.id} · ${project?.name||tk.project}`),el('h1',{class:'tk-title'},glyph(tk.type),' ',tk.title),
-    el('div',{class:'tk-pills'},pill(TYPES(),tk.type),pill(PRIORITIES(),tk.priority),pill(STATUSES(),tk.status),tk.release?el('a',{class:'sec-pill tk-pill',href:'#releases',onclick:()=>{filters.project=tk.project;}},'release '+tk.release):null,
+  // Each field is on the page once: type, priority, status and labels in the head, the rest under "Údaje".
+  el('div',{class:'tk-head'},el('div',{},el('div',{class:'tk-mono tk-dim'},`${tk.id} · ${project?.name||tk.project}`),
+    el('div',{class:'ui-title'},el('h1',{class:'tk-title'},glyph(tk.type),' ',tk.title),provenanceBadge(tk.provenance)),
+    el('div',{class:'tk-pills'},pill(TYPES(),tk.type),pill(PRIORITIES(),tk.priority),pill(STATUSES(),tk.status),
      (tk.labels||[]).map(l=>el('span',{class:'tk-label'},l)))),
    el('div',{class:'tk-quick'},quick)),
   msg,
   el('div',{class:'tk-detail'},
-   el('div',{class:'acc-stack'},el('section',{class:'acc-card'},el('h3',{},t('Popis')),tk.description?markdown(tk.description,{keys}):el('p',{class:'acc-dim'},t('Bez popisu.'))),attachments,comments,timeline(tk)),
+   // While editing, the form takes the place of the rendered description: the text is never shown twice.
+   el('div',{class:'acc-stack'},edit?edit.form:el('section',{class:'acc-card'},el('h3',{},t('Popis')),tk.description?markdown(tk.description,{keys}):el('p',{class:'acc-dim'},t('Bez popisu.'))),attachments,comments,timeline(tk)),
    el('div',{class:'acc-stack'},
     el('section',{class:'acc-card'},el('h3',{},t('Údaje')),el('dl',{class:'acc-dl'},
-     fact('Release',tk.release||'—'),fact(t('Řeší'),el('span',{class:'tk-fact-row'},tk.assignee?[el('span',{class:'tk-avatar','aria-hidden':'true'},initials(tk.assignee)),tk.assignee]:'—',assignMe)),fact(t('Nahlásil'),tk.reporter||'—'),fact(t('Štítky'),tk.labels.join(', ')||'—'),
+     fact('Release',tk.release?el('a',{class:'sys-link',href:'#releases',onclick:()=>{filters.project=tk.project;}},tk.release):'—'),fact(t('Řeší'),el('span',{class:'tk-fact-row'},tk.assignee?[el('span',{class:'tk-avatar','aria-hidden':'true'},initials(tk.assignee)),tk.assignee]:'—',assignMe)),fact(t('Nahlásil'),tk.reporter||'—'),
      fact(t('Odkazy'),tk.refs.length?el('div',{class:'tk-refs'},tk.refs.map(r=>/^https?:\/\//.test(r)?el('a',{href:r,target:'_blank',rel:'noopener noreferrer',class:'sys-link'},r):TICKETISH.test(r)?el('a',{href:'#items/'+r,class:'sys-link'},r):el('code',{},r))):'—'),
-     fact(t('Založeno'),when(tk.createdAt)),fact(t('Změněno'),when(tk.updatedAt)),...(tk.closedAt?fact(t('Uzavřeno'),when(tk.closedAt)):[]),fact(t('Revize'),String(tk.rev)))),
-    edit?.form||null)));
- shortcuts(wrap,{c:()=>commentBox?void commentBox.focus():false});
+     fact(t('Založeno'),when(tk.createdAt)),fact(t('Změněno'),when(tk.updatedAt)),...(tk.closedAt?fact(t('Uzavřeno'),when(tk.closedAt)):[]),fact(t('Revize'),String(tk.rev)))))));
+ shortcuts(wrap,{c:()=>commentBox?void commentBox.focus():false,e:openEdit});
  if(prefs.focusComment){prefs.focusComment=false;commentBox?.focus();}
+ // Opening the form puts the keyboard in its first field; closing it puts it back on the button that opened it.
+ if(keep.focus==='title')edit?.inputs.title?.focus();
+ else if(keep.focus==='edit')editButton?.focus();
 }
 const TICKETISH=/^[A-Z][A-Z0-9]{1,9}-[1-9][0-9]{0,5}$/;
 const FIELD_NAMES=()=>({attachment:t('Příloha'),created:t('Založeno'),title:t('Název položky'),description:t('Popis'),type:t('Typ'),status:t('Stav'),priority:t('Priorita'),release:'Release',assignee:t('Řeší'),labels:t('Štítky'),refs:t('Odkazy')});
@@ -451,13 +470,14 @@ function timeline(tk){
  return el('section',{class:'acc-card'},el('h3',{},t('Historie změn ({n})',{n:events.length})),el('ol',{class:'tk-events'},events.slice(0,EVENTS_SHOWN).map(row)),
   older.length?el('details',{class:'tk-events-more'},el('summary',{},tp(older.length,'{n} starší změna|{n} starší změny|{n} starších změn')),el('ol',{class:'tk-events'},older.map(row))):null);
 }
-function editForm(tk,meta,save,ctx={}){
+// The edit form of one ticket: every editable field once, description included. onCancel closes it.
+function editForm(tk,meta,save,ctx={},onCancel){
  const inputs={},field=(text,input,...more)=>{if(input.getAttribute('name'))inputs[input.getAttribute('name')]=input;return el('label',{},text,input,...more);};
  const releases=meta.releases.filter(r=>r.project===tk.project&&(r.status==='planned'||r.version===tk.release)).map(r=>[r.version,r.status==='released'?t('{version} (vydáno)',{version:r.version}):r.version]);
  const assignee=assigneeInput(tk.assignee,ctx.people||[],ctx.user);
  const description=el('textarea',{name:'description',rows:'8',maxlength:'12000'});description.value=tk.description;
  const editor=mdEditor(description,meta.projects.map(p=>p.key));inputs.description=description;
- const form=el('form',{class:'acc-card tk-form',onsubmit:e=>{e.preventDefault();const f=e.currentTarget;
+ const form=el('form',{class:'acc-card tk-form tk-edit','aria-label':t('Upravit položku {id}',{id:tk.id}),onsubmit:e=>{e.preventDefault();const f=e.currentTarget;
    const values={title:f.title.value.trim(),description:f.description.value.trim(),type:f.type.value,status:f.status.value,priority:f.priority.value,release:f.release.value||null,assignee:f.assignee.value.trim()||null,labels:[...new Set(splitList(f.labels.value).map(v=>v.toLowerCase()))],refs:[...new Set(f.refs.value.split(/\r?\n/).map(v=>v.trim()).filter(Boolean))]};
    const changed=Object.fromEntries(Object.entries(values).filter(([k,v])=>JSON.stringify(v)!==JSON.stringify(tk[k])));
    if(Object.keys(changed).length)return save(changed,f.querySelector('button[type=submit]'),true);}},
@@ -469,7 +489,7 @@ function editForm(tk,meta,save,ctx={}){
   field(t('Štítky (čárkou)'),el('input',{name:'labels',value:tk.labels.join(', ')})),
   field(t('Odkazy (commit, PR, položka; každý na vlastní řádek)'),(()=>{const a=el('textarea',{name:'refs',rows:'2'});a.value=tk.refs.join('\n');return a;})()),
   el('label',{},t('Popis'),editor.node),mdHint(editor.toggle),
-  el('div',{class:'acc-actions'},el('button',{type:'submit',class:'acc-btn primary'},t('Uložit změny'))));
+  el('div',{class:'acc-actions'},onCancel?el('button',{type:'button',class:'acc-btn',onclick:onCancel},t('Zrušit úpravy')):null,el('button',{type:'submit',class:'acc-btn primary'},t('Uložit změny'))));
  return {form,inputs,initial:Object.fromEntries(Object.entries(inputs).map(([k,input])=>[k,input.value]))};
 }
 
@@ -482,7 +502,7 @@ const NO_COUNTS=Object.freeze({open:0,'in-progress':0,done:0,cancelled:0});
 function renderReleases(wrap,ctx,data,notice=''){
  const {canWrite}=ctx,msg=status(),redraw=()=>releasesPage(wrap,ctx).catch(e=>fail(msg,e));if(notice)msg.textContent=notice;
  const add=canWrite&&data.projects.length?{label:t('+ Nová položka'),onclick:()=>newTicket(data.projects,filters.project||null,ctx)}:null;
- const title=head(t('Releasy'),t('Verze, do kterých položky patří: co zbývá, co je hotové a kdy má release vyjít.'),[add]);
+ const title=head(t('Releasy'),t('Verze, do kterých položky patří: co zbývá, co je hotové a kdy má release vyjít.'),[add],data.provenance);
  if(!data.projects.length)return show(wrap,title,noProjects(ctx,redraw));
  // The saved release is shown at once from the POST reply; the follow-up refresh (new counts) may fail on its own.
  const saveRelease=async(body,button)=>{
@@ -568,7 +588,7 @@ async function projectsPage(wrap,ctx){
  const {canWrite}=ctx,data=await load(wrap,api('/api/tickets'));if(!data)return;
  const msg=status(),redraw=()=>projectsPage(wrap,ctx).catch(e=>fail(msg,e));
  const add=canWrite&&data.projects.length?{label:t('+ Nová položka'),primary:true,onclick:()=>newTicket(data.projects,null,ctx)}:null;
- const title=head(t('Projekty'),t('Na čem se pracuje: stav položek, aktivita a nejbližší release každého projektu.'),[canWrite&&data.projects.length?{label:t('+ Nový projekt'),onclick:()=>newProject(redraw)}:null,add]);
+ const title=head(t('Projekty'),t('Na čem se pracuje: stav položek, aktivita a nejbližší release každého projektu.'),[canWrite&&data.projects.length?{label:t('+ Nový projekt'),onclick:()=>newProject(redraw)}:null,add],data.provenance);
  if(!data.projects.length)return show(wrap,title,noProjects(ctx,redraw));
  const open=(project,hash)=>e=>{e.stopPropagation();Object.assign(filters,defaults,{project});location.hash=hash;};
  const card=p=>{
@@ -596,7 +616,7 @@ async function projectPage(wrap,ctx){
  const add=canWrite?{label:t('+ Nová položka'),primary:true,onclick:()=>newTicket(data.projects,id,ctx)}:null;
  show(wrap,
   el('nav',{class:'tk-crumbs','aria-label':t('Drobečková navigace')},el('a',{href:'#projects'},t('Projekty')),el('span',{class:'tk-dim'},'/'),el('b',{},p.name),el('span',{class:'sec-pill'},p.key),p.type?el('span',{class:'sec-pill'},label(PROJECT_TYPES(),p.type)):null),
-  pageHeader({title:p.name,lead:p.description||undefined,actions:[canWrite?{label:t('Upravit'),onclick:()=>editProject(p,redraw)}:null,{label:`${t('Tabulka')} →`,onclick:to('#items')},{label:`${t('Releasy')} →`,onclick:to('#releases')},{label:'Review →',href:'#review/'+id},add].filter(Boolean)}),
+  pageHeader({title:p.name,lead:p.description||undefined,provenance:data.provenance,actions:[canWrite?{label:t('Upravit'),onclick:()=>editProject(p,redraw)}:null,{label:`${t('Tabulka')} →`,onclick:to('#items')},{label:`${t('Releasy')} →`,onclick:to('#releases')},{label:'Review →',href:'#review/'+id},add].filter(Boolean)}),
   msg,
   mine.length?el('div',{class:'acc-card tk-hero-row'},health(mine),activity(mine,4),nextBlock(data.releases,id)):null,
   mine.length?boardView(mine,{canWrite,msg,redraw,projects:data.projects,showProject:false})

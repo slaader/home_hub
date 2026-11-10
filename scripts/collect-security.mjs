@@ -15,6 +15,7 @@ import {fileURLToPath} from 'node:url';
 import {buildSecurity} from '../server/security-data.mjs';
 import {loadMachineDescriptors} from '../server/home-data.mjs';
 import {site as loadedSite,sshHosts,machineIds} from '../server/site-config.mjs';
+import {collectorRun} from '../server/collector-run.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 
@@ -59,7 +60,7 @@ export async function forgejoKeys(git,exec=run){
  * → the document written
  */
 export async function collectSecurity({site=loadedSite(),hosts=sshHosts(site,m=>m.ssh.keys),out,exec=run,forgejo=true,portOpen=tcpOpen,collectedFrom=null,now=Date.now(),
- machinesDir=process.env.MACHINES_DIR||path.join(root,'data','machines'),probeFile=path.join(root,'scripts','security','ssh-probe.sh'),warn=()=>{}}){
+ machinesDir=process.env.MACHINES_DIR||path.join(root,'data','machines'),probeFile=path.join(root,'scripts','security','ssh-probe.sh'),warn=()=>{},started=null}){
  const router=site.machines.find(m=>m.role==='router'&&m.ip)||null,git=site.security;
  const script=await readFile(probeFile,'utf8');
  const [probeResults,forgejoDoc,routerSsh]=await Promise.all([
@@ -68,8 +69,10 @@ export async function collectSecurity({site=loadedSite(),hosts=sshHosts(site,m=>
   router?portOpen(router.ip,22):null,
  ]);
  const descriptors=await loadMachineDescriptors(machinesDir,machineIds(site)).catch(()=>[]);
- const doc=buildSecurity({probes:Object.fromEntries(probeResults),forgejo:forgejoDoc,descriptors,site,now,collectedFrom:collectedFrom??(await exec('hostname',['-s'])).stdout.trim(),
+ const built=buildSecurity({probes:Object.fromEntries(probeResults),forgejo:forgejoDoc,descriptors,site,now,collectedFrom:collectedFrom??(await exec('hostname',['-s'])).stdout.trim(),
   extraMachines:router?[{id:router.id,sshOpen:routerSsh,note:routerSsh?'Port 22 je otevřený, ale Home Hub k routeru SSH klíč nemá.':'SSH je na routeru vypnuté (port 22 zavřený).'}]:[]});
+ // How this run was started (a scheduled job or a terminal), when that is knowable: server/collector-run.mjs.
+ const doc=started?{...built,run:started}:built;
  await mkdir(path.dirname(out),{recursive:true});
  const tmp=`${out}.${process.pid}.tmp`;
  await writeFile(tmp,JSON.stringify(doc,null,1)+'\n',{mode:0o600});await rename(tmp,out);
@@ -93,7 +96,7 @@ if(process.argv[1]===fileURLToPath(import.meta.url)){
  for(const [id,alias] of hosts)if(alias==='skip')hosts.delete(id);
  if(!hosts.size){console.log(NOTHING_TO_PROBE);process.exit(0);}
  const started=Date.now();
- const doc=await collectSecurity({site,hosts,out,forgejo:!args.includes('--no-forgejo'),warn:m=>console.error(m)});
+ const doc=await collectSecurity({site,hosts,out,forgejo:!args.includes('--no-forgejo'),warn:m=>console.error(m),started:collectorRun()});
  for(const m of doc.machines)console.log(`${m.id.padEnd(12)} ${m.reachable?`${m.accounts.length} accounts`:m.error||m.note||'unreachable'}`);
  console.log(`${doc.keys.length} SSH keys, ${doc.otherKeys.length} other keys, ${doc.unknownAuthorized.length} unknown authorized, ${doc.findings.length} findings → ${path.relative(process.cwd(),out)} (${((Date.now()-started)/1000).toFixed(1)} s)`);
 }

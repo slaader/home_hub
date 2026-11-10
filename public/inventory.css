@@ -1,4 +1,4 @@
-/* Inventory: the map (#inventory-map), its table view, the services catalog (#services) and the entry
+/* Inventory: the map (#inventory-map), its table view, its services view (#inventory-map/services) and the entry
    dialog. Everything reads the design tokens of tokens.css (spacing, radius, type, colour), so the pages
    follow the theme; the only colours of its own are the eight category hues below (--cat), used for the
    small dot on a card and its chip. */
@@ -32,7 +32,7 @@
 .inv-btn{appearance:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;background:var(--color-surface-raised);border:1px solid var(--color-border);color:var(--color-text);border-radius:var(--radius-m);padding:var(--space-2) var(--space-3);font:var(--weight-medium) var(--text-s)/1.2 var(--font-sans);cursor:pointer;white-space:nowrap;text-decoration:none}
 .inv-page a.inv-btn,.inv-dialog a.inv-btn{color:var(--color-text)}.inv-page a.inv-btn:hover,.inv-dialog a.inv-btn:hover{text-decoration:none}
 .inv-btn:hover:not(:disabled){border-color:var(--color-border-strong);background:color-mix(in srgb,var(--color-text) 6%,var(--color-surface-raised))}
-.inv-btn:focus-visible,.inv-chip:focus-visible,.inv-mode button:focus-visible,.inv-sort:focus-visible,.inv-rowbtn:focus-visible,.inv-name:focus-visible,.inv-more:focus-visible,.inv-zoom-btn:focus-visible,.inv-stat:focus-visible,.inv-service:focus-visible{outline:2px solid var(--color-focus);outline-offset:2px}
+.inv-btn:focus-visible,.inv-chip:focus-visible,.inv-mode button:focus-visible,.inv-sort:focus-visible,.inv-rowbtn:focus-visible,.inv-name:focus-visible,.inv-more:focus-visible,.inv-zoom-btn:focus-visible,.inv-stat:focus-visible{outline:2px solid var(--color-focus);outline-offset:2px}
 .inv-btn:disabled{opacity:.45;cursor:default}
 .inv-btn.primary{background:var(--color-accent);border-color:var(--color-accent);color:var(--color-accent-text);font-weight:600}
 .inv-btn.primary:hover:not(:disabled){background:color-mix(in srgb,var(--color-accent) 88%,var(--color-text));border-color:transparent}
@@ -175,23 +175,24 @@
 .inv-rowbtn{appearance:none;background:none;border:0;padding:0;color:var(--color-text);font:600 var(--text-s) var(--font-sans);text-align:left;cursor:pointer}
 .inv-rowbtn:hover{color:var(--color-accent)}
 
-/* services catalog */
-.inv-service-group{margin-bottom:var(--space-5)}
-.inv-service-group h2{display:flex;align-items:baseline;gap:var(--space-2);margin:0 0 var(--space-3);font:600 var(--text-m) var(--font-sans)}
-.inv-service-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:var(--space-3)}
-.inv-service{display:flex;flex-direction:column;gap:var(--space-2);min-width:0;padding:var(--space-3) var(--space-4);background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-l);cursor:pointer;transition:border-color .12s,transform .12s}
-.inv-service:hover{border-color:var(--color-border-strong);transform:translateY(-1px)}
-.inv-service.gap{border-color:color-mix(in srgb,var(--color-warn) 35%,var(--color-border))}
-.inv-service header{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--space-2)}
-.inv-service h3{margin:0;font:600 var(--text-m)/1.25 var(--font-sans);overflow-wrap:anywhere}
-.inv-service p{margin:0}
-.inv-service-addr{font-size:var(--text-xs);overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.inv-service header .inv-badge{flex:0 1 auto;max-width:55%;overflow:hidden;text-overflow:ellipsis}
-.inv-service-version{flex:1 1 100%;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--color-text-dim)}
-.inv-service-notes{color:var(--color-text-dim);font-size:var(--text-s);line-height:var(--leading-body);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-.inv-service footer{display:flex;flex-wrap:wrap;gap:var(--space-1) var(--space-3);margin-top:auto;padding-top:var(--space-2);border-top:1px solid var(--color-border);font:11px var(--font-mono);color:var(--color-text-faint)}
-.inv-service-when{margin-left:auto}
-@media (prefers-reduced-motion:reduce){.inv-service,.inv-node{transition:none}.inv-service:hover{transform:none}}
+/* services view: the runtime entries as one dense list (it reuses the table's styles) */
+@media(min-width:901px){
+ .inv-services{table-layout:fixed;min-width:880px}
+ .inv-services th:nth-child(1){width:22%}.inv-services th:nth-child(2){width:22%}.inv-services th:nth-child(3){width:12%}
+ .inv-services th:nth-child(4){width:15%}.inv-services th:nth-child(5){width:15%}.inv-services th:nth-child(6){width:14%}
+ .inv-services td{padding-top:7px;padding-bottom:7px}
+}
+.inv-services td small{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.inv-services .inv-td-name{min-width:0}
+.inv-addr{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.inv-rel{display:block;line-height:1.45}
+.inv-rel-item{appearance:none;display:inline;padding:0;border:0;background:none;color:var(--color-text);font:var(--text-xs)/1.45 var(--font-sans);text-align:left;cursor:pointer;overflow-wrap:anywhere}
+.inv-rel-item:not(:last-of-type)::after{content:', ';white-space:pre;color:var(--color-text-faint)}
+.inv-rel-item:hover{color:var(--color-accent);text-decoration:underline}
+.inv-rel-item:focus-visible{outline:var(--focus-ring);outline-offset:1px;border-radius:var(--radius-xs)}
+.inv-rel-more{margin-left:var(--space-1);font:var(--text-xs) var(--font-mono);color:var(--color-text-faint);white-space:nowrap}
+.inv-rel-none{color:var(--color-text-faint);font-size:var(--text-xs)}
+@media (prefers-reduced-motion:reduce){.inv-node{transition:none}}
 
 /* versions from Systémy (admins) */
 .inv-versions{margin:4px 0 10px;padding:10px var(--space-3);border:1px solid color-mix(in srgb,var(--color-accent) 30%,var(--color-border));border-radius:var(--radius-m);background:color-mix(in srgb,var(--color-accent) 6%,transparent)}

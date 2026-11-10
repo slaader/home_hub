@@ -12,6 +12,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {checkUpstreams,createFetchJson,loadGithubToken} from '../server/systems-upstream.mjs';
 import {readWatch} from '../server/software-watch.mjs';
+import {collectorRun} from '../server/collector-run.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const args=process.argv.slice(2);
@@ -29,7 +30,8 @@ const previous=await readFile(file,'utf8').then(JSON.parse).catch(()=>null);
 const started=Date.now();
 const github=await loadGithubToken();
 if(github.invalid)console.warn(`GitHub token from ${github.source} is not a valid token; checking anonymously.`);
-const doc=await checkUpstreams(registry,{previous,fetchJson:createFetchJson({token:github.token})});
+// run: how this check was started (a scheduled job or a terminal), when that is knowable.
+const run=collectorRun(),doc={...await checkUpstreams(registry,{previous,fetchJson:createFetchJson({token:github.token})}),...(run?{run}:{})};
 await mkdir(outDir,{recursive:true,mode:0o700});
 const tmp=`${file}.${process.pid}.tmp`;
 await writeFile(tmp,JSON.stringify(doc,null,1)+'\n',{mode:0o600});await rename(tmp,file);

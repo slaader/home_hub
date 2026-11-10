@@ -42,6 +42,10 @@ const rows=(list,key)=>(list||[]).map(x=>[key(x),x]),docs=list=>(list||[]).map((
 export const ticketSearch=(coll,t)=>coll!=='tickets'?null:{kind:'ticket',id:t.id,project:t.project,updated:t.updatedAt,title:`${t.id} ${t.title}`,
  body:[t.description,...t.comments.map(c=>c.text),...(t.attachments||[]).map(a=>a.name),t.labels.join(' '),t.refs.join(' '),t.assignee,t.reporter].filter(Boolean).join('\n')};
 
+// Who made a ticket and who changed it later, as [name, at] pairs (server/provenance.mjs → authoredProvenance).
+export const ticketAuthors=t=>({created:[[t.reporter,t.createdAt]],
+ changes:[...(t.history||[]).filter(h=>h.field!=='created').map(h=>[h.by,h.at]),...(t.comments||[]).map(c=>[c.by,c.at])]});
+
 export function createTicketStore(root,{db=openDb(path.join(root,'hub.db')),seedProjects=[]}={}){
  let queue=Promise.resolve();
  const store=db.collection('tickets',{empty:()=>empty(seedProjects),legacy:path.join(root,'tickets.json'),searchKinds:['ticket'],search:ticketSearch,
@@ -81,7 +85,9 @@ export function createTicketStore(root,{db=openDb(path.join(root,'hub.db')),seed
    &&(!f.assignee||(f.assignee==='none'?t.assignee===null:t.assignee===f.assignee))&&(!f.label||t.labels.includes(f.label));
   return {f,match};
  }
- async function list(filter={}){
+ // authors: true adds `authors` = {created, changes, seeded} over the projects, releases and tickets of the
+ // project filter (not the other filters): who made and changed them, and how many projects the site seeded.
+ async function list(filter={},{authors=false}={}){
   const {f,match}=ticketFilter(filter);
   if(f.q&&f.q.length>100)fail('invalid');
   const data=await read();
@@ -94,7 +100,14 @@ export function createTicketStore(root,{db=openDb(path.join(root,'hub.db')),seed
   const releases=data.releases.filter(r=>!f.project||r.project===f.project).map(r=>{
    const mine=data.tickets.filter(t=>t.project===r.project&&t.release===r.version),counts=Object.fromEntries(TICKET_STATUSES.map(s=>[s,mine.filter(t=>t.status===s).length]));
    return {...r,counts,total:mine.length};}).sort((a,b)=>a.project.localeCompare(b.project)||compareVersions(a.version,b.version));
-  return {updatedAt:data.updatedAt,projects:data.projects.map(publicProject),releases,total,tickets:tickets.map(summary)};
+  const out={updatedAt:data.updatedAt,projects:data.projects.map(publicProject),releases,total,tickets:tickets.map(summary)};
+  if(!authors)return out;
+  const facts={created:[],changes:[],seeded:0},mine=x=>!f.project||(x.project??x.id)===f.project;
+  // A project without an author was seeded from the site configuration (site.json → tracker.projects).
+  for(const p of data.projects.filter(mine)){if(p.createdBy)facts.created.push([p.createdBy,p.createdAt]);else facts.seeded++;}
+  for(const r of data.releases.filter(mine))facts.created.push([r.createdBy,r.createdAt]);
+  for(const t of data.tickets.filter(mine)){const a=ticketAuthors(t);facts.created.push(...a.created);facts.changes.push(...a.changes);}
+  return {...out,authors:facts};
  }
  async function get(id){const data=await read(),t=ticketOf(data,id);return {...t,attachments:t.attachments||[]};}
  // Full-text search over tickets (title, description, comments, attachment names, labels, refs, people) with the

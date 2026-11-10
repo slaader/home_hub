@@ -161,6 +161,63 @@ Every JSON error has this shape:
 
 Timestamps are ISO 8601 UTC strings. Byte sizes are integers. A value the source did not report is `null`.
 
+## Provenance
+
+The answers behind the pages carry one extra field, `provenance`: where the data in that answer comes from. It
+is additive (a client that does not know it loses nothing) and derived from what the records themselves carry,
+never decided per page. The web UI shows it as a pill next to the page title ("Agent", "Collector · 2 days ago",
+"Mixed") with the breakdown on demand.
+
+```json
+"provenance": {
+  "kind": "mixed",
+  "lastAt": "2026-11-10T19:12:03.000Z",
+  "summary": "Written by agents, 31 records, 4 changes, codex, claude-code, last 2026-11-10T19:12:03.000Z; edited by hand, 6 records, 12 changes, alice, last 2026-11-09T08:00:00.000Z.",
+  "kinds": [
+    {"kind": "agent", "count": 31, "unit": "records", "changes": 4, "accounts": ["codex", "claude-code"], "lastAt": "2026-11-10T19:12:03.000Z"},
+    {"kind": "manual", "count": 6, "unit": "records", "changes": 12, "people": ["alice"], "lastAt": "2026-11-09T08:00:00.000Z"}
+  ]
+}
+```
+
+| Field | |
+|---|---|
+| `kind` | The one kind every source has; `mixed` when they differ; `none` when the answer holds no data yet (`kinds` is then `[]`) |
+| `kinds` | The sources, busiest first, at most 12 |
+| `lastAt` | The newest `lastAt` of the sources, or `null` |
+| `summary` | One English sentence for a script or an agent. A UI builds its own text from the fields |
+
+A source has `kind` and only the fields that apply:
+
+| `kind` | Meaning | Derived from |
+|---|---|---|
+| `manual` | Edited by a person in the web UI or the native app | Inventory `verified_by: "user edit in Home Hub"`; tickets and review rounds whose author is a sign-in account |
+| `agent` | Written with a service-account key, over MCP or the API; `accounts` names them | Inventory `verified_by: "Home Hub API · <account>"`; authors that are service accounts (or a key's name) |
+| `config` | Read from a configuration file; `source` names it | Tracker projects seeded from `site.json → tracker.projects`; the software watch list (`local/software-watch.json`) |
+| `collector` | Written by an automated, read-only job; `source` is its script | The collector state (`collectedAt`, interval, `state`) and the snapshot's `run` stamp |
+| `telemetry` | Reported live by an agent on a machine (Thermo) | Reserved for the overview's telemetry; no page above sends it yet |
+| `plugin` | Supplied by a plugin; `source` is the plugin or adapter id | The router adapter, when a plugin provides it |
+| `other` | A stamp or name nobody on this hub carries: an import, a hand edit of the file, a removed account; `detail` lists them | Anything the rows above do not match |
+
+| Source field | |
+|---|---|
+| `id` | A stable name of the source inside one answer (`systems`, `upstream`, `watch`, `security`), for a page that shows one part |
+| `source` | The script, file, plugin or adapter |
+| `host` | The machine the collector ran on, when the snapshot says so |
+| `count`, `unit` | How many records come from it; `unit` is `entries` (inventory), `items` (tickets), `records` (the tracker list: projects, releases and items together), `projects`, `rounds`, `machines`, `sources` or `clients` |
+| `changes` | Later changes by this kind of source to records it did not necessarily create (comments, edits, decisions) |
+| `accounts`, `people` | Service-account names and user names, busiest first, at most 8 (`accountsMore` / `peopleMore` count the rest) |
+| `lastAt` | When it last wrote: an ISO time, or a `YYYY-MM-DD` day for inventory stamps |
+| `state`, `intervalSeconds` | A collector's state (see [Collector state](#collector-state)) and how often it is scheduled |
+| `schedule` | How the last run was started: `{"trigger":"scheduled","scheduler":"launchd"\|"systemd","label"?}` or `{"trigger":"manual"}` (run in a terminal). Absent when the snapshot does not say (written before the stamp existed, or by cron or a pipe) |
+| `detail` | Free text: the stamps or names counted as `other`, for example |
+
+Answers that carry it: `GET /api/inventory`, `GET /api/services` (the runtime entries alone), `GET /api/tickets`,
+`GET /api/tickets/<ID>` and the ticket writes, `GET /api/review`, `GET /api/review/sets/<R-n>`, `GET /api/security`,
+`GET /api/systems` (sources `systems`, `upstream`, `watch`), `GET /api/software-watch` and `GET /api/router`, also
+on their `404 …_MISSING` answers where a collector simply has not run. Plugins build theirs with the same helper
+([plugins.md](plugins.md#provenance)).
+
 ## The UI manifest
 
 `GET /api/ui/manifest` needs no sign-in. It tells a client what this hub is and, to a signed-in caller, what
@@ -202,10 +259,11 @@ and `pages` marks it `admin: true`. The data routes behind a page check the scop
 ## Home: the overview
 
 - `GET /api/home` → `{"poll","schemaVersion":1,"generatedAt","machines":[…],"telemetry","router"}`. One entry per machine from the site configuration (site.json → `machines`) and per added machine: identity (`id`, `name`, `hostname`, `ip`, `kind`: `thermo`, `nas`, `router` or `other`), `props` (static hardware), `online` (`online`, `stale`, `offline`, `unknown`), `lastSeen`, `quad` (CPU, GPU, power, temperature and memory averaged over the poll interval, from Thermo), `volumes`, `services` and `stack`.
-  - Every machine also carries `role` (`computer`, `nas`, `router`, `other`), `source` (`site` = the site configuration, `ui` = added on the overview, `agent` = written through the machine API), `readOnly`, `picture` (a path), `image` (its own picture or `null`), `telemetry` and `runtimes`. Added machines have `added:true`, `hash`, `pictureId`, `createdAt`/`createdBy` and `updatedAt`/`updatedBy`.
+  - Every machine also carries `role` (`computer`, `nas`, `router`, `other`), `source` (`site` = the site configuration, `ui` = added on the overview, `agent` = written through the machine API), `readOnly`, `picture` (a path), `image` (its own picture or `null`), `telemetry`, `runtimes` and `spark`. Added machines have `added:true`, `hash`, `pictureId`, `createdAt`/`createdBy` and `updatedAt`/`updatedBy`.
   - `telemetry` = `{"state","thermoId","lastSampleAt","ageSeconds","reason"}`. `state` is `not-installed` (the machine names no telemetry host), `not-applicable` (a router), `ok` (newest reading at most 3 minutes old), `stale` (readings exist, the newest is older) or `unreachable` (a host is named and nothing was ever read). `reason` for the last two: `no-login` (the hub has no login for that host), `denied`, `down`, `no-data`, `waiting`. A failed read never means the machine is off; `online` keeps its earlier meaning for existing clients.
-  - Top-level `telemetry` = `{"agent":"Thermo","repoUrl","staleAfterSeconds":180}`: the optional telemetry agent and where to get it (one constant, `TELEMETRY_REPO_URL` in `server/thermo-client.mjs`, still a placeholder until its repository is published).
-  - `stack.source` is `published` (with `publishedAt`, `publishedBy`, `hash`, `layerKeys`) when an agent published it, `collected` for a collected descriptor, absent for the site configuration. `runtimes` is `null` until a `home.runtimes` provider reports local LLM runtimes for the machine (docs/plugins.md). A stack block whose service is reported live gets its `port` and `desc` rewritten as source-language sentences (`":8081 · živě"`); `portT` and `descT` carry the same as translatable parts, like the collector texts below.
+  - Top-level `telemetry` = `{"agent":"Thermo","repoUrl","staleAfterSeconds":180,"adapters":[…]}`: the optional telemetry agent and where to get it (one constant, `TELEMETRY_REPO_URL` in `server/thermo-client.mjs`, still a placeholder until its repository is published). `adapters` lists the agents this hub can connect a device to, each `{"id","name","repoUrl","connect":"account","defaultPort","summary"}` (`summary` is a source-language sentence). The Telemetry step of Add device offers exactly these; today there is one, `thermo`.
+  - `spark` = `{"series":"cpu"|"gpu","end","stepSeconds":10,"windowSeconds":600,"values":[…60]}` on a machine with telemetry readings in the window, else `null`: the tile's small chart. `values` are percentages per 10 s step, the last one ending at `end` (unix seconds); `null` is a step without a reading and is drawn as a gap. `series` is `gpu` for a machine that has `runtimes`, else `cpu`.
+  - `stack.source` is `published` (with `publishedAt`, `publishedBy`, `hash`, `layerKeys`) when an agent published it, `collected` for a collected descriptor, absent for the site configuration. `runtimes` is `null` unless a `home.runtimes` provider reports local LLM runtimes for the machine (docs/plugins.md); the machine page then has no such section. Otherwise it is `{"source","observedAt","runtimes":[{"id","name","kind","status","url","version","models":[{"id","state","sizeGb","contextTokens","ttlRemainingSeconds"}],"stats":[{"label","value"}]}]}`. A stack block whose service is reported live gets its `port` and `desc` rewritten as source-language sentences (`":8081 · živě"`); `portT` and `descT` carry the same as translatable parts, like the collector texts below.
 - `GET /api/home/history?machine=<id>&range=30m|7d|30d|6m` → chart buckets for a machine that reports through Thermo; other machines answer with `points: []` and a `reason`.
 - `POST /api/home/refresh` `{}` → the same document after an immediate Thermo pull (rate limited). `POST /api/home/settings` `{"intervalSeconds":15|30|60}` changes the pull interval (scope `home:settings`).
 - `GET /api/ui/manifest` → what the web shell draws itself from; see [The UI manifest](#the-ui-manifest).
@@ -288,8 +346,8 @@ Send only changed fields when updating. Dates must be real calendar dates in `YY
 
 Routes:
 
-- `GET /api/tickets?project=&status=open|in-progress|done|cancelled|active[,…]&type=&priority=&release=<version>|none&assignee=<name>|none&label=&q=&limit=` → `{updatedAt, projects, releases:[…, counts:{open,in-progress,done,cancelled}, total], total, tickets:[… without comments/history, comments:<count>]}`. Release counts are over all tickets, not just the filtered ones.
-- `GET /api/tickets/<ID>` → the full ticket with `comments`, `history` and `rev`.
+- `GET /api/tickets?project=&status=open|in-progress|done|cancelled|active[,…]&type=&priority=&release=<version>|none&assignee=<name>|none&label=&q=&limit=` → `{updatedAt, projects, releases:[…, counts:{open,in-progress,done,cancelled}, total], total, tickets:[… without comments/history, comments:<count>], provenance}`. Release counts are over all tickets, not just the filtered ones. `provenance` ([Provenance](#provenance)) counts who created the listed tickets (people, service accounts, projects seeded from site.json) and who changed them later.
+- `GET /api/tickets/<ID>` → the full ticket with `comments`, `history`, `rev` and `provenance` (its creator, then everyone who commented or changed it). The ticket writes below answer with the same shape.
 - `GET /api/tickets/search?q=<words>&project=&status=&type=&priority=&release=&assignee=&label=&limit=1..100` (default 20) → `{q, total, tickets:[… as in the list, plus snippet, score]}`. Full-text search inside tickets (title, description, comments, attachment names, labels, refs, people) with the list's field filters; `q` follows the rules of [Search](#search) and needs at least one letter or digit. Best match first; `total` counts every match. `400` for a bad parameter.
 - `GET /api/tickets/people` → `{people:[{name, kind: user|agent|other, assigned, active}]}`: the names the assignee field suggests. Sign-in accounts (`user`) and service accounts (`agent`) that are not disabled, then every name tickets already carry (`other`), the busiest assignee first. `assigned` counts tickets assigned to the name, `active` those still open or in progress. Names and counts only: no ids, roles or scopes.
 - `POST /api/tickets` `{project, title, description?, type?, status?, priority?, release?, assignee?, labels?, refs?}` → `201` ticket. Defaults: `task`, `open`, `normal`.
@@ -322,8 +380,8 @@ Projects carry `type`: `app`, `game`, `other` or `null` (`POST /api/tickets/proj
 Variants agents propose for a project (HTML mockups, images, 3D models as `.glb`), decided in `#review`. The full contract is in
 [review.md](review.md). Writes need `review:write` for API keys.
 
-- `GET /api/review?project=&ticket=&status=open|active|done|archived|all&feedback=pending` → `{sets:[summary]}`.
-- `GET /api/review/sets/<R-n>` → the full set with all rounds, decisions and comments.
+- `GET /api/review?project=&ticket=&status=open|active|done|archived|all&feedback=pending` → `{sets:[summary], provenance}`.
+- `GET /api/review/sets/<R-n>` → the full set with all rounds, decisions, comments and `provenance`. Publishing a round counts as the record (`unit: rounds`), a decision or comment as a change ([Provenance](#provenance)).
 - `HEAD|GET /api/review/blobs/<sha256>` → a published file (range requests); `GET /api/review/frame/<sha256>` → a sandboxed HTML mockup.
 - `PUT /api/review/blobs/<sha256>?offset=&size=` (`application/octet-stream`, ≤ 8 MiB per chunk) → `{received,size,complete}`; `409` with `received` on a wrong offset.
 - `POST /api/review/publish` (≤ 64 kB) → `201` new set or `200` next round; `POST /api/review/feedback` (≤ 64 kB) `{set, round, item, rev, variant, status, note?, comments?, attachments?}`; `POST /api/review/sets` `{id, rev, status?, title?}`.
@@ -398,8 +456,8 @@ Use this route to ask "has anything arrived?" (the getting-started checklist doe
 
 ### `GET /api/systems` and `GET /api/security` (admins, or API keys with `security:read`)
 
-- `/api/systems` → `{"schemaVersion":1,"generatedAt","collectedAt","oldestCollectedAt","collectedFrom","upstreamCheckedAt","upstreamFailed","categories","machines":[…],"software":[…],"collector"}`. A machine: `id`, `name`, `kind` (`mac` | `nas`), `reachable`, `stale` (the last probe failed and this is its previous record), `error`, `collectedAt`, `hw`, `uptimeSeconds`, `os` (`name`, `version`, `status`, `updates[]`), `checks[]`, `listening[]`, `brewOutdated[]`, `summary`. A check: `{"id","label","state","value","detail"}` with `state` one of `ok`, `warn`, `crit`, `info`, `unknown`. A software row: `id`, `name`, `category`, `machine`, `installed`, `path`, `source` (`label`, `url`), `latest`, `latestUrl` (the release page, when the source has one), `publishedAt`, `status` (`update`, `current`, `ahead`, `unknown`, `missing`, `n/a`, `floating`), `note`, `running`, `stale`, `upstreamStale`, `upstreamError`, `upstreamCheckedAt`, `upstreamFailedAt`, `inventory` (inventory entry ids this row describes).
-- `/api/security` → `{"schemaVersion":1,"collectedAt","collectedFrom","machines":[…],"keys":[…],"otherKeys":[…],"unknownAuthorized":[…],"forgejo","findings":[…],"collector"}`. A key: `fingerprint`, `type`, `bits`, `name`, `comment`, `copies[]` (`machine`, `owner`, `path`, `mode`, `mtime`, `encrypted`, `backup`), `access[]` (what it opens), `routes[]`. Private key material is never collected: fingerprints, paths and public `authorized_keys` lines only.
+- `/api/systems` → `{"schemaVersion":1,"generatedAt","collectedAt","oldestCollectedAt","collectedFrom","upstreamCheckedAt","upstreamFailed","categories","machines":[…],"software":[…],"collector","provenance"}` (sources `systems`, `upstream`, `watch`; the protection page shows `systems` alone). A machine: `id`, `name`, `kind` (`mac` | `nas`), `reachable`, `stale` (the last probe failed and this is its previous record), `error`, `collectedAt`, `hw`, `uptimeSeconds`, `os` (`name`, `version`, `status`, `updates[]`), `checks[]`, `listening[]`, `brewOutdated[]`, `summary`. A check: `{"id","label","state","value","detail"}` with `state` one of `ok`, `warn`, `crit`, `info`, `unknown`. A software row: `id`, `name`, `category`, `machine`, `installed`, `path`, `source` (`label`, `url`), `latest`, `latestUrl` (the release page, when the source has one), `publishedAt`, `status` (`update`, `current`, `ahead`, `unknown`, `missing`, `n/a`, `floating`), `note`, `running`, `stale`, `upstreamStale`, `upstreamError`, `upstreamCheckedAt`, `upstreamFailedAt`, `inventory` (inventory entry ids this row describes).
+- `/api/security` → `{"schemaVersion":1,"collectedAt","collectedFrom","machines":[…],"keys":[…],"otherKeys":[…],"unknownAuthorized":[…],"forgejo","findings":[…],"collector","provenance"}`. A key: `fingerprint`, `type`, `bits`, `name`, `comment`, `copies[]` (`machine`, `owner`, `path`, `mode`, `mtime`, `encrypted`, `backup`), `access[]` (what it opens), `routes[]`. Private key material is never collected: fingerprints, paths and public `authorized_keys` lines only.
 - **Text in two forms.** Labels, values, details, notes and finding titles are Czech sentences (the UI's source language). A sentence built from data also comes as parts, in a sibling field ending in `T`, so a client can show it in another language: `"value": "zapnutý · 12 pravidel", "valueT": [{"key": "zapnutý · {rules} pravidel", "params": {"rules": 12}}]`. The fields are `valueT`, `detailT` (checks), `noteT`, `source.labelT` (software rows) and `titleT`, `detailT` (findings). Translate each `key` (English is in `public/i18n-en-*.js`), fill the parameters, join the parts with a space; a parameter that is a list holds labels to translate one by one. A snapshot written before the parts existed has only the text.
 
 ### Software watch list
@@ -408,7 +466,7 @@ Which programs the versions page follows. A site keeps its own list in `local/so
 
 Both routes need the `software:write` scope with an API key (old read/write keys never hold it), or an administrator's session in the browser.
 
-- `GET /api/software-watch` → `{"schemaVersion":1,"source":"local"|"none","file","writable","example","categories":{id:label},"items":[{…item,"hash"}],"machines":[{"id","name"}],"detectKinds","upstreamTypes","cmdArgs","schemes","limits"}`. `machines` are the machine ids a detect rule may name (the ones probed with `"probe": "mac"`).
+- `GET /api/software-watch` → `{"schemaVersion":1,"source":"local"|"none","file","writable","example","categories":{id:label},"items":[{…item,"hash"}],"machines":[{"id","name"}],"detectKinds","upstreamTypes","cmdArgs","schemes","limits","provenance"}` (`config`, naming the file, while a list exists). `machines` are the machine ids a detect rule may name (the ones probed with `"probe": "mac"`).
 - `POST /api/software-watch` applies one change and saves the file atomically:
 
 | Body | Does |
@@ -443,7 +501,7 @@ An item:
 
 The client census and the router's health from the router adapter (`docs/plugins.md` → router adapter).
 
-→ `{"schemaVersion":1,"generatedAt","state","status","adapter":{"id","title"}|null,"freshness","staleAfterSeconds","observedAt","attemptedAt","error","model","firmware","routerMac","devices":[{"mac","id","ip","name","connection","presence"}],"health":{"status","softwareVersion","hardware":[{"name","model","state","firmware","ip"}],"hardwareDown","clients":{"connected","wired","wireless","other","known"}}|null,"configured":{"adapter","host","lanCidrs"},"machine":{"id","name","ip"}|null}`
+→ `{"schemaVersion":1,"generatedAt","state","status","adapter":{"id","title"}|null,"freshness","staleAfterSeconds","observedAt","attemptedAt","error","model","firmware","routerMac","devices":[{"mac","id","ip","name","connection","presence"}],"health":{"status","softwareVersion","hardware":[{"name","model","state","firmware","ip"}],"hardwareDown","clients":{"connected","wired","wireless","other","known"}}|null,"configured":{"adapter","host","lanCidrs"},"machine":{"id","name","ip"}|null,"provenance"}` (`collector` for the included adapter, `plugin` for one a plugin provides)
 
 | `state` | Meaning |
 |---|---|
@@ -462,18 +520,18 @@ The client census and the router's health from the router adapter (`docs/plugins
 | `software_watch_list` | `software:write` | The list as `GET /api/software-watch` returns it |
 | `software_watch_put` | `software:write` | `{item, base?}`, `{remove, base}` or `{categories}`, with the same validation; a refusal comes back as a tool error that lists the reasons |
 
-## Inventory map and services catalog (UI: #inventory-map, #services)
+## Inventory map and services catalog (UI: #inventory-map, #inventory-map/table, #inventory-map/services)
 
-One file, `data/knowledge.json`, is the source of truth for machines, services, tools, model stores, outside services, what depends on what and **where** each credential is kept (never its value). The map, its table view and the services catalog are views of it; a hub without the file is an empty inventory and the first write creates it. Every write, by a person or an agent, goes through the same checker (`public/inventory-rules.js`, also `node scripts/check-knowledge.mjs`): a write that would leave the file invalid is refused and nothing changes.
+One file, `data/knowledge.json`, is the source of truth for machines, services, tools, model stores, outside services, what depends on what and **where** each credential is kept (never its value). The map, the table and the services view are views of one page (`#services` still opens the services view); a hub without the file is an empty inventory and the first write creates it. Every write, by a person or an agent, goes through the same checker (`public/inventory-rules.js`, also `node scripts/check-knowledge.mjs`): a write that would leave the file invalid is refused and nothing changes.
 
 **Concurrency.** Optimistic, per entry. Every entry has a hash (sha256 of the entry as stored; `GET /api/inventory` → `hashes`). To change or delete an entry send the hash you read as `base`; if the entry changed in between you get `409`: read again and reapply. Omit `base` only to create. An entry nobody touched keeps its hash across writes to other entries.
 
 | Route | Who | |
 |---|---|---|
-| `GET /api/inventory` | read | `{"doc","gaps","hashes"}`: the checked document, the gaps (facts not recorded: a secret whose store is `unknown`, a runtime without an address) and one hash per entry id. `404 INVENTORY_MISSING` while there is no file; `500 INVENTORY_INVALID` when the file fails the checker |
+| `GET /api/inventory` | read | `{"doc","gaps","hashes","provenance"}`: the checked document, the gaps (facts not recorded: a secret whose store is `unknown`, a runtime without an address) and one hash per entry id; `provenance` counts the entries by their `verified_by` stamp ([Provenance](#provenance)). `404 INVENTORY_MISSING` while there is no file; `500 INVENTORY_INVALID` when the file fails the checker |
 | `GET /api/inventory/export` | read | The file as a download (`home-inventory-<date>.json`) |
 | `GET /api/inventory/schema` | read | How to fill it, as data: `entry.fields`, `kinds`, `categories`, `linkKinds`, `secrets.stores` (built-ins, this site's own from site.json → `inventory.secretStores`, and the prefix forms), `places` (site.json → `inventory.places`, then every machine entry), `rules`, `limits`, `examples`, and `inventory: {entries, updatedAt}`: how many entries there are (`0` while there is no file, `null` when the file fails the checker). Never fails for a missing file, so ask here when you only need the count |
-| `GET /api/services` | read | `{"updatedAt","services","hashes"}`: the entries of kind `runtime` |
+| `GET /api/services` | read | `{"updatedAt","services","hashes","provenance"}`: the entries of kind `runtime` |
 | `POST /api/inventory/entries` | `inventory:write` | `{"entry":{…},"base"?}`: create or replace one whole entry → `{"ok","published","entry","hash"}`. The hub stamps `verified_at`, `verified_by` ("Home Hub API · <account>") and a default `confidence` |
 | `POST /api/services` | `inventory:write` | The same, for entries of kind `runtime` only |
 | `POST /api/inventory/entry` | `inventory:write` | `{"id","base","fields":{…}}`: the web form's field edit → `{"ok","published","doc","hashes"}`. `fields` may hold `name`, `type`, `category`, `address`, `version`, `config`, `data`, `managed_by`, `login`, `notes` (an empty string removes the field), `machine`, `secrets` (`[{what, store, ref, check}]`) and `depends_on` (`[{id, kind, label}]`). `{}` only re-stamps the entry as verified today |
@@ -497,7 +555,7 @@ An entry: `id` (lowercase letters, digits, hyphens; never changes), `kind` (`net
 
 ## Other read-only routes
 
-- `GET /api/inventory`: the inventory (`{"doc","gaps","hashes"}`); `GET /api/services`: its runtime entries; `GET /api/inventory/export`: the file as a download.
+- `GET /api/inventory`: the inventory (`{"doc","gaps","hashes","provenance"}`); `GET /api/services`: its runtime entries; `GET /api/inventory/export`: the file as a download.
 - `GET /api/systems` and `GET /api/security` (any role or API key that holds `security:read`: the owner, Admin, a custom role that lists it): OS and software versions with host protection, and the SSH key inventory. Each `software` row carries `inventory`: the inventory entry ids it describes when the id/name match would miss them (from the software watch list); the web inventory map uses it for its version block.
 - `GET /healthz` → `{"ok":true}` with no auth. Use it as a reachability probe.
 

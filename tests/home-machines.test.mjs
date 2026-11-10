@@ -6,7 +6,7 @@ import {mkdtemp,rm,readFile,writeFile,mkdir} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {createHomeDevices,parseRuntime,machineHash,secretIn,PICTURES,DEVICE_LIMITS} from '../server/home-devices.mjs';
-import {buildHome as build,telemetryFor,runtimesFor,machineList,homeHistoryQuery} from '../server/home-data.mjs';
+import {buildHome as build,telemetryFor,runtimesFor,sparkFor,machineList,homeHistoryQuery,TELEMETRY_ADAPTERS,SPARK_WINDOW_SECONDS,SPARK_STEP_SECONDS} from '../server/home-data.mjs';
 import {TELEMETRY_REPO_URL,TELEMETRY_STALE_SECONDS} from '../server/thermo-client.mjs';
 import {legacyScopes,SCOPES} from '../server/scopes.mjs';
 import {EMPTY_SITE} from '../server/site-config.mjs';
@@ -145,19 +145,52 @@ test('telemetry states: not installed, unreachable, stale and ok are told apart'
  assert.equal(telemetryFor(def('box'),{seconds:()=>[],minutes:()=>[],live:()=>({}),status:()=>({})},now).reason,'waiting','a poller that cannot list its hosts is not blamed for a missing login');
  // In the payload: every machine carries its state, and the page learns where the agent lives from one constant.
  const home=buildHome({added:[{id:'box',name:'Box',hostname:'box.example.lan',kind:'other',props:{}}].map(d=>({...d,role:'computer',thermoId:null,picture:null,source:'agent',props:{cpu:'',gpu:'',ramGb:null,diskTotalBytes:null}}))});
- assert.deepEqual(home.telemetry,{agent:'Thermo',repoUrl:TELEMETRY_REPO_URL,staleAfterSeconds:180});assert.match(TELEMETRY_REPO_URL,/^https:\/\/github\.com\/OWNER\//,'still the placeholder to be filled');
+ // …and which agents the hub can connect a device to: the list the Add device dialog offers.
+ assert.deepEqual(home.telemetry,{agent:'Thermo',repoUrl:TELEMETRY_REPO_URL,staleAfterSeconds:180,adapters:[{id:'thermo',name:'Thermo',repoUrl:TELEMETRY_REPO_URL,connect:'account',defaultPort:49286,summary:'CPU, GPU, paměť, příkon, teploty a disky'}]});
+ home.telemetry.adapters[0].name='changed';assert.equal(TELEMETRY_ADAPTERS[0].name,'Thermo','a payload never hands out the shared list');
+ assert.deepEqual(machineList({site:SITE}).telemetry,buildHome({}).telemetry,'machine_list names the same adapters');
+ assert.match(TELEMETRY_REPO_URL,/^https:\/\/github\.com\/OWNER\//,'still the placeholder to be filled');
  assert.deepEqual(Object.fromEntries(home.machines.map(m=>[m.id,m.telemetry.state])),{mini:'unreachable',studio:'unreachable',mini_server:'unreachable',nas:'not-installed',router:'not-applicable',box:'not-installed'});
  assert.deepEqual(home.machines.map(m=>m.online),['offline','offline','offline','unknown','offline','unknown'],'the online field keeps its old meaning');
 });
 
 test('home.runtimes extension point: provided runtimes are bounded and cleaned, absent ones are null',()=>{
  assert.equal(runtimesFor(null),null);assert.equal(runtimesFor({runtimes:'x'}),null);
- const r=runtimesFor({source:'agent',observedAt:'2026-11-10T10:00:00Z',extra:1,runtimes:[{id:'ollama',kind:'ollama',status:'running',url:'http://127.0.0.1:11434',models:[{id:'qwen3:14b',state:'loaded',sizeGb:9.3,secret:'x'}],stats:[{label:'tokens/s',value:42}]},
+ const r=runtimesFor({source:'agent',observedAt:'2026-11-10T10:00:00Z',extra:1,runtimes:[{id:'ollama',kind:'ollama',status:'running',url:'http://127.0.0.1:11434',models:[{id:'qwen3:14b',state:'loaded',sizeGb:9.3,contextTokens:32768,ttlRemainingSeconds:240,secret:'x'},{id:'idle',contextTokens:'many',ttlRemainingSeconds:-1}],stats:[{label:'tokens/s',value:42}]},
   {id:'odd',status:'exploded'},null,...Array.from({length:30},(_,i)=>({id:`r${i}`}))]});
- assert.equal(r.runtimes.length,20);assert.deepEqual(r.runtimes[0],{id:'ollama',name:'ollama',kind:'ollama',status:'running',url:'http://127.0.0.1:11434',version:null,models:[{id:'qwen3:14b',state:'loaded',sizeGb:9.3}],stats:[{label:'tokens/s',value:'42'}]});
+ assert.equal(r.runtimes.length,20);assert.deepEqual(r.runtimes[0],{id:'ollama',name:'ollama',kind:'ollama',status:'running',url:'http://127.0.0.1:11434',version:null,
+  models:[{id:'qwen3:14b',state:'loaded',sizeGb:9.3,contextTokens:32768,ttlRemainingSeconds:240},{id:'idle',state:'',sizeGb:null,contextTokens:null,ttlRemainingSeconds:null}],stats:[{label:'tokens/s',value:'42'}]});
  assert.equal(r.runtimes[1].status,'unknown');
  const home=buildHome({runtimes:{mini:{runtimes:[{id:'llama-swap',status:'running'}]},ghost:{runtimes:[]}}});
  assert.equal(home.machines.find(m=>m.id==='mini').runtimes.runtimes[0].id,'llama-swap');assert.equal(home.machines.find(m=>m.id==='studio').runtimes,null);
+ // A hub without a provider (a public install): no machine carries runtimes, so no page draws the section.
+ assert.deepEqual(buildHome({}).machines.map(m=>m.runtimes),Array(SITE.machines.length).fill(null));
+});
+
+// The small chart on a tile: one series over the live window, in clock-aligned steps; a step without a
+// reading is null (a gap on the chart), and a machine that reports LLM runtimes shows its GPU.
+test('tile spark: ten minutes in 10 s steps, gaps stay null, GPU for a machine with runtimes',()=>{
+ const now=1_800_000_007,end=1_800_000_000,n=SPARK_WINDOW_SECONDS/SPARK_STEP_SECONDS;
+ assert.equal(n,60);
+ // Readings every second for the last two minutes, except a 30 s hole; one stray row older than the window.
+ const rows=[{t:end-700,cpu:99,gpu:99},...Array.from({length:120},(_,i)=>({t:now-119+i,cpu:20,gpu:i<60?0:80})).filter(r=>r.t<=now-60||r.t>now-30)];
+ const thermo={seconds:()=>rows};// a poller that ignores "since": the window is cut here
+ const cpu=sparkFor(thermo,'mini',now);
+ assert.deepEqual([cpu.series,cpu.end,cpu.stepSeconds,cpu.windowSeconds,cpu.values.length],['cpu',end,10,600,60]);
+ assert.deepEqual(cpu.values.slice(0,48),Array(48).fill(null),'nothing was read before: null, not zero');
+ assert.deepEqual(cpu.values.slice(48),[20,20,20,20,20,20,20,null,null,20,20,20],'the hole is two empty steps between readings; the step still running is left for the next read');
+ const gpu=sparkFor(thermo,'mini',now,'gpu');
+ assert.equal(gpu.series,'gpu');assert.deepEqual(gpu.values.slice(-3),[80,80,80]);assert.equal(gpu.values[48],0,'a measured zero is a value');
+ assert.equal(sparkFor({seconds:()=>[{t:now-5,cpu:12.34}]},'mini',now,'gpu'),null,'a reading inside the step still running is not drawn yet');
+ assert.equal(sparkFor({seconds:()=>[{t:now-10,cpu:12.34}]},'mini',now,'gpu').series,'cpu','no GPU readings: the CPU is drawn');
+ assert.equal(sparkFor({seconds:()=>[{t:now-10,cpu:12.34}]},'mini',now).values.at(-1),12.3);
+ assert.equal(sparkFor({seconds:()=>[]},'mini',now),null);assert.equal(sparkFor({seconds:()=>[{t:end-601,cpu:5}]},'mini',now),null,'older than the window');
+ // In the payload: only machines with telemetry carry one, and the series follows the runtimes.
+ const live={...quiet,seconds:host=>host==='mini'||host==='studio'?[{t:Math.floor(Date.now()/1000)-12,cpu:11,gpu:66}]:[]};
+ const home=build({site:SITE,thermo:live,runtimes:{studio:{runtimes:[{id:'llama-swap',status:'running'}]}}});
+ const spark=id=>home.machines.find(m=>m.id===id).spark;
+ assert.deepEqual([spark('mini').series,spark('studio').series,spark('mini_server'),spark('nas'),spark('router')],['cpu','gpu',null,null,null]);
+ assert.equal(spark('studio').values.filter(v=>v!=null).join(),'66');
 });
 
 test('machine list: site machines are read-only, stored ones carry their hash and provenance',async t=>{
@@ -203,7 +236,7 @@ test('machine API over HTTP: home:write for keys, a write session for people, si
  assert.deepEqual(home.machines.map(m=>m.id),[...SITE_IDS,'pi-hole']);
  const tile=home.machines.at(-1);
  assert.deepEqual([tile.name,tile.added,tile.kind,tile.role,tile.source,tile.readOnly,tile.picture,tile.pictureId,tile.image,tile.hash],['Pi-hole (rack)',true,'other','other','agent',false,'/images/generic/board.svg','board',null,editedBody.hash]);
- for(const m of home.machines)for(const field of ['id','name','hostname','ip','kind','props','online','lastSeen','thermo','bridge','quad','volumes','memoryUsedBytes','memoryTotalBytes','uptimeSeconds','services','collectedAt','reviewNeeded','stack','telemetry','runtimes','role','source'])assert.ok(field in m,`${m.id}.${field}`);
+ for(const m of home.machines)for(const field of ['id','name','hostname','ip','kind','props','online','lastSeen','thermo','bridge','quad','volumes','memoryUsedBytes','memoryTotalBytes','uptimeSeconds','services','collectedAt','reviewNeeded','stack','telemetry','runtimes','spark','role','source'])assert.ok(field in m,`${m.id}.${field}`);
  for(const field of ['poll','schemaVersion','generatedAt','machines','router','telemetry'])assert.ok(field in home,field);
  assert.deepEqual(home.machines.slice(0,5).map(m=>[m.source,m.readOnly,m.added]),Array(5).fill(['site',true,undefined]));
  const picture=await get('/images/generic/board.svg',h.admin);assert.equal(picture.status,200);assert.match(picture.headers.get('content-type'),/image\/svg\+xml/);

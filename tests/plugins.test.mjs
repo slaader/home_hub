@@ -93,7 +93,9 @@ test('core: the scope table and the page list match what the core modules regist
  const admin=registry.manifest({role:'admin'}),viewer=registry.manifest({role:'viewer'});
  assert.deepEqual(admin.nav.map(g=>g.labelKey||g.label),['Domov','Inventář','Bezpečnost','Project Tracker','Správa']);
  assert.deepEqual(viewer.nav.map(g=>g.labelKey||g.label),['Domov','Inventář','Project Tracker','Správa'],'admin-only groups disappear for other roles');
- assert.deepEqual(admin.nav[1].items.map(i=>i.hash),['inventory-map','services','versions']);assert.deepEqual(viewer.nav[1].items.map(i=>i.hash),['inventory-map','services']);
+ assert.deepEqual(admin.nav[1].items.map(i=>i.hash),['inventory-map','versions']);assert.deepEqual(viewer.nav[1].items.map(i=>i.hash),['inventory-map']);
+ // #services is still a page (it leads to the Services view of the inventory page), just not a sidebar entry.
+ assert.ok(viewer.pages.find(p=>p.hash==='services').view,'the old services address stays routable');
  assert.ok(viewer.pages.find(p=>p.hash==='versions').admin&&!viewer.pages.find(p=>p.hash==='versions').view,'an admin page is listed for routing, without its module');
  assert.deepEqual(admin.pages.find(p=>p.hash==='overview').view,{url:'/home-view.js',export:'homePage'});
 });

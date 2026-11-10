@@ -1,4 +1,9 @@
-// #inventory-map (Inventář → Mapa inventáře): data/knowledge.json as a dependency map and as a table.
+// #inventory-map (Inventář → Mapa inventáře): data/knowledge.json in three views: a dependency map, a table
+// of every entry, and Services (the entries of kind "runtime" as one dense list; inventory-services.js).
+// The views share the search box and the filters. #inventory-map/table and #inventory-map/services open a
+// view directly; a bare #inventory-map opens the one this browser used last.
+// The pill next to the title says where the entries come from (the answer's provenance: people, agents by
+// account, other stamps); in the Services view it is the provenance of the services alone.
 // Every signed-in account may read it (GET /api/inventory); editing needs write access. Admins also see
 // installed versions and updates from Systémy (GET /api/systems) in the selected card and the entry
 // detail; for everyone else that block is simply left out. An inventory with no entries shows what the
@@ -9,19 +14,22 @@
 import {canWrite} from './access.js';
 import {t,tp} from './i18n.js';
 import {el,onLeave} from './views.js';
-import {pageHeader,emptyState} from './ui.js';
+import {pageHeader,emptyState,setProvenance} from './ui.js';
 import {onSessionReset,currentPrincipal,pageAllowed} from './session-cache.js';
 import {load as loadSystems} from './systems-view.js';
 import {CATS,CAT_KEYS,DEPS,DEP_HELP,OTHER,catOf,catLabel,kindName,place,store,sitePlace,allPlaces,index,deps,matcher,isExample,
  load,setCurrent,setSystems,systemsDoc,announce} from './inventory-data.js';
 import {showDetail,showCreate,showImport,seedTemplate,removeExamples,versionBlock,linkify} from './inventory-entry.js';
 import {tableView} from './inventory-table.js';
+import {servicesView} from './inventory-services.js';
 
 const TABLE=()=>({sort:'name',dir:'asc',kind:'',place:'',gaps:false});
-const state={mapSelected:null,mapMode:'connected',mapStores:false,hidden:new Set(),listOpen:{},query:'',table:TABLE()};
+const SERVICES=()=>({sort:'place',dir:'asc'});
+export const VIEWS=Object.freeze(['map','table','services']);
+const state={mapSelected:null,mapMode:'connected',mapStores:false,hidden:new Set(),listOpen:{},query:'',table:TABLE(),services:SERVICES()};
 let redraw=null;
 // Another account must not see this one's selection or search (session-cache.js; inventory-data.js drops the data).
-onSessionReset(()=>{redraw=null;state.mapSelected=null;state.listOpen={};state.query='';state.table=TABLE();document.querySelector('#inv-detail')?.close();});
+onSessionReset(()=>{redraw=null;state.mapSelected=null;state.listOpen={};state.query='';state.table=TABLE();state.services=SERVICES();document.querySelector('#inv-detail')?.close();});
 
 // Breadth-first over the edges: forward = what it needs, backward = what stops if it fails.
 function walk(doc,start,forward,hidden=new Set()){
@@ -88,7 +96,7 @@ export function layoutLoad(){
   return {spacing:v.spacing==='roomy'?'roomy':'compact',lines:v.lines==='all'?'all':'chain',depth:v.depth==='all'?'all':'direct',columns:v.columns==='category'?'category':'machine',
     together:v.together===true,focus:v.focus===true,secretItems:v.secretItems===true,hiddenCats:Array.isArray(v.hiddenCats)?v.hiddenCats.filter(k=>CAT_KEYS.includes(k)):[],soloPrev:Array.isArray(v.soloPrev)?v.soloPrev.filter(k=>CAT_KEYS.includes(k)):null,
     modes:{machine:mode(v.modes?.machine),category:mode(v.modes?.category)},
-    view:v.view==='table'?'table':'map',zoom,fit:v.fit===true,controls:v.controls==='open'||v.controls==='closed'?v.controls:null};
+    view:VIEWS.includes(v.view)?v.view:'map',zoom,fit:v.fit===true,controls:v.controls==='open'||v.controls==='closed'?v.controls:null};
 }
 function layoutSave(l){try{localStorage.setItem(LAYOUT_KEY,JSON.stringify(l));}catch{}}
 // Map columns in their default order: machines (machine card first) or categories (grouped by machine
@@ -413,26 +421,50 @@ function emptyInventory(){
     status);
 }
 
+// What the page header says in each view.
+const HEAD=()=>({map:[t('Mapa inventáře'),t('Co běží kde, jak se přihlásit, kde je které tajemství a co na čem závisí.')],
+ table:[t('Mapa inventáře'),t('Co běží kde, jak se přihlásit, kde je které tajemství a co na čem závisí.')],
+ services:[t('Služby'),t('Každá služba na jednom řádku: kde ji najdeš, na čem běží, co na ní závisí a kdy byla naposledy ověřena.')]});
+// The provenance of the services alone (GET /api/services), for the header pill of the Services view.
+async function servicesProvenance(){
+ try{const r=await fetch('/api/services');return r.ok?(await r.json()).provenance||null:null;}catch{return null;}
+}
 // me: the /api/me document. The version block needs what #versions needs (admin); others never fetch it.
+// sub: the view named in the address (#inventory-map/<view>), if any.
 // Lifetime: the shell's leaveView() (navigation, re-render, sign-in) disposes the view, which removes the map's
 // document/window listeners. A load that finishes after that draws and binds nothing. Each map drawn here
 // disposes the one before it.
-export function inventoryView(me){
+export function inventoryView(me,sub=null){
   const loading=()=>el('p',{class:'inv-loading',role:'status'},t('Načítám inventář…'));
   const body=el('div',{class:'inv-body'},loading());
   const who=currentPrincipal(),life=new AbortController();let mapLife=null;
   onLeave(()=>{life.abort();mapLife?.abort();});
-  const show=({doc,gaps})=>{if(life.signal.aborted)return;mapLife?.abort();mapLife=null;setCurrent(doc);
-    if(!doc.entries.length){redraw=null;return body.replaceChildren(emptyInventory());}
+  const heading=el('span',{},HEAD().map[0]),lead=el('span',{},HEAD().map[1]),header=pageHeader({eyebrow:t('Inventář'),title:heading,lead});
+  // The view the address asks for wins once, when the page opens; after that the tabs decide.
+  let asked=VIEWS.includes(sub)?sub:null;
+  const show=({doc,gaps,provenance})=>{if(life.signal.aborted)return;mapLife?.abort();mapLife=null;setCurrent(doc);
+    if(!doc.entries.length){redraw=null;setProvenance(header,null);return body.replaceChildren(emptyInventory());}
     const layout=layoutLoad(),host=el('div',{class:'inv-view'}),hits=el('span',{class:'inv-count',role:'status'});
-    let api=null;
+    if(asked&&layout.view!==asked){layout.view=asked;layoutSave(layout);}asked=null;
+    let api=null,provenanceTurn=0;
+    const add=canWrite()?el('button',{type:'button',class:'inv-btn primary',onclick:()=>showCreate(layout.view==='services'?{kind:'runtime'}:undefined)}):null;
     const mount=()=>{mapLife?.abort();mapLife=null;hits.textContent='';
       if(layout.view==='table'){const table=tableView({doc,state:state.table,query:()=>state.query,onOpen:id=>showDetail(doc,id)});api=null;redraw=table.redraw;host.replaceChildren(table.node);}
+      else if(layout.view==='services'){const list=servicesView({doc,filters:state.table,sort:state.services,query:()=>state.query,onOpen:id=>showDetail(doc,id)});api=null;redraw=list.redraw;host.replaceChildren(list.node);}
       else{mapLife=new AbortController();api=map(doc,mapLife.signal,{query:()=>state.query,onHits:n=>{hits.textContent=n==null?'':tp(n,'{n} shoda|{n} shody|{n} shod');}});redraw=api.draw;host.replaceChildren(api.node);}
-      for(const b of tabs.children){const on=b.getAttribute('data-view')===layout.view;b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on));}};
+      for(const b of tabs.children){const on=b.getAttribute('data-view')===layout.view;b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on));}
+      address(layout.view);
+      [heading.textContent,lead.textContent]=HEAD()[layout.view];
+      if(add)add.textContent=layout.view==='services'?t('+ Přidat službu'):t('+ Nový záznam');
+      // Where the shown entries come from: all of them, or in the Services view the services alone.
+      const turn=++provenanceTurn;setProvenance(header,provenance);
+      if(layout.view==='services')servicesProvenance().then(p=>{if(p&&turn===provenanceTurn&&!life.signal.aborted&&who===currentPrincipal())setProvenance(header,p);});};
+    // The address follows the view without drawing the page again, so a reload or a copied link opens the same one.
+    const address=v=>{const hash=v==='map'?'#inventory-map':`#inventory-map/${v}`;
+      if(/^#(inventory-map|services)(\/|$)/.test(globalThis.location?.hash||'')&&location.hash!==hash)try{history.replaceState(null,'',hash);}catch{}};
     const setView=v=>{if(layout.view===v)return;const l=layoutLoad();l.view=layout.view=v;layoutSave(l);mount();};
     const tab=(v,label)=>el('button',{type:'button','data-view':v,onclick:()=>setView(v)},label);
-    const tabs=el('div',{class:'inv-mode inv-tabs',role:'group','aria-label':t('Zobrazení')},tab('map',t('Mapa')),tab('table',t('Tabulka')));
+    const tabs=el('div',{class:'inv-mode inv-tabs',role:'group','aria-label':t('Zobrazení')},tab('map',t('Mapa')),tab('table',t('Tabulka')),tab('services',t('Služby')));
     const search=el('input',{type:'search',class:'inv-search',placeholder:t('Hledat název, adresu, stroj, druh…'),'aria-label':t('Hledat v inventáři'),
       oninput:()=>{state.query=search.value;redraw?.();},onkeydown:ev=>{if(ev.key==='Enter'){ev.preventDefault();api?.pickFirst();}else if(ev.key==='Escape'&&search.value){search.value='';state.query='';redraw?.();}}});
     search.value=state.query;
@@ -443,19 +475,19 @@ export function inventoryView(me){
     body.replaceChildren(...[
       stats(doc,gaps,()=>{state.table.gaps=true;if(layout.view==='table')mount();else setView('table');}),
       el('div',{class:'inv-toolbar'},search,hits,el('span',{class:'inv-toolbar-gap'}),tabs,
-        canWrite()?el('button',{type:'button',class:'inv-btn primary',onclick:()=>showCreate()},t('+ Nový záznam')):null,
+        add,
         canWrite()?el('button',{type:'button',class:'inv-btn',onclick:showImport},t('Import')):null,
         el('a',{class:'inv-btn',href:'/api/inventory/export',download:''},'Export JSON')),
       examples.length?el('div',{class:'inv-banner'},el('span',{},tp(examples.length,'V inventáři je {n} ukázkový záznam. Uprav ho podle sebe, nebo ho smaž.|V inventáři jsou {n} ukázkové záznamy. Uprav je podle sebe, nebo je smaž.|V inventáři je {n} ukázkových záznamů. Uprav je podle sebe, nebo je smaž.'),' ',note),canWrite()?clearExamples:null):null,
       host,
       el('p',{class:'muted inv-source-note'},t('Zdroj: data/knowledge.json · aktualizováno {when} · každou změnu kontroluje stejný checker, ať ji udělá člověk, nebo agent.',{when:doc.updated_at||'—'}))].filter(Boolean));
     mount();};
-  const fail=e=>{if(life.signal.aborted)return;redraw=null;
+  const fail=e=>{if(life.signal.aborted)return;redraw=null;setProvenance(header,null);
     body.replaceChildren(emptyState({icon:'⚠',title:t('Inventář se nepodařilo načíst'),body:t(e.message),actions:[{label:t('Zkusit znovu'),onclick:()=>{body.replaceChildren(loading());load().then(show).catch(fail);},primary:true}]}));};
   load().then(show).catch(fail);
   if(pageAllowed('versions',me))loadSystems().then(d=>{if(who!==currentPrincipal()||life.signal.aborted)return;setSystems(d);if(body.isConnected)redraw?.();}).catch(()=>{});
-  return el('div',{class:'inv-page'},pageHeader({eyebrow:t('Inventář'),title:t('Mapa inventáře'),lead:t('Co běží kde, jak se přihlásit, kde je které tajemství a co na čem závisí.')}),body);
+  return el('div',{class:'inv-page'},header,body);
 }
 // Page entry for the shell (app.js): every page module exports (context) => Node, and the server's UI
 // manifest names it. context = {me, page, sub, machine, site}.
-export const inventoryPage=({me})=>inventoryView(me);
+export const inventoryPage=({me,sub})=>inventoryView(me,sub);

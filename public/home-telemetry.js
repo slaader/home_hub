@@ -6,8 +6,9 @@
 //   unreachable     a host is named, nothing was ever read from it         → what to check (and why)
 //   stale           readings exist but the newest is older than 3 minutes  → when it was last seen
 // A failed read says the agent did not answer. It never says the machine is off.
-// Also here: the "local LLM runtimes" section of a machine page, the extension point a provider fills
-// (home.runtimes, docs/plugins.md); until one does, it says it needs the telemetry agent.
+// Also here: the "local LLM runtimes" cards of a machine page. They show what a home.runtimes provider
+// reported (docs/plugins.md). The telemetry agent does not report runtimes, and nothing here says it will:
+// a machine no provider reports on has no such section.
 import {el} from './views.js';
 import {t,tp,locale} from './i18n.js';
 import {timeZone} from './site.js';
@@ -93,24 +94,39 @@ export function telemetryNotice(m,meta,{onConnect}={}){
   [t('Stroj je vzhůru a v síti.'),t('{name} běží a má zapnutý přístup po síti.',{name}),t('Port 49286 je povolený ve firewallu stroje.')]);
 }
 
-// Local LLM runtimes on a machine (llama-swap, Ollama, LM Studio, llama.cpp, vLLM / SGLang, OpenAI-compatible).
-// m.runtimes = what a home.runtimes provider reported, already bounded by the server; null = nobody reports yet.
+// Local LLM runtimes on a machine, one compact card per runtime: name and state, what it is, a figure or two,
+// the loaded models, and the rest of its models folded away. m.runtimes = what a home.runtimes provider
+// reported, already bounded by the server. Labels of the figures are the provider's (its own strings).
 const RUNTIME_STATE={running:['ok','běží'],stopped:['dim','zastaveno'],unknown:['dim','stav neznámý']};
-function runtimeCard(r){
- const [tone,label]=RUNTIME_STATE[r.status]||RUNTIME_STATE.unknown;
- const loaded=r.models.filter(x=>x.state==='loaded'),rest=r.models.filter(x=>x.state!=='loaded');
- const model=x=>el('li',{class:x.state==='loaded'?'on':''},el('span',{},x.id),x.sizeGb!=null?el('small',{},`${x.sizeGb} GB`):null);
- return el('article',{class:'hv-runtime'},
-  el('header',{},el('h4',{},r.name),el('span',{class:`hv-status ${tone}`},el('i',{'aria-hidden':'true'}),t(label))),
-  el('p',{class:'hv-runtime-meta'},[r.kind,r.version,r.url].filter(Boolean).join(' · ')||' '),
-  r.stats.length?el('dl',{class:'hv-runtime-stats'},r.stats.flatMap(x=>[el('dt',{},x.label),el('dd',{},x.value)])):null,
-  r.models.length?el('ul',{class:'hv-runtime-models','aria-label':tp(r.models.length,'{n} model|{n} modely|{n} modelů')},[...loaded,...rest].map(model)):el('p',{class:'hv-runtime-none'},t('žádné modely')));
+// A runtime listens on its own machine: ":8081" says more than a loopback address.
+const listen=url=>{try{const u=new URL(url);return ['127.0.0.1','localhost','[::1]'].includes(u.hostname)?`:${u.port||(u.protocol==='https:'?443:80)}`:u.host;}catch{return '';}};
+const kilo=n=>n>=1e6?`${Math.round(n/1e5)/10}M`:n>=1e3?`${Math.round(n/1e3)}k`:String(n);
+function modelRow(x){
+ const held=x.state==='loaded';
+ const facts=[x.sizeGb!=null?`${x.sizeGb} GB`:null,x.contextTokens?t('kontext {n}',{n:kilo(x.contextTokens)}):null,
+  held&&x.ttlRemainingSeconds!=null?t('uvolní se za {min} min',{min:Math.max(1,Math.round(x.ttlRemainingSeconds/60))}):null,x.state==='loading'?t('načítá se'):null].filter(Boolean);
+ return el('li',{class:held?'on':x.state==='loading'?'busy':''},el('span',{},x.id),facts.length?el('small',{},facts.join(' · ')):null);
 }
-export function runtimesSection(m,meta){
- const name=agentOf(meta),data=m.runtimes;
- if(data?.runtimes?.length)return el('div',{class:'hv-runtimes'},data.runtimes.map(runtimeCard),
-  data.observedAt||data.source?el('p',{class:'hv-source'},[data.source,data.observedAt?clock(data.observedAt):null].filter(Boolean).join(' · ')):null);
- return el('div',{class:'hv-placeholder',role:'status'},el('span',{class:'hv-tag'},t('potřebuje telemetrického agenta')),
-  el('p',{},t('Co na stroji běží a které modely jsou načtené, sem doplní telemetrický agent {name}: llama-swap, Ollama, LM Studio, llama.cpp, vLLM a SGLang (metriky Prometheus) a servery kompatibilní s OpenAI.',{name})),
-  meta?.repoUrl?el('a',{class:'ui-button small',href:meta.repoUrl,target:'_blank',rel:'noopener noreferrer'},t('Repozitář agenta {name}',{name})):null);
+function runtimeCard(r,open){
+ const [tone,label]=RUNTIME_STATE[r.status]||RUNTIME_STATE.unknown;
+ const held=r.models.filter(x=>x.state==='loaded'||x.state==='loading'),rest=r.models.filter(x=>!held.includes(x));
+ // Only a runtime that answers can be said to hold nothing.
+ const heading=held.length?tp(held.length,'{n} načtený model|{n} načtené modely|{n} načtených modelů'):r.status==='running'&&r.models.length?t('žádný model není načtený'):r.models.length?t('Modely'):t('žádné modely');
+ return el('article',{class:'hv-runtime'},
+  el('header',{},el('h3',{},r.name),el('span',{class:`hv-status ${tone}`},el('i',{'aria-hidden':'true'}),t(label))),
+  el('p',{class:'hv-runtime-meta'},[r.kind,r.version,r.url?listen(r.url):null].filter(Boolean).join(' · ')||' '),
+  r.stats.length?el('dl',{class:'hv-runtime-stats'},r.stats.map((x,i)=>el('div',{class:i?'':'main'},el('dt',{},t(x.label)),el('dd',{},x.value)))):null,
+  el('div',{class:'hv-runtime-list'},el('span',{class:'hv-k'},heading),
+   held.length?el('ul',{class:'hv-runtime-models'},held.map(modelRow)):null,
+   rest.length?el('details',{'data-id':r.id,open:open?'':null},el('summary',{},held.length?tp(rest.length,'{n} další model|{n} další modely|{n} dalších modelů'):tp(rest.length,'{n} model|{n} modely|{n} modelů')),
+    el('ul',{class:'hv-runtime-models'},rest.map(modelRow))):null));
+}
+// open: ids of the runtimes whose folded model list is open (kept across a refresh).
+export function runtimesSection(m,meta,{open=[]}={}){
+ const data=m.runtimes;if(!data)return null;
+ const old=data.observedAt&&Date.now()-Date.parse(data.observedAt)>(meta?.staleAfterSeconds||180)*1000;
+ const source=[data.source?t(data.source):null,data.observedAt?(old?t('stará data · naposledy {when}',{when:clock(data.observedAt)}):t('čteno {when}',{when:clock(data.observedAt)})):null].filter(Boolean).join(' · ');
+ return el('div',{class:'hv-runtimes'},
+  data.runtimes.length?data.runtimes.map(r=>runtimeCard(r,open.includes(r.id))):el('p',{class:'hv-note'},t('Poskytovatel teď na tomhle stroji žádný runtime nehlásí.')),
+  source?el('p',{class:`hv-source${old?' warn':''}`},source):null);
 }

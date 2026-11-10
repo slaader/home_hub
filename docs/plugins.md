@@ -172,6 +172,29 @@ everyone: a key, a person (through their role) and a device.
 | `raw`, `contentType`, `denied` | — | A PUT upload: the handler reads `req` itself; `contentType` is required exactly; `denied` replaces the read-only message |
 | `error` | — | `(error, context) => [status, code, message]` for errors the handler throws |
 
+### Provenance
+
+A data route that backs a page should say where its data comes from, in the same shape as the core routes
+(`docs/API.md` → Provenance). Build it with the helper rather than by hand; it drops unknown kinds and empty
+fields, bounds the lists and writes `kind`, `lastAt` and `summary` for you:
+
+```js
+import {provenance, authoredProvenance, collectorSource} from '../../../../server/provenance.mjs';
+
+// Your own sources, in reading order: manual, agent, config, collector, telemetry, plugin or other.
+json(200, {notes: state.notes, provenance: provenance([
+  {kind: 'plugin', source: 'notes', count: state.notes.length, unit: 'items', lastAt: state.updatedAt}])});
+
+// Records that name their author: people and service accounts are told apart by the hub's access store.
+json(200, {...data, provenance: authoredProvenance(c.hub.accessStore,
+  {created: data.notes.map(n => [n.by, n.at]), changes: []}, {unit: 'items'})});
+```
+
+`collectorSource(state, {id, run, count, unit, host})` turns a collector state (`server/collector-state.mjs`)
+and the snapshot's `run` stamp (`server/collector-run.mjs` → `collectorRun()` when the script writes it,
+`readRun()` when the route reads it) into a `collector` source. Derive every field from the records; never
+hard-code a kind for a page. On the page, pass the answer's `provenance` to `pageHeader` (below).
+
 ### What is refused at start-up
 
 The server does not start when a plugin is wrong. The message names the plugin and, for a clash, both sides.
@@ -194,7 +217,7 @@ fine).
 |---|---|---|
 | `home.snapshots` | `{machineId: {snapshot, bridge}}` — what an agent on the machine reports: `snapshot.services[]`, `memory`, `uptimeSeconds`, `collectedAt` | Overview tiles and the machine page stack |
 | `home.services` | `{machineId: services[]}` — reachability probes for a machine without an agent (role `nas`) | The NAS tile's online state and service list |
-| `home.runtimes` | `{machineId: {source, observedAt, runtimes: [{id, name, kind, status: running\|stopped\|unknown, url, version, models: [{id, state, sizeGb}], stats: [{label, value}]}]}}` — local LLM runtimes on a machine (llama-swap, Ollama, LM Studio, llama.cpp, vLLM, …). Core bounds it (20 runtimes, 30 models, 12 stats each) and never interprets it | The "Local LLM runtimes" section of a machine page; without a provider it says it needs the telemetry agent |
+| `home.runtimes` | `{machineId: {source, observedAt, runtimes: [{id, name, kind, status: running\|stopped\|unknown, url, version, models: [{id, state, sizeGb, contextTokens, ttlRemainingSeconds}], stats: [{label, value}]}]}}` — local LLM runtimes on a machine (llama-swap, Ollama, LM Studio, llama.cpp, vLLM, …). Core bounds it (20 runtimes, 30 models, 12 stats each) and never interprets it. A model's `state` is `loaded`, `loading` or anything else for "not in memory"; the first of `stats` is the figure a card prints large; `label` and `source` go through the plugin's `strings` | The "Local LLM runtimes" section of a machine page, one card per runtime. Nothing in core reads runtimes and the telemetry agent does not report them: a machine no provider reports on has no such section. Report `runtimes: []` only when you watch the machine and it runs none. A machine with runtimes shows its GPU on its tile's small chart, any other its CPU |
 | `inventory.writer` | `{put(change, by), edit(input)}` or `null` — where inventory edits go instead of the local file. Optional: `remove(change)` and `bulk(change, {by, user})`; without them delete and bulk upsert answer `501` | Inventory map and services catalog |
 | `router.adapter` | `{id, title, read(context)}` — another router's census and health. `read` resolves to an observation `{status, observedAt, model, firmware, routerMac, devices[], hardware[]}` or `null`; core validates and bounds it (`server/router-data.mjs`). Optional `staleAfterSeconds` | `GET /api/router`, the router tile and page |
 
@@ -251,6 +274,12 @@ export function notesPage({me}) {
     actions: [{label: 'Add', primary: true, onclick: () => toast.good('Added.')}]}), list);
 }
 ```
+
+The header can say where the page's data comes from: `pageHeader({…, provenance})` with the `provenance` of
+the data answer draws a small pill next to the title, which opens the list of sources (keyboard: Enter or Space,
+Escape closes it). When the header is drawn before the data arrives, fill it later with
+`setProvenance(headerNode, provenance)`; `provenancePart(provenance, ['id'])` keeps only the sources a page shows.
+No provenance, or `kind: "none"`, draws no pill.
 
 Every page gets the three states: loading, empty and error. `emptyState` with `mcpSnippet: true` shows how to
 connect an agent, with a copy button per client.

@@ -3,7 +3,8 @@
 import path from 'node:path';
 import {createReadStream} from 'node:fs';
 import {pipeline} from 'node:stream/promises';
-import {createReviewStore,REVIEW_ID,SHA,LIMITS as REVIEW_LIMITS} from '../review-store.mjs';
+import {createReviewStore,setAuthors,REVIEW_ID,SHA,LIMITS as REVIEW_LIMITS} from '../review-store.mjs';
+import {authoredProvenance} from '../provenance.mjs';
 import {byteRange} from '../http-range.mjs';
 
 // Messages come in two languages: Czech source text for the web UI (which translates it through its
@@ -44,8 +45,11 @@ export default {
   write('/api/review/publish',{bodyLimit:65536},async c=>{const saved=await c.state.review.publish(c.input,who(c));c.subject=saved.id;return c.json(c.input?.set===undefined?201:200,saved);}),
   write('/api/review/feedback',{bodyLimit:65536},async c=>{const saved=await c.state.review.feedback(c.input,who(c));c.subject=saved.set;return c.json(200,saved);}),
   write('/api/review/sets',{},async c=>{const saved=await c.state.review.saveSet(c.input);c.subject=saved.id;return c.json(200,saved);}),
-  {method:'GET',path:'/api/review',error:reviewError,handler:async c=>c.json(200,await c.state.review.list(c.query))},
-  {method:'GET',match:/^\/api\/review\/sets\/(.*)$/,error:reviewError,async handler({params,json,state}){if(!REVIEW_ID.test(params[1]))throw new Error('not-found');return json(200,await state.review.get(params[1]));}},
+  // provenance (server/provenance.mjs): who published the rounds (agents, as a rule) and who decided on them (people).
+  {method:'GET',path:'/api/review',error:reviewError,async handler(c){const {authors,...data}=await c.state.review.list(c.query,{authors:true});
+    return c.json(200,{...data,provenance:authoredProvenance(c.hub.accessStore,authors,{unit:'rounds'})});}},
+  {method:'GET',match:/^\/api\/review\/sets\/(.*)$/,error:reviewError,async handler({params,json,state,hub}){if(!REVIEW_ID.test(params[1]))throw new Error('not-found');
+    const set=await state.review.get(params[1]);return json(200,{...set,provenance:authoredProvenance(hub.accessStore,setAuthors(set),{unit:'rounds'})});}},
   // An HTML mockup runs sandboxed in an opaque origin: no cookies, no Home Hub API, no network (docs/review.md).
   {method:'GET',match:/^\/api\/review\/frame\/(.*)$/,error:reviewError,async handler({params,res,state}){
     const html=await state.review.frame(params[1]);

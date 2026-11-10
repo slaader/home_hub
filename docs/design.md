@@ -143,6 +143,12 @@ pageHeader({eyebrow: t('Inventář'), title: t('Mapa inventáře'), lead: 'One s
 Every page starts with one. `eyebrow`, `lead`, `back` and `actions` are optional. An action is a link
 (`href`) or a button (`onclick`); `primary`, `quiet` and `danger` choose its look.
 
+`provenance` (the field of the same name in the page's data answer, `docs/API.md` → Provenance) adds a pill
+next to the title: the kind of source ("Agent", "Collector · 2 days ago", "Mixed") in mono type, dashed while a
+collector has not run, amber when its snapshot is stale or its last attempt failed. Pressing it opens the
+breakdown: one row per source with its counts, accounts or people, script, schedule and when it last wrote.
+`setProvenance(header, provenance)` fills or replaces it after the header is drawn; without data there is no pill.
+
 ### States: empty, not installed, error, loading
 
 A page is never blank. It shows one of these until it has something to show.

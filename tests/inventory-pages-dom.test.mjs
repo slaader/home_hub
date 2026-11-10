@@ -1,5 +1,5 @@
 // The inventory pages on the mocked DOM, in English (the public default): the empty state with its agent
-// prompt, the search box, the table view, the services catalog, what the browser remembers about the map
+// prompt, the search box, the table view, the services view, what the browser remembers about the map
 // (old saved layouts keep working), and the entry form's pure helpers.
 import './support/site-inventory.mjs';
 import test from 'node:test';
@@ -9,7 +9,7 @@ import {installDom,fire} from './fixtures/mini-dom.mjs';
 const {document,localStorage}=installDom();
 const events=[];globalThis.dispatchEvent=e=>{events.push(e.type);return true;};
 const {inventoryView,layoutLoad,INVENTORY_PROMPT}=await import('../public/inventory-view.js');
-const {servicesPage,serviceGroups}=await import('../public/inventory-services.js');
+const {servicesPage,serviceGroups,serviceRows,sortServices}=await import('../public/inventory-services.js');
 const {rowsOf,sortRows}=await import('../public/inventory-table.js');
 const {slug,changedFields,parseImport,issueText}=await import('../public/inventory-entry.js');
 const {matcher,invalidate,placeName,setCurrent,store,storeSuggestions}=await import('../public/inventory-data.js');
@@ -149,7 +149,7 @@ test('what the browser saved before still loads: v3 orders are kept, new keys ar
 test('the table view sorts, filters and remembers that it was chosen',async()=>{
  localStorage.clear();await mount();
  const tabs=()=>one('.inv-tabs').children;
- assert.deepEqual(tabs().map(b=>[b.textContent,b.getAttribute('aria-pressed')]),[['Map','true'],['Table','false']]);
+ assert.deepEqual(tabs().map(b=>[b.textContent,b.getAttribute('aria-pressed')]),[['Map','true'],['Table','false'],['Services','false']]);
  fire(tabs()[1],'click');await tick(1);
  assert.equal(one('.inv-map-wrap'),null);assert.equal(layoutLoad().view,'table');assert.equal(tabs()[1].getAttribute('aria-pressed'),'true');
  const rows=()=>text('.inv-rowbtn'),count=()=>one('.inv-table-view').querySelector('.inv-count').textContent;
@@ -188,29 +188,71 @@ test('table rows and their order are plain data',()=>{
  assert.deepEqual(sortRows(rows,'nonsense').map(r=>r.name),sortRows(rows).map(r=>r.name));assert.equal(rows[0].id,'mini','sorting copies');
 });
 
-test('the services catalog is the runtime entries, grouped by machine, with its own empty state',async()=>{
- await mount(servicesPage,{write:true});
- assert.equal(one('.ui-head').textContent.startsWith('InventoryServices'),true);
- assert.deepEqual(all('.inv-service-group').map(g=>g.children[0].textContent),['mini · Mac mini M42','nas · Linux NAS1']);
- assert.deepEqual(all('.inv-service').map(c=>c.querySelector('.inv-badge').textContent),['Service','Service','Service']);
- assert.deepEqual(all('.inv-service').map(c=>c.children[0].children[0].textContent),['Gateway','Old proxy','Photos']);
- assert.match(all('.inv-service')[1].textContent,/No address recorded/);assert.ok(all('.inv-service')[1].classList.contains('gap'));
- assert.equal(one('.inv-count').textContent,'3 services');
- const s=one('.inv-search');s.value='photos';fire(s,'input');
- assert.deepEqual(all('.inv-service').map(c=>c.children[0].children[0].textContent),['Photos']);assert.equal(one('.inv-count').textContent,'1 of 3 services');
- s.value='';fire(s,'input');fire(all('.inv-chip').find(b=>b.getAttribute('data-machine')==='nas'),'click');assert.equal(all('.inv-service').length,1);
- fire(all('.inv-service')[0],'click');assert.equal(one('.inv-detail').querySelector('.inv-title').textContent,'Photos','a card opens the entry');one('.inv-dialog').remove();
+test('services are a view of the inventory page: one dense list with addresses, machines, dependents and verification',async()=>{
+ localStorage.clear();await mount(()=>inventoryView({role:'viewer'},'services'),{write:true});
+ assert.deepEqual(all('.inv-tabs')[0].children.map(b=>[b.textContent,b.getAttribute('aria-pressed')]),[['Map','false'],['Table','false'],['Services','true']]);
+ assert.equal(one('.ui-head').textContent.startsWith('InventoryServices'),true,'the header names the view');
+ assert.equal(layoutLoad().view,'services','the view named in the address is remembered like a clicked tab');
+ assert.equal(one('.inv-map-wrap'),null);
+ const rows=()=>all('.inv-services')[0].children.find(c=>c.tagName==='tbody').children,names=()=>rows().map(r=>r.querySelector('.inv-rowbtn').textContent);
+ const cells=r=>Object.fromEntries(r.children.map(c=>[c.getAttribute('data-label'),c.textContent]));
+ // Sorted by machine, then name; every row says where, on what, who depends on it, what it needs and when it was checked.
+ assert.deepEqual(names(),['Gateway','Old proxy','Photos']);
+ assert.deepEqual(cells(rows()[0]),{Service:'GatewayService · 2.1',Address:'http://mini.example.lan:8790',Machine:'mini · Mac mini M4','Depends on it':'nothing recorded',Needs:'Cert sync',Verified:'2026-11-08'});
+ assert.equal(rows()[0].querySelector('.inv-addr').children[0].getAttribute('href'),'http://mini.example.lan:8790','a URL in the address is a link');
+ assert.match(cells(rows()[1]).Address,/No address recorded/);assert.ok(rows()[1].classList.contains('gap'));
+ assert.equal(one('.inv-count').textContent,'');assert.equal(all('.inv-count')[1].textContent,'3 services');
+ assert.equal(all('.inv-btn').find(b=>b.classList.contains('primary')).textContent,'+ Add a service');
+ // The search box and the table's filters are the page's: they hold across the views.
+ await type('photos');assert.deepEqual(names(),['Photos']);assert.equal(all('.inv-count')[1].textContent,'1 of 3 services');
+ fire(all('.inv-tabs')[0].children[1],'click');assert.deepEqual(text('.inv-rowbtn'),['Photos'],'the table shows the same search');
+ await type('');const place=all('.inv-table-filters')[0].children[1];place.value='nas · Linux NAS';fire(place,'change');
+ fire(all('.inv-tabs')[0].children[2],'click');assert.deepEqual(names(),['Photos'],'the place picked in the table filters the services too');
+ assert.equal(all('.inv-table-filters')[0].children[0].value,'nas · Linux NAS');
+ fire(all('.inv-more').find(b=>b.textContent==='Clear filters'),'click');assert.deepEqual(names(),['Gateway','Old proxy','Photos']);
+ // Sorting by a column; a name in "Needs" opens that entry, a row opens its own.
+ fire(all('.inv-sort').find(b=>b.textContent.startsWith('Verified')),'click');assert.deepEqual(names(),['Old proxy','Photos','Gateway']);
+ fire(rows()[2].querySelector('.inv-rel-item'),'click');assert.equal(one('.inv-detail').querySelector('.inv-title').textContent,'Cert sync');one('.inv-dialog').remove();
+ fire(rows()[1],'click');assert.equal(one('.inv-detail').querySelector('.inv-title').textContent,'Photos','a row opens the entry');one('.inv-dialog').remove();
  assert.deepEqual(serviceGroups(DOC()).map(g=>[g.machine,g.services.length]),[['mini',2],['nas',1]]);
+ const listed=serviceRows({entries:[...DOC().entries,{id:'app',kind:'tool',name:'App',machine:'mini',depends_on:[{id:'mini-gateway',kind:'call'}]}]});
+ assert.deepEqual(listed.find(r=>r.id==='mini-gateway').usedBy,[{id:'app',name:'App',kind:'call'}],'dependents are named, not just counted');
+ assert.deepEqual(sortServices(listed,'usedBy','desc').map(r=>r.id),['mini-gateway','mini-old','nas-photos'],'rows without dependents sink');
  // No runtime entries: say what a service is and point at kind "runtime".
  const was=reply;reply=()=>({status:200,body:{doc:{...DOC(),entries:DOC().entries.filter(e=>e.kind!=='runtime'&&e.id!=='mini-certs')},gaps:[],hashes:{}}});
  try{
-  await mount(servicesPage,{write:true});
+  await mount(()=>inventoryView({role:'viewer'},'services'),{write:true});
   assert.equal(one('.ui-empty').children.find(c=>c.tagName==='h2').textContent,'No services yet');
   assert.match(one('.ui-empty').textContent,/every entry of kind “runtime” is a service/);
   for(const word of ['inventory_describe','inventory_search','inventory_update','kind "runtime"','inventory:write'])assert.ok(text('.ui-copy')[0].includes(word),word);
-  assert.deepEqual(one('.ui-actions').children.map(a=>a.textContent),['Add a service','Open the inventory map']);
-  reply=missing;await mount(servicesPage);
-  assert.match(one('.ui-empty').textContent,/The inventory is still empty/);assert.deepEqual(one('.ui-actions').children.map(a=>a.textContent),['Open the inventory map'],'read-only: no add button');
+  assert.deepEqual(one('.ui-actions').children.map(a=>a.textContent),['Add a service']);
+  await mount(()=>inventoryView({role:'viewer'},'services'));assert.equal(one('.ui-actions'),null,'read-only: no add button');
+ }finally{reply=was;localStorage.clear();}
+});
+
+test('#services still works: it leads to the Services view; the header pill follows the answer\'s provenance',async()=>{
+ const went=[];globalThis.location={hash:'#services',replace:h=>{went.push(h);globalThis.location.hash=h;}};
+ try{
+  const node=servicesPage();assert.deepEqual(went,['#inventory-map/services']);assert.equal(node.getAttribute('role'),'status');
+  // The tabs keep the address in step without another page load.
+  const states=[];globalThis.history={replaceState:(a,b,hash)=>{states.push(hash);globalThis.location.hash=hash;}};
+  localStorage.clear();await mount(()=>inventoryView({role:'viewer'},'services'));
+  fire(all('.inv-tabs')[0].children[0],'click');fire(all('.inv-tabs')[0].children[1],'click');fire(all('.inv-tabs')[0].children[2],'click');
+  assert.deepEqual(states,['#inventory-map','#inventory-map/table','#inventory-map/services']);
+ }finally{delete globalThis.location;delete globalThis.history;localStorage.clear();}
+ const was=reply,provenance={kind:'agent',kinds:[{kind:'agent',count:7,unit:'entries',accounts:['codex'],lastAt:'2026-11-08'}],lastAt:'2026-11-08',summary:'x'};
+ reply=()=>({status:200,body:{doc:DOC(),gaps:[],hashes:{},provenance}});
+ try{
+  await mount(inventoryView);
+  const pill=one('.ui-prov');assert.equal(pill.querySelector('.ui-prov-text').textContent,'Agent · codex');assert.equal(pill.getAttribute('aria-expanded'),'false');
+  assert.equal(pill.getAttribute('aria-label'),'Data provenance: Agent · codex');
+  const pop=one('.ui-prov-pop');assert.ok(pop.hasAttribute('hidden'));
+  fire(pill,'click');assert.equal(pill.getAttribute('aria-expanded'),'true');assert.equal(pop.hasAttribute('hidden'),false);
+  assert.match(pop.textContent,/Written by an agent with a service-account key/);assert.match(pop.textContent,/7 entries/);assert.match(pop.textContent,/service accounts: codex/);
+  fire(pill,'click');assert.ok(pop.hasAttribute('hidden'),'a second press closes it');
+  // An answer without provenance (an older server, an empty inventory) simply has no pill.
+  reply=()=>({status:200,body:{doc:DOC(),gaps:[],hashes:{}}});await mount(inventoryView);assert.equal(one('.ui-prov'),null);
+  reply=missing;await mount(inventoryView);assert.equal(one('.ui-prov'),null);
  }finally{reply=was;}
 });
 

@@ -351,4 +351,9 @@ export default {
  'Schéma inventáře: pole záznamu, druhy, místa, úložiště tajemství a pravidla kontroly.':'The inventory schema: entry fields, kinds, places, secret stores and validation rules.',
  'Hromadné založení nebo nahrazení {entries:[{entry, base?}], dryRun?}; uloží se vše, nebo nic.':'Bulk create or replace {entries:[{entry, base?}], dryRun?}; everything is saved, or nothing.',
  'Smazání záznamu {id, base}; vyžaduje aktuální otisk a nesmí na něm nic záviset.':'Delete an entry {id, base}; needs the current hash, and nothing may depend on it.',
+ // The Services view of the inventory page (inventory-services.js).
+ 'Závisí na ní':'Depends on it',
+ 'nic zapsaného':'nothing recorded',
+ 'Služby: adresa, stroj, co na nich závisí a kdy byly ověřené':'Services: address, machine, what depends on them and when they were verified',
+ 'Každá služba na jednom řádku: kde ji najdeš, na čem běží, co na ní závisí a kdy byla naposledy ověřena.':'Every service on one line: where to reach it, what it runs on, what depends on it and when it was last verified.',
 };

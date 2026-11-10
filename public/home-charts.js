@@ -9,10 +9,11 @@ import {timeZone} from './site.js';
 let lib=null;
 export const loadECharts=()=>lib??=import('/vendor/echarts.esm.min.mjs');
 let live=[];let observer=null;
+const sparks=new Map();let sparkObserver=null;// tile node → its small chart (renderSpark)
 // What each live chart was last drawn from, so it can be drawn again when the theme changes: the colours
 // were resolved from the tokens when the option was built, and a canvas does not follow CSS.
 const drawn=new WeakMap();
-export function repaintCharts(){for(const chart of live){const again=drawn.get(chart);if(again)try{chart.setOption(again(),{notMerge:true,lazyUpdate:true});}catch{}}}
+export function repaintCharts(){for(const chart of [...live,...sparks.values()]){const again=drawn.get(chart);if(again)try{chart.setOption(again(),{notMerge:true,lazyUpdate:true});}catch{}}}
 globalThis.addEventListener?.('themechange',repaintCharts);
 // A design token as a colour string for the canvas (ECharts cannot read CSS variables itself).
 const FALLBACK={'--home-cpu':'#d95926','--home-gpu':'#9085e9','--home-mem':'#199e70','--home-power':'#c98500','--home-temp':'#d55181',
@@ -118,4 +119,39 @@ export async function renderCharts(cards,h,range,now={},{keep=false,echarts:give
   node.textContent='';node.classList.remove('empty');
   const chart=echarts.init(node,null,{renderer:'canvas'});chart.setOption(build());drawn.set(chart,build);live.push(chart);observer.observe(node);
  }
+}
+
+// --- the small chart on a tile ----------------------------------------------------------------
+// One utilisation series (m.spark from /api/home) as a bare line with a soft fill: no axes, no labels, no
+// grid, no legend, nothing to hover. The scale starts at 0 and ends at the next quarter above the peak (at
+// least 25 %), so an idle machine stays a low line instead of magnified noise. A step without a reading is
+// null and stays a gap. The colour is the measure's token, read again on a theme change like the big charts.
+const SPARK_TOKEN={cpu:'--home-cpu',gpu:'--home-gpu'};
+export function sparkOption(spark){
+ const color=token(SPARK_TOKEN[spark.series]||'--home-cpu'),step=spark.stepSeconds*1000,end=spark.end*1000,n=spark.values.length;
+ const peak=Math.max(0,...spark.values.filter(v=>v!=null));
+ return {animation:false,backgroundColor:'transparent',grid:{left:1,right:1,top:3,bottom:1},
+  xAxis:{type:'time',show:false,min:end-(n-1)*step,max:end},
+  yAxis:{type:'value',show:false,min:0,max:Math.max(25,Math.ceil(peak/25)*25)},
+  series:[{type:'line',data:spark.values.map((v,i)=>[end-(n-1-i)*step,v]),silent:true,showSymbol:false,connectNulls:false,smooth:.4,smoothMonotone:'x',
+   lineStyle:{width:1.75,color,cap:'round',join:'round'},itemStyle:{color},
+   areaStyle:{color:{type:'linear',x:0,y:0,x2:0,y2:1,colorStops:[{offset:0,color:alpha(color,.24)},{offset:1,color:alpha(color,0)}]}}}]};
+}
+export function disposeSparks(){for(const chart of sparks.values())try{chart.dispose();}catch{}sparks.clear();sparkObserver?.disconnect();sparkObserver=null;}
+// Draws spark into node (a box with a height), or redraws the chart that is already there.
+export async function renderSpark(node,spark,{echarts:given}={}){
+ const echarts=given||await loadECharts();
+ // Tiles that left the page take their charts with them.
+ for(const [old,chart] of sparks)if(old!==node&&old.isConnected===false){try{chart.dispose();}catch{}sparks.delete(old);sparkObserver?.unobserve?.(old);}
+ // A tile is built before it is on the page; a chart needs a box with a size.
+ if(node.isConnected===false)await new Promise(r=>(globalThis.requestAnimationFrame||setTimeout)(r));
+ if(node.isConnected===false)return null;
+ const build=()=>sparkOption(spark);
+ let chart=sparks.get(node);
+ if(!chart){
+  chart=echarts.init(node,null,{renderer:'canvas'});sparks.set(node,chart);
+  if(typeof ResizeObserver==='function'){sparkObserver??=new ResizeObserver(()=>{for(const c of sparks.values())c.resize();});sparkObserver.observe(node);}
+ }
+ chart.setOption(build(),{notMerge:true,lazyUpdate:true});drawn.set(chart,build);
+ return chart;
 }

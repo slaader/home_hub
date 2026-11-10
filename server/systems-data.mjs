@@ -13,6 +13,8 @@ import {site as loadedSite} from './site-config.mjs';
 import {readWatch,watchPath,CMD_ARGS} from './software-watch.mjs';
 import {collectorState} from './collector-state.mjs';
 import {tx,sentences,textOf,field} from './text.mjs';
+import {provenance,collectorSource} from './provenance.mjs';
+import {readRun} from './collector-run.mjs';
 export {parseVersion,compareVersions,extractVersion};
 
 export const SYSTEMS_SCHEMA=1;
@@ -258,7 +260,9 @@ function nasChecks(host,os){
 // (the boot time's microseconds were taken for its seconds). Such a value is not shown.
 const plausibleUptime=s=>Number.isFinite(s)&&s>=0&&s<20*365*86400?s:null;
 // collector (additive): where the two snapshots stand (collector-state.mjs) and where the watch list comes from.
-export function buildSystems({snapshot,upstream,registry,machines:probed=systemMachines(loadedSite()),now=Date.now(),watchSource=null}){
+// provenance (additive): the same as sources (server/provenance.mjs): the machine snapshot (id systems), the
+// release check (id upstream) and the watch list file (id watch), so a page can show the part it draws.
+export function buildSystems({snapshot,upstream,registry,machines:probed=systemMachines(loadedSite()),now=Date.now(),watchSource=null,watchFile=null}){
  const machines=snapshot?.machines||{};
  const software=softwareRows(registry||{items:[]},machines,upstream);
  const out=probed.map(m=>{
@@ -278,13 +282,19 @@ export function buildSystems({snapshot,upstream,registry,machines:probed=systemM
     checks:{ok:count(checks,'ok'),warn:count(checks,'warn'),crit:count(checks,'crit'),info:count(checks,'info'),unknown:count(checks,'unknown')}}};
  });
  const times=out.map(m=>m.collectedAt).filter(Boolean).sort();
+ const items=(registry?.items||[]).length;
+ const collector={...collectorState('systems',{configured:probed.length>0,collectedAt:snapshot?.collectedAt||times.at(-1)||null,now}),
+   upstream:collectorState('upstream',{configured:items>0,collectedAt:upstream?.checkedAt||null,now}),
+   watch:{source:watchSource,items}};
  return {schemaVersion:SYSTEMS_SCHEMA,generatedAt:new Date(now).toISOString(),collectedAt:snapshot?.collectedAt||times.at(-1)||null,oldestCollectedAt:times[0]||null,
   collectedFrom:snapshot?.collectedFrom||null,upstreamCheckedAt:upstream?.checkedAt||null,
   upstreamFailed:Object.values(upstream?.results||{}).filter(r=>r&&(r.stale||!r.ok)).length,categories:{...(registry?.categories||{}),'nas-apps':'Aplikace na NAS','containers':'Kontejnery (Docker)'},
   machines:out,software,
-  collector:{...collectorState('systems',{configured:probed.length>0,collectedAt:snapshot?.collectedAt||times.at(-1)||null,now}),
-   upstream:collectorState('upstream',{configured:(registry?.items||[]).length>0,collectedAt:upstream?.checkedAt||null,now}),
-   watch:{source:watchSource,items:(registry?.items||[]).length}}};
+  collector,
+  provenance:provenance([
+   collectorSource(collector,{id:'systems',run:readRun(snapshot?.run),host:snapshot?.collectedFrom||'',count:out.filter(m=>m.reachable).length,unit:'machines'}),
+   items||upstream?collectorSource(collector.upstream,{id:'upstream',run:readRun(upstream?.run),count:Object.keys(upstream?.results||{}).length,unit:'sources'}):null,
+   watchSource==='local'?{kind:'config',id:'watch',source:watchFile||'software-watch.json',count:items,unit:'items'}:null])};
 }
 // What the versions and protection pages need before there is a snapshot: is anything configured, and what.
 export function systemsSetup(site,{now=Date.now()}={}){
@@ -297,5 +307,7 @@ export async function loadSystems(directory,{registryFile=watchPath(),site=loade
  let snapshot;try{snapshot=JSON.parse(await readFile(path.join(dir,'snapshot.json'),'utf8'));}catch{return null;}
  const upstream=await readFile(path.join(dir,'upstream.json'),'utf8').then(JSON.parse).catch(()=>null);
  const watch=await readWatch({file:registryFile});
- return buildSystems({snapshot,upstream,registry:watch.registry,machines:systemMachines(site),now,watchSource:watch.source});
+ // The watch list by the name people know it under: its path inside the checkout, else just the file name.
+ const rel=registryFile?path.relative(path.resolve(import.meta.dirname,'..'),registryFile):'',watchFile=!registryFile?null:rel&&!rel.startsWith('..')&&!path.isAbsolute(rel)?rel:path.basename(registryFile);
+ return buildSystems({snapshot,upstream,registry:watch.registry,machines:systemMachines(site),now,watchSource:watch.source,watchFile});
 }

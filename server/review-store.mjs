@@ -77,6 +77,11 @@ export function reviewSearch(coll,s){
  return {kind:'review',id:s.id,project:s.project,updated:s.updatedAt,title:`${s.id} ${s.title}`,body:parts.filter(Boolean).join('\n')};
 }
 
+// Who published a set's rounds and who decided or commented on them, as [name, at] pairs
+// (server/provenance.mjs → authoredProvenance). Publishing a round is the record; feedback is a change.
+export const setAuthors=s=>({created:(s.rounds||[]).map(r=>[r.publishedBy,r.publishedAt]),
+ changes:(s.rounds||[]).flatMap(r=>Object.values(r.feedback||{}).flatMap(d=>[...(d.updatedBy?[[d.updatedBy,d.updatedAt]]:[]),...(d.comments||[]).map(c=>[c.by,c.at])]))});
+
 export function createReviewStore(root,{tickets,db=openDb(path.join(root,'hub.db')),maxBytes=Number(process.env.REVIEW_MAX_BYTES)||20*1024**3}={}){
  const blobs=path.join(root,'blobs'),uploads=path.join(root,'uploads');
  let queue=Promise.resolve(),used=null;const uploading=new Map();
@@ -214,14 +219,18 @@ export function createReviewStore(root,{tickets,db=openDb(path.join(root,'hub.db
     comments:Object.values(r.feedback).reduce((n,d)=>n+d.comments.length,0)},feedbackPending:pendingOf(s),cover:cover?{sha256:cover.sha256,type:cover.type,...(cover.viewport?{viewport:cover.viewport}:{})}:null};
  }
  const FILTERS=['project','ticket','status','feedback'];
- async function list(filter={}){
+ // authors: true adds `authors` = {created, changes} over the listed sets (server/provenance.mjs).
+ async function list(filter={},{authors=false}={}){
   if(!onlyKeys(filter,FILTERS))fail('invalid');const f=Object.fromEntries(Object.entries(filter).filter(([,v])=>v!==undefined&&v!==''));
   if(Object.values(f).some(v=>typeof v!=='string'))fail('invalid');
   if(f.project&&!PROJECT.test(f.project)||f.ticket&&!TICKET_ID.test(f.ticket)||f.status&&!['open','active','done','archived','all'].includes(f.status)||f.feedback&&f.feedback!=='pending')fail('invalid');
   const status=f.status||'open',data=await read();
   const sets=data.sets.filter(s=>(!f.project||s.project===f.project)&&(!f.ticket||s.tickets.includes(f.ticket))&&(status==='all'||(status==='active'?s.status==='open'&&!doneOf(s):status==='done'?s.status==='open'&&doneOf(s):s.status===status))&&(!f.feedback||pendingOf(s)))
    .sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
-  return {updatedAt:data.updatedAt,sets:sets.map(summary)};
+  const out={updatedAt:data.updatedAt,sets:sets.map(summary)};
+  if(!authors)return out;
+  const facts={created:[],changes:[]};for(const s of sets){const a=setAuthors(s);facts.created.push(...a.created);facts.changes.push(...a.changes);}
+  return {...out,authors:facts};
  }
  async function get(id){const data=await read(),s=setOf(data,id);return {...s,done:doneOf(s),feedbackPending:pendingOf(s)};}
 

@@ -326,10 +326,25 @@ test('tickets UI: edits send changed fields, oversized comments stay editable, t
  };
  const root=trackerView({canWrite:true},'items',ticket.id);document.body.append(root);await flush();
  assert.ok(root.textContent.includes(ticket.title));assert.equal(nodes(root,n=>n.tag==='img').length,0);assert.ok(!nodes(root,n=>n.tag==='a').some(n=>n.attrs.href?.startsWith('javascript:')));
+ // Read view first: the description is on the page once, and there is no edit form until it is asked for.
+ assert.equal(nodes(root,n=>n.tag==='form'&&n.textContent.startsWith('Edit')).length,0,'no edit form in the read view');
+ assert.equal(nodes(root,n=>n.tag==='textarea'&&n.attrs.name==='description').length,0);
+ assert.equal(nodes(root,n=>n.tag==='h3'&&n.textContent==='Description').length,1);
+ buttonText(root,'Edit').listeners.click();
  const edit=nodes(root,n=>n.tag==='form'&&n.textContent.startsWith('Edit'))[0];assert.ok(edit);
+ assert.equal(nodes(root,n=>n.tag==='h3'&&n.textContent==='Description').length,0,'while editing, the form holds the description instead of the rendered card');
+ assert.equal(nodes(root,n=>n.tag==='textarea'&&n.attrs.name==='description').length,1);assert.equal(document.activeElement,byName(root,'title'),'the keyboard starts in the form');
  const fields=Object.fromEntries(['title','description','type','status','priority','release','assignee','labels','refs'].map(k=>[k,{value:Array.isArray(ticket[k])?ticket[k].join(k==='refs'?'\n':', '):ticket[k]||''}]));fields.priority.value='high';fields.querySelector=()=>({disabled:false});
  edit.listeners.submit({preventDefault(){},currentTarget:fields});await flush();
  assert.deepEqual(posts[0].body,{id:ticket.id,rev:1,priority:'high'});assert.equal((await s.get(ticket.id)).description,ticket.description);
+ assert.equal(nodes(root,n=>n.tag==='form'&&n.textContent.startsWith('Edit')).length,0,'a saved edit goes back to the read view');assert.ok(buttonText(root,'Edit'));
+ // Cancel closes the form without a write; with unsaved changes it asks first.
+ buttonText(root,'Edit').listeners.click();buttonText(root,'Cancel editing').listeners.click();
+ assert.equal(nodes(root,n=>n.tag==='form'&&n.textContent.startsWith('Edit')).length,0);assert.equal(document.activeElement,buttonText(root,'Edit'));assert.equal(posts.length,1);
+ buttonText(root,'Edit').listeners.click();byName(root,'title').value='changed my mind';
+ const asked=[];globalThis.confirm=q=>{asked.push(q);return false;};t.after(()=>{delete globalThis.confirm;});
+ buttonText(root,'Cancel editing').listeners.click();assert.deepEqual(asked,['Discard the unsaved edits?']);assert.equal(byName(root,'title').value,'changed my mind','kept when the answer is no');
+ globalThis.confirm=()=>true;buttonText(root,'Cancel editing').listeners.click();assert.equal(nodes(root,n=>n.tag==='form'&&n.textContent.startsWith('Edit')).length,0);
  const comment=nodes(root,n=>n.tag==='form'&&n.textContent.includes('Add comment'))[0],button={disabled:false},text={value:'ž'.repeat(8000)};
  // This fits 16 KiB; use three-byte text to cross the byte limit while staying below maxlength.
  text.value='漢'.repeat(6000);await comment.listeners.submit({preventDefault(){},currentTarget:{text,querySelector:()=>button}});
@@ -343,6 +358,7 @@ test('tickets UI: a quick status change keeps the unsaved comment and edited des
  dom(t);const {s}=await store(t);const ticket=await s.create({project:'home-hub',title:'Drafts',description:'old'},'a');
  let gets=0;globalThis.fetch=async(url,options={})=>{if(options.method==='POST')return Response.json(await s.update(JSON.parse(options.body),'ui'));gets++;return Response.json(url.startsWith('/api/tickets/')?await s.get(ticket.id):await s.list());};
  const root=trackerView({canWrite:true},'items',ticket.id);document.body.append(root);await flush();const before=gets;
+ buttonText(root,'Edit').listeners.click();
  byName(root,'text').value='half-written comment';byName(root,'description').value='new description draft';
  const start=buttonText(root,'Start');await start.listeners.click({currentTarget:start});await flush();
  assert.equal((await s.get(ticket.id)).status,'in-progress');assert.equal(gets,before,'no refetch after a write');
@@ -353,6 +369,7 @@ test('tickets UI: a saved comment clears its box even when every later read fail
  dom(t);const {s}=await store(t);const ticket=await s.create({project:'home-hub',title:'No duplicates'},'a');let down=false;
  globalThis.fetch=async(url,options={})=>{if(options.method==='POST')return Response.json(await s.comment(JSON.parse(options.body),'ui'));if(down)return Response.json({error:{message:'down'}},{status:503});return Response.json(url.startsWith('/api/tickets/')?await s.get(ticket.id):await s.list());};
  const root=trackerView({canWrite:true},'items',ticket.id);document.body.append(root);await flush();down=true;
+ buttonText(root,'Edit').listeners.click();
  byName(root,'description').value='kept edit';const form=nodes(root,n=>n.tag==='form'&&n.textContent.includes('Add comment'))[0],button={disabled:false};
  await form.listeners.submit({preventDefault(){},currentTarget:{text:{value:'only once'},querySelector:()=>button}});await flush();
  assert.equal((await s.get(ticket.id)).comments.length,1);assert.ok(root.textContent.includes('only once'));
@@ -446,6 +463,7 @@ test('tickets UI: the assignee field suggests people, text has a preview, histor
  globalThis.fetch=async url=>Response.json(url==='/api/tickets/people'?{people:[{name:'robin',kind:'user',assigned:2,active:1},{name:'agent-one',kind:'agent',assigned:0,active:0}]}
   :url.startsWith('/api/tickets/')?ticket:{...EMPTY,projects:[{id:'home-hub',key:'HH',name:'Home Hub',rev:1}]});
  const root=trackerView({canWrite:true,username:'alex'},'items','HH-1');document.body.append(root);await flush();
+ buttonText(root,'Edit').listeners.click();
  const input=byName(root,'assignee'),list=nodes(root,n=>n.tag==='datalist')[0];
  assert.equal(input.attrs.list,list.attrs.id);assert.deepEqual(nodes(list,n=>n.tag==='option').map(o=>o.attrs.value),['alex','robin','agent-one'],'me first, then the hub\'s people');
  assert.ok(buttonText(root,'Take it'),'one click assigns the item to me');
@@ -453,7 +471,8 @@ test('tickets UI: the assignee field suggests people, text has a preview, histor
  assert.deepEqual(nodes(root,n=>(n.attrs.class||'').split(' ').includes('tk-event')).map(n=>nodes(n,x=>x.tag==='b')[0].textContent),['Attachment added: shot.png','Item created'],'history, newest first');
  assert.equal(nodes(root,n=>n.tag==='img'&&n.attrs.src==='/api/tickets/HH-1/attachments/11111111-1111-4111-8111-111111111111').length,1,'an image attachment has a preview');
  // Preview of the comment being written: rendered Markdown, the ticket id a link; an empty box is not previewed.
- const box=byName(root,'text'),toggle=nodes(root,n=>n.tag==='button'&&n.textContent==='Preview')[0];
+ // (the open edit form above has a preview of its own; the comment box's is the last one)
+ const box=byName(root,'text'),toggle=nodes(root,n=>n.tag==='button'&&n.textContent==='Preview').at(-1);
  toggle.listeners.click();assert.equal(box.hidden,undefined,'nothing to preview yet');
  box.value='Fixed in **HH-2**';toggle.listeners.click();assert.equal(box.hidden,true);
  const preview=nodes(root,n=>(n.attrs.class||'')==='tk-md-preview'&&n.children.length)[0];

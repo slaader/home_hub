@@ -19,6 +19,7 @@ import {readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {inCidrs} from './site-config.mjs';
 import {COLLECTORS,staleAfter} from './collector-state.mjs';
+import {provenance} from './provenance.mjs';
 const safe=(v,max=160)=>typeof v==='string'?v.replace(/[\u0000-\u001f\u007f]/g,' ').slice(0,max):'';
 const macPattern=/^(?:[a-f0-9]{2}:){5}[a-f0-9]{2}$/i;
 const count=v=>Number.isSafeInteger(v)&&v>=0?v:null;
@@ -80,6 +81,13 @@ export async function readRouterFor(hub,{now=Date.now()}={}){
  let raw;try{raw=await adapter.read({directory:hub.directory,site:hub.site,hub});}catch{raw={status:'unavailable',error:'adapter-failed'};}
  const staleAfterSeconds=Number.isSafeInteger(adapter.staleAfterSeconds)&&adapter.staleAfterSeconds>=60&&adapter.staleAfterSeconds<=86400?adapter.staleAfterSeconds:undefined;
  return {...normalizeRouter(raw&&typeof raw==='object'&&!Array.isArray(raw)?raw:null,{lanCidrs,adapter,now,...(staleAfterSeconds?{staleAfterSeconds}:{})}),...(adapter.missing?{error:'unknown-adapter'}:{})};
+}
+// Where the census comes from (server/provenance.mjs): the included file adapter is fed by a collector
+// script; any other adapter is a plugin's. router: what readRouterFor() returned. No adapter = no data.
+export function routerProvenance(router){
+ const a=router?.adapter;if(!a)return provenance([]);
+ const builtin=ROUTER_ADAPTERS[a.id],facts={state:router.state,lastAt:router.observedAt,count:router.devices?.length||0,unit:'clients',detail:a.title};
+ return provenance([builtin?{kind:'collector',id:a.id,source:builtin.collector,intervalSeconds:COLLECTORS.router.intervalSeconds,...facts}:{kind:'plugin',id:a.id,source:a.id,...facts}]);
 }
 export function mergeRouter(inventory,router){
  const devices=inventory.devices.map(d=>({...d})),lookup=new Map(devices.map(d=>[d.id,d])),viaAlias=new Map();

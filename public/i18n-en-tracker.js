@@ -168,4 +168,7 @@ export default {
  'Příloha ticketu: soubor jako application/octet-stream, nejvýš 20 MB.':'A ticket attachment: the file as application/octet-stream, 20 MB at most.',
  'Soubor přílohy; obrázky a text přímo, ostatní ke stažení.':'The attachment file; pictures and text inline, anything else as a download.',
  'Fulltext přes tickety a review; slova jako předpony, bez diakritiky.':'Full-text search over tickets and review sets; words match as prefixes, accents ignored.',
+ 'Zahodit neuložené úpravy?':'Discard the unsaved edits?',
+ 'Zrušit úpravy':'Cancel editing',
+ 'Upravit položku {id}':'Edit item {id}',
 };

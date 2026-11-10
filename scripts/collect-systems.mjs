@@ -17,6 +17,7 @@ import {fileURLToPath} from 'node:url';
 import {parseSystemsProbe,buildSystems,systemsSpecs,systemMachines} from '../server/systems-data.mjs';
 import {site as loadedSite,sshHosts} from '../server/site-config.mjs';
 import {readWatch,checkWatch} from '../server/software-watch.mjs';
+import {collectorRun} from '../server/collector-run.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 
@@ -53,7 +54,7 @@ const emptyRecord=(id,alias,error,at)=>({host:id,alias,complete:false,stale:fals
  * → {snapshot, doc, file, upstream}
  */
 export async function collectSystems({site=loadedSite(),hosts=sshHosts(site,m=>m.ssh.probe),registry,outDir,exec=run,now=()=>new Date().toISOString(),
- collectedFrom=null,probesDir=path.join(root,'scripts','systems')}){
+ collectedFrom=null,probesDir=path.join(root,'scripts','systems'),started=null}){
  const machineList=systemMachines(site);
  const [macProbe,nasProbe]=await Promise.all(['mac-probe.sh','nas-probe.sh'].map(f=>readFile(path.join(probesDir,f),'utf8')));
  const previous=await readFile(path.join(outDir,'snapshot.json'),'utf8').then(JSON.parse).catch(()=>null);
@@ -68,7 +69,9 @@ export async function collectSystems({site=loadedSite(),hosts=sshHosts(site,m=>m
   else if(machines[id])machines[id]={...machines[id],stale:true,lastError:res.error,lastAttemptAt:now()};
   else machines[id]=emptyRecord(id,alias,res.error,now());
  }
- const snapshot={schemaVersion:1,collectedAt:now(),collectedFrom:collectedFrom??(await exec('hostname',['-s'])).stdout.trim(),machines};
+ const snapshot={schemaVersion:1,collectedAt:now(),collectedFrom:collectedFrom??(await exec('hostname',['-s'])).stdout.trim(),
+  // How this run was started (a scheduled job or a terminal), when that is knowable: server/collector-run.mjs.
+  ...(started?{run:started}:{}),machines};
  await mkdir(outDir,{recursive:true,mode:0o700});
  const file=path.join(outDir,'snapshot.json'),tmp=`${file}.${process.pid}.tmp`;
  await writeFile(tmp,JSON.stringify(snapshot,null,1)+'\n',{mode:0o600});await rename(tmp,file);
@@ -107,7 +110,7 @@ if(process.argv[1]===fileURLToPath(import.meta.url)){
  const problems=checkWatch(watch.registry,{machines:site.machines.filter(m=>m.ssh?.probe==='mac').map(m=>m.id)});
  for(const p of [...problems.errors,...problems.warnings].slice(0,20))console.warn(`watch list: ${p}`);
  const started=Date.now();
- const {doc,file,upstream}=await collectSystems({site,hosts,registry:watch.registry,outDir});
+ const {doc,file,upstream}=await collectSystems({site,hosts,registry:watch.registry,outDir,started:collectorRun()});
  for(const m of doc.machines){
   if(!hosts.has(m.id))continue;
   const s=m.summary;

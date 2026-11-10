@@ -4,13 +4,15 @@
 //                         the time each source was last checked. #versions/~watch is the watch list itself.
 //   #hardening[/machine]  Ochrana strojů: a pass / warning / fail checklist per machine with a reason for
 //                         every check, and the ports open to the network.
+// The pill next to each title says where the page's data comes from (the answer's provenance): versions draw
+// the machine snapshot, the release check and the watch list; protection draws the machine snapshot alone.
 // Both say where the collector stands: not configured (what to add), configured without a snapshot yet,
 // a stale snapshot (older than the collector's interval), or fine. SSH keys and sudo stay on #security.
 import {el} from './views.js';
 import {sessionCache,authGuard} from './session-cache.js';
 import {t,tp,locale,say} from './i18n.js';
 import {timeZone} from './site.js';
-import {pageHeader,emptyState,notInstalled,copyBlock} from './ui.js';
+import {pageHeader,emptyState,notInstalled,copyBlock,provenancePart} from './ui.js';
 
 // --- shared pieces (also used by the inventory map, the SSH key page and the router panel) ---------
 // Replace a node's children, leaving out what is not there (the DOM would print null as text).
@@ -64,7 +66,7 @@ export async function load(force=false){
  const hit=force?undefined:cache.get();if(hit)return hit;
  const store=cache.begin(),lost=authGuard();
  const r=await fetch('/api/systems');
- if(!r.ok){lost(r);const e=await r.json().catch(()=>({}));const err=new Error(e.error?.message||t('Načtení selhalo.'));err.status=r.status;err.collector=e.collector||null;throw err;}
+ if(!r.ok){lost(r);const e=await r.json().catch(()=>({}));const err=new Error(e.error?.message||t('Načtení selhalo.'));err.status=r.status;err.collector=e.collector||null;err.provenance=e.provenance||null;throw err;}
  return store('',await r.json());
 }
 
@@ -206,7 +208,7 @@ function versionsPage(box,doc,sub){
  };
  const c=doc.collector||{};
  fill(box,
-  pageHeader({eyebrow:t('Inventář'),title:t('Verze a aktualizace'),lead:t('Co na kterém stroji běží v jaké verzi a co čeká na aktualizaci. Sběr jen čte; nic neinstaluje ani neaktualizuje.'),
+  pageHeader({eyebrow:t('Inventář'),title:t('Verze a aktualizace'),lead:t('Co na kterém stroji běží v jaké verzi a co čeká na aktualizaci. Sběr jen čte; nic neinstaluje ani neaktualizuje.'),provenance:doc.provenance,
    actions:[{label:t('Obnovit'),onclick:()=>{cache.clear();dispatchEvent(new Event('hashchange'));}}]}),
   freshnessBanner([{label:t('Stroje:'),...c,collectedAt:doc.collectedAt},{label:t('Nejnovější verze:'),...(c.upstream||{}),collectedAt:doc.upstreamCheckedAt}]),
   // Nothing on the watch list: only what the probes discover by themselves is listed. Say where to change that.
@@ -285,7 +287,7 @@ function hardeningPage(box,doc,sub){
  };
  const [before,after='']=t('Klíče, authorized_keys a sudo pravidla jsou na stránce {link}. Sběr je jen pro čtení: probe na Macích čte stav přes systémové nástroje (pfctl, sshd -T a lsof přes sudo -n), na NAS přes TrueNAS API.').split('{link}');
  fill(box,
-  pageHeader({eyebrow:t('Bezpečnost'),title:t('Ochrana strojů'),lead:t('Kontroly ochrany pro každý stroj: co je splněno, co stojí za pozornost a proč na tom záleží.'),
+  pageHeader({eyebrow:t('Bezpečnost'),title:t('Ochrana strojů'),lead:t('Kontroly ochrany pro každý stroj: co je splněno, co stojí za pozornost a proč na tom záleží.'),provenance:provenancePart(doc.provenance,['systems']),
    actions:[{label:t('SSH klíče'),href:'#security'},{label:t('Obnovit'),onclick:()=>{cache.clear();dispatchEvent(new Event('hashchange'));}}]}),
   freshnessBanner([{label:t('Stroje:'),...(doc.collector||{}),collectedAt:doc.collectedAt}]),
   el('div',{class:'col-stats'},
@@ -304,7 +306,7 @@ export function systemsView(mode='versions',sub=null){
  const draw=async()=>{
   try{const doc=await load();(mode==='hardening'?hardeningPage:versionsPage)(box,doc,sub);}
   catch(e){
-   const head=pageHeader(mode==='hardening'?{eyebrow:t('Bezpečnost'),title:t('Ochrana strojů')}:{eyebrow:t('Inventář'),title:t('Verze a aktualizace')});
+   const head=pageHeader({...(mode==='hardening'?{eyebrow:t('Bezpečnost'),title:t('Ochrana strojů')}:{eyebrow:t('Inventář'),title:t('Verze a aktualizace')}),provenance:e.provenance});
    // Without a snapshot the watch list can still be prepared (#versions/~watch).
    if(e.status===404)fill(box,head,setupState(e.collector),mode==='versions'&&sub==='~watch'?watchPanel():null);
    else fill(box,head,emptyState({icon:'⚠',title:e.status===403?t('Jen pro administrátora'):t('Stav strojů se nepodařilo načíst'),body:e.status===403?t('Tahle stránka je dostupná jen správci.'):t(e.message)||t('Zkus to znovu.'),

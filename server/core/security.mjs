@@ -12,6 +12,8 @@ import {loadSystems,systemsSetup} from '../systems-data.mjs';
 import {createWatchStore,describeWatch,isWatchError,watchPath,DETECT_KINDS,UPSTREAM_TYPES,CMD_ARGS,VERSION_SCHEMES} from '../software-watch.mjs';
 import {toolError} from '../mcp.mjs';
 import {readRouterFor} from '../router-data.mjs';
+import {provenance,collectorSource} from '../provenance.mjs';
+import {readRun} from '../collector-run.mjs';
 
 // The pipeline has already checked the route's scope (security:read) for keys, people and devices alike; this
 // is the same rule once more at the door: administrators, and any role or key that holds security:read.
@@ -60,12 +62,16 @@ export default {
   {method:'GET',path:'/api/security',scope:'security:read',async handler(c){
     if(adminOnly(c,'Only an administrator can see the security inventory.'))return;
     const doc=await loadSecurity(c.hub.directory);
-    if(!doc)return c.json(404,{error:{code:'SECURITY_MISSING',message:'No SSH key inventory yet. Run node scripts/collect-security.mjs.'},collector:securitySetup(c.hub.site)});
-    return c.json(200,{...doc,collector:securitySetup(c.hub.site,{collectedAt:doc.collectedAt})});}},
+    // provenance (server/provenance.mjs): the collector, when it last ran, from where and who started it.
+    const collector=securitySetup(c.hub.site,{collectedAt:doc?.collectedAt||null});
+    if(!doc)return c.json(404,{error:{code:'SECURITY_MISSING',message:'No SSH key inventory yet. Run node scripts/collect-security.mjs.'},collector,provenance:provenance([collectorSource(collector,{id:'security'})])});
+    return c.json(200,{...doc,collector,provenance:provenance([collectorSource(collector,{id:'security',run:readRun(doc.run),host:doc.collectedFrom,count:doc.machines.filter(m=>m.reachable).length,unit:'machines'})])});}},
   {method:'GET',path:'/api/systems',scope:'security:read',async handler(c){
     if(adminOnly(c,'Only an administrator can see machine versions and protection.'))return;
     const doc=await loadSystems(c.hub.directory,{site:c.hub.site,registryFile:c.state.watch.file});
-    return doc?c.json(200,doc):c.json(404,{error:{code:'SYSTEMS_MISSING',message:'No machine snapshot yet. Run node scripts/collect-systems.mjs.'},collector:systemsSetup(c.hub.site)});}},
+    if(doc)return c.json(200,doc);
+    const collector=systemsSetup(c.hub.site);
+    return c.json(404,{error:{code:'SYSTEMS_MISSING',message:'No machine snapshot yet. Run node scripts/collect-systems.mjs.'},collector,provenance:provenance([collectorSource(collector,{id:'systems'})])});}},
   // Where each collector stands, without its snapshot. Always 200, also on a hub where nothing has been
   // collected: /api/systems and /api/security answer 404 there, so a screen that only wants to know
   // whether anything arrived (the getting-started checklist) asks here and leaves the console quiet.
@@ -81,7 +87,8 @@ export default {
      router:{state:router?.status||'unavailable',collectedAt:router?.observedAt||null}}});}},
   {method:'GET',path:'/api/software-watch',scope:'software:write',async handler(c){
     if(adminOnly(c,'Only an administrator can see the software watch list.'))return;
-    return c.json(200,await watchList(c.state,c.hub));}},
+    const list=await watchList(c.state,c.hub);
+    return c.json(200,{...list,provenance:provenance(list.source==='local'?[{kind:'config',id:'watch',source:list.file,count:list.items.length,unit:'items'}]:[])});}},
   {method:'POST',path:'/api/software-watch',scope:'software:write',bodyLimit:32768,
    error:(e,c)=>{const mapped=watchError(e);if(mapped&&e.details?.length){c.json(mapped[0],{error:{code:mapped[1],message:mapped[2],details:e.details}});return null;}return mapped;},
    async handler(c){

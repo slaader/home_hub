@@ -81,26 +81,19 @@
 .hv-tile-note{display:flex;flex-direction:column;gap:var(--space-1);padding:var(--space-3);border:1px dashed var(--color-border-strong);border-radius:var(--radius-m);font-size:var(--text-s);line-height:1.4;color:var(--color-text-dim)}
 .hv-tile-note b{font-weight:var(--weight-medium);color:var(--color-text)}
 .hv-tile-note.warn{border-color:color-mix(in srgb,var(--color-warn) 55%,var(--color-border))}
-.hv-trend{display:flex;flex-direction:column;gap:var(--space-1);margin-top:auto;padding-top:var(--space-2);border-top:1px solid var(--color-border)}
-.hv-spark{display:block;width:100%;height:44px}
-.hv-spark .rule{stroke:var(--color-border);stroke-width:1;vector-effect:non-scaling-stroke}
-.hv-spark .line{fill:none;stroke:var(--home-cpu);stroke-width:2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
-.hv-spark-empty{display:grid;place-items:center;height:44px;font:var(--text-xs) var(--font-mono);color:var(--color-text-faint)}
+/* The small chart at the foot of a tile: a bare line on a canvas (home-charts.js), no caption and no rules. */
+.hv-trend{margin-top:auto;padding-top:var(--space-1)}
+.hv-spark{width:100%;height:36px}
 
-/* Reorder mode: a bar above the tiles; tiles get a position and ↑/↓, drag with a mouse, arrow keys on a focused tile. */
-.hv-orderbar{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);padding:var(--space-2) var(--space-3);border:1px dashed var(--color-border-strong);border-radius:var(--radius-m);background:var(--color-surface)}
-.hv-order-note{flex:1 1 220px;font-size:var(--text-s);color:var(--color-text-dim)}
-.hv-tiles.reordering .hv-tile{cursor:grab;border-style:dashed;border-color:var(--color-border-strong);user-select:none}
-.hv-tiles.reordering .hv-tile:hover{transform:none;box-shadow:none}
-.hv-tiles.reordering .hv-tile img{-webkit-user-drag:none;pointer-events:none}
-.hv-tile.dragging{opacity:.4}
-.hv-tile.drop-before{box-shadow:-3px 0 0 var(--color-accent)}.hv-tile.drop-after{box-shadow:3px 0 0 var(--color-accent)}
-.hv-order{position:absolute;top:var(--space-2);left:var(--space-2);right:var(--space-2);display:flex;align-items:center;gap:var(--space-2);z-index:2}
-.hv-pos{margin-right:auto;padding:var(--space-1) var(--space-2);border:1px solid var(--color-border-strong);border-radius:var(--radius-s);background:var(--color-surface);font:var(--weight-bold) var(--text-xs) var(--font-mono);color:var(--color-text)}
-.hv-move{min-width:44px;min-height:44px;border:1px solid var(--color-border-strong);border-radius:var(--radius-m);background:var(--color-surface);color:var(--color-text);font:var(--weight-bold) var(--text-l) var(--font-sans);cursor:pointer}
-.hv-move:hover:not(:disabled){border-color:var(--color-accent)}
-.hv-move:focus-visible{outline:2px solid var(--color-focus);outline-offset:2px}
-.hv-move:disabled{opacity:.3;cursor:default}
+/* Moving tiles (home-drag.js). There is no mode: a tile is picked up by dragging it, or by holding a finger
+   on it. It is a link, so its text is not selectable and the long-press menu stays away. The held tile
+   follows the pointer; an accent bar on a neighbour's edge shows where it would land. */
+.hv-tiles.sortable .hv-tile{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.hv-tiles.sortable .hv-tile img{-webkit-user-drag:none}
+.hv-tiles.sorting,.hv-tiles.sorting .hv-tile{cursor:grabbing}
+.hv-tile.dragging{z-index:3;border-color:var(--color-accent);box-shadow:var(--shadow-3);transition:none}
+.hv-tile.drop-before{box-shadow:-4px 0 0 var(--color-accent)}.hv-tile.drop-after{box-shadow:4px 0 0 var(--color-accent)}
+.hv-tiles.single .hv-tile.drop-before{box-shadow:0 -4px 0 var(--color-accent)}.hv-tiles.single .hv-tile.drop-after{box-shadow:0 4px 0 var(--color-accent)}
 
 /* --- machine page ---------------------------------------------------------------------------- */
 .hv-back{align-self:flex-start;font:var(--text-s) var(--font-mono);color:var(--color-accent);text-decoration:none}
@@ -209,21 +202,32 @@
 .hv-models li.loaded::before{background:var(--color-good)}.hv-models li.loading::before{background:var(--color-warn)}
 .hv-models small{display:block;color:var(--color-text-faint);word-break:break-all}
 
-/* Local LLM runtimes: what a provider reported, or the placeholder that says what will fill it. */
-.hv-runtimes{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr));gap:var(--space-3)}
-.hv-runtimes .hv-source{grid-column:1/-1;margin:0}
-.hv-runtime{display:flex;flex-direction:column;gap:var(--space-2);min-width:0;padding:var(--space-4);background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-l)}
+/* Local LLM runtimes: one compact card per runtime a provider reported. The first figure is the large one. */
+.hv-runtimes{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:var(--space-3);align-items:start}
+.hv-runtimes .hv-source,.hv-runtimes .hv-note{grid-column:1/-1;margin:0}
+.hv-source.warn{color:var(--color-warn)}
+.hv-runtime{display:flex;flex-direction:column;gap:var(--space-2);min-width:0;padding:var(--space-3) var(--space-4) var(--space-4);background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-l)}
 .hv-runtime header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:var(--space-1) var(--space-2)}
-.hv-runtime h4{margin:0;font:var(--weight-bold) var(--text-m)/var(--leading-tight) var(--font-sans);overflow-wrap:anywhere}
-.hv-runtime-meta,.hv-runtime-none{margin:0;font:var(--text-xs) var(--font-mono);color:var(--color-text-faint);overflow-wrap:anywhere}
-.hv-runtime-stats{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px var(--space-3);margin:0}
-.hv-runtime-stats dt{font:var(--text-xs) var(--font-mono);color:var(--color-text-faint)}
-.hv-runtime-stats dd{margin:0;text-align:right;font:var(--weight-medium) var(--text-xs) var(--font-mono);color:var(--color-text)}
-.hv-runtime-models li{display:flex;justify-content:space-between;gap:var(--space-2);padding:var(--space-1) 0;border-top:1px dashed var(--color-border);font:var(--text-xs) var(--font-mono);color:var(--color-text-faint);overflow-wrap:anywhere}
+.hv-runtime h3{margin:0;font:var(--weight-bold) var(--text-m)/var(--leading-tight) var(--font-sans);overflow-wrap:anywhere}
+.hv-runtime-meta{margin:0;font:var(--text-xs)/1.4 var(--font-mono);color:var(--color-text-faint);overflow-wrap:anywhere}
+.hv-runtime-stats{display:flex;flex-wrap:wrap;align-items:flex-end;gap:var(--space-2) var(--space-4);margin:0;padding:var(--space-2) 0;border-block:1px solid var(--color-border)}
+.hv-runtime-stats div{display:flex;flex-direction:column-reverse;gap:2px;min-width:0}
+.hv-runtime-stats dt{font:var(--text-2xs)/1.2 var(--font-mono);color:var(--color-text-faint)}
+.hv-runtime-stats dd{margin:0;font:var(--weight-medium) var(--text-s)/1.2 var(--font-mono);color:var(--color-text);white-space:nowrap}
+.hv-runtime-stats .main dd{font:var(--weight-bold) var(--text-xl)/1 var(--font-mono)}
+.hv-runtime-list{display:flex;flex-direction:column;gap:var(--space-1);min-width:0}
+.hv-runtime-models li{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:0 var(--space-3);padding:var(--space-1) 0 var(--space-1) var(--space-4);position:relative;font:var(--text-xs)/1.5 var(--font-mono);color:var(--color-text-dim);overflow-wrap:anywhere}
+.hv-runtime-models li::before{content:'';position:absolute;left:2px;top:10px;width:7px;height:7px;border-radius:50%;border:1px solid var(--color-border-strong)}
 .hv-runtime-models li.on{color:var(--color-text)}
-.hv-placeholder{display:flex;flex-direction:column;align-items:flex-start;gap:var(--space-2);max-width:720px;padding:var(--space-4);border:1px dashed var(--color-border-strong);border-radius:var(--radius-l)}
-.hv-placeholder p{margin:0;font-size:var(--text-s);line-height:var(--leading-body);color:var(--color-text-dim)}
-.hv-tag{padding:3px var(--space-2);border:1px solid color-mix(in srgb,var(--color-warn) 55%,var(--color-border));border-radius:var(--radius-pill);font:var(--weight-medium) 11px/1.3 var(--font-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--color-warn)}
+.hv-runtime-models li.on::before{border-color:var(--color-good);background:var(--color-good)}
+.hv-runtime-models li.busy::before{border-color:var(--color-warn);background:var(--color-warn)}
+.hv-runtime-models small{font-size:var(--text-2xs);color:var(--color-text-faint);white-space:nowrap}
+.hv-runtime details{min-width:0}
+.hv-runtime summary{display:inline-flex;align-items:center;min-height:32px;font:var(--text-xs) var(--font-mono);color:var(--color-text-dim);cursor:pointer}
+.hv-runtime summary{list-style:none;gap:var(--space-1)}.hv-runtime summary::-webkit-details-marker{display:none}
+.hv-runtime summary::before{content:'▸';color:var(--color-text-faint)}.hv-runtime details[open]>summary::before{content:'▾'}
+.hv-runtime summary:hover{color:var(--color-text)}
+.hv-runtime summary:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:var(--radius-xs)}
 
 /* --- add / edit device dialog ---------------------------------------------------------------- */
 .had{width:min(760px,calc(100vw - 24px));max-height:calc(100dvh - 24px);padding:0;overflow:auto;background:var(--color-surface);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-l);box-shadow:var(--shadow-raised);font-family:var(--font-sans)}
@@ -291,14 +295,13 @@
 @media(max-width:1100px){.hv-stack-layout{grid-template-columns:1fr}.hv-panel{position:static;min-height:0}}
 @media(max-width:640px){
  .hv-tiles{grid-template-columns:1fr}
- .hv-tile.drop-before{box-shadow:0 -3px 0 var(--color-accent)}.hv-tile.drop-after{box-shadow:0 3px 0 var(--color-accent)}
  .hv-page .ui-button,.had .ui-button{min-height:44px}
  .hv-page .ui-head-actions{width:100%}.hv-page .ui-head-actions .ui-button{flex:1 1 auto;justify-content:center}
  .hv-host-art{width:96px}
  .hv-host-title h1{font-size:var(--text-xl)}
  .hv-host-main .ui-head-actions{width:100%}
  .hv-ranges{width:100%}.hv-ranges button{flex:1}
- .hv-notice,.hv-placeholder{padding:var(--space-3) var(--space-4)}
+ .hv-notice{padding:var(--space-3) var(--space-4)}
  .had-form{padding:var(--space-4) var(--space-4) 0}.had-head{padding:var(--space-3) var(--space-4)}
  .had-foot{margin:0 calc(-1*var(--space-4));padding:var(--space-3) var(--space-4)}
  .had-grid,.had-grid.two,.had-choices{grid-template-columns:1fr}.had-grid.four{grid-template-columns:repeat(2,minmax(0,1fr))}

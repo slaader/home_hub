@@ -16,7 +16,7 @@ import {el,onLeave} from './views.js';
 import {onSessionReset,authGuard} from './session-cache.js';
 import {timeZone} from './site.js';
 import {t,tp,locale} from './i18n.js';
-import {pageHeader,emptyState} from './ui.js';
+import {pageHeader,emptyState,provenanceBadge} from './ui.js';
 
 // Label lists are functions: t() has to run when the page is drawn, in the language active then.
 const KINDS=()=>({html:t('Mockupy'),image:t('Obrázky a rendery'),model:t('3D modely')});
@@ -145,7 +145,7 @@ async function listPage(wrap,{canWrite,project,epoch}){
  let any=data.sets.length>0||filters.status==='all';
  if(!data.sets.length&&filters.status!=='all'){try{any=(await api('/api/review?'+query('all'))).sets.length>0;}catch{any=true;}if(epoch!==sessionEpoch||!wrap.isConnected)return;}
  const projects=new Map(meta.projects.map(p=>[p.id,p])),redraw=()=>listPage(wrap,{canWrite,project,epoch}).catch(e=>fail(msg,e)),msg=status(),kinds=KINDS();
- const title=pageHeader({eyebrow:'Project Tracker',title:'Review',lead:t('Varianty, které agenti navrhli: porovnej je, vyber a okomentuj. Rozhodnutí si agent přečte přes MCP.')});
+ const title=pageHeader({eyebrow:'Project Tracker',title:'Review',lead:t('Varianty, které agenti navrhli: porovnej je, vyber a okomentuj. Rozhodnutí si agent přečte přes MCP.'),provenance:data.provenance});
  if(!any&&!data.sets.length)return wrap.replaceChildren(title,...(project?[el('div',{class:'tk-toolbar'},el('div',{class:'tk-toolbar-left'},crumbs(projects.get(project),project)))]:[]),noSets(project,meta.projects.length>0));
  const statusSwitch=segmented(t('Stav review'),[['active',t('Otevřená')],['done',t('Hotová')],['archived',t('Archiv')],['all',t('Vše')]],filters.status,v=>{filters.status=v;redraw();});
  // On hover a card shows a bin (archive) or, in the archive, a way back.
@@ -193,7 +193,8 @@ function renderSet(wrap,ctx,set){
  const head=el('div',{class:'tk-head'},
   // Path back the way the user came: from the sidebar list → Review / R-n, otherwise through the project.
   el('div',{},view.fromAll?crumbs(null,null,set.id):crumbs(project,set.project,set.id),
-   el('h1',{class:'tk-title'},set.title),
+   // Who published the rounds and who decided on them (the set's provenance).
+   el('div',{class:'ui-title'},el('h1',{class:'tk-title'},set.title),provenanceBadge(set.provenance)),
    set.description?el('p',{class:'tk-text acc-dim'},set.description):null,
    el('div',{class:'tk-pills'},view.fromAll?el('a',{class:'sec-pill tk-pill info',href:'#projects/'+set.project,title:t('Otevřít projekt')},project?.name||set.project):null,project?.type?el('span',{class:'sec-pill'},PROJECT_TYPES()[project.type]||project.type):null,
     set.status==='archived'?el('span',{class:'sec-pill dim'},t('archiv')):null,set.feedbackPending?el('span',{class:'sec-pill warn'},t('čeká na agenta')):null,

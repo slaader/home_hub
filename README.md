@@ -104,7 +104,7 @@ each one needs. The same key works on the HTTP API ([docs/API.md](docs/API.md)).
 | Overview: a tile per machine | Empty, and says how to fill it | Machines in `local/site.json`, **Add device** on the page, or an agent with `home:write` | You, or your agent through MCP (`machine_upsert`) |
 | Runtime stack on a machine page | Says how to publish one | Nothing | Your agent (`runtime_publish`), or `stack` in `site.json` |
 | Live CPU, GPU, power, temperature, memory on the tiles | Tiles show static facts and say telemetry is not installed | The telemetry agent on each machine (optional) | The telemetry agent |
-| Local LLM runtimes on a machine page | Says what it needs | A plugin that provides `home.runtimes` | That plugin |
+| Local LLM runtimes on a machine page | Not shown | A plugin that provides `home.runtimes` for that machine | That plugin |
 | Inventory map, table and services catalog | Empty, with a template and a prompt for an agent | Nothing | Your agent through MCP (`inventory_update`, `inventory_bulk_upsert`), or you in the form |
 | Versions and updates, host protection | Says what to configure and run | SSH access to the machines and `scripts/collect-systems.mjs` | A collector |
 | Which software the versions page follows | Only operating systems, NAS apps and containers | A site overlay (`local/`), where the list is kept | Your agent (`software_watch_put`), or you |
@@ -166,8 +166,10 @@ own order, by dragging or with the arrow keys on a focused tile.
   its login in Edit device → Telemetry.
 - **Pictures**: ten generic ones are built in (`public/images/generic/*.svg`). Your own tile pictures go in
   `local/images/home/<machine id>.jpg` and win.
-- **Local LLM runtimes**: a plugin that provides `home.runtimes` fills this section of a machine page
-  ([docs/plugins.md](docs/plugins.md)). Without one the section says what it needs.
+- **Local LLM runtimes**: a machine page gets this section only when a plugin provides `home.runtimes` for
+  that machine ([docs/plugins.md](docs/plugins.md)): one card per runtime with its version, state, models
+  and a few figures. Core reads no runtime itself and the telemetry agent does not report them, so without
+  a provider there is no such section. A telemetry agent with runtime adapters could become a provider later.
 - **State**: added machines in `state/home/devices.json`, published stacks in `state/home/runtimes.json`.
 
 ### Inventory map, table and services catalog
@@ -187,7 +189,12 @@ inventory, and the first write creates it.
 - **Entry form**: create, edit (also the machine and the dependencies), delete, and "Still true" to re-stamp
   an entry. Only the fields that changed are sent. When someone else changed the entry first, the form shows
   what they changed and offers to load their version or to keep your edits on top of it.
-- **Services** (`#services`): the entries of kind `runtime`, grouped by machine.
+- **Services**, the third view (`#inventory-map/services`; `#services` leads there): every entry of kind
+  `runtime` on one line with its address (URLs are links), machine, what depends on it, what it needs, and
+  when and by whom it was last verified. Same search box and place and gap filters as the table.
+- **Where it comes from.** The pill next to the title counts the entries by who last verified them: people
+  in the form, service accounts by name, or other stamps (an import). The same pill is on the tracker,
+  review, SSH keys, versions and protection pages (`docs/API.md` → Provenance).
 - **One checker for everyone.** The rules live in `public/inventory-rules.js`, a pure module that
   `scripts/check-knowledge.mjs`, the hub and the entry form in the browser all run, so the form's inline
   messages are the server's.
