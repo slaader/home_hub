@@ -1,37 +1,10 @@
-/* Profile button + menu at the bottom of the sidebar, and the Nastavení page. */
-.hh-prof-wrap{margin-top:auto;position:relative}
-.hh-prof{display:flex;align-items:center;gap:10px;width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:8px 10px;color:var(--txt);cursor:pointer;text-align:left;font:inherit}
-.hh-prof:hover,.hh-prof[aria-expanded="true"]{border-color:var(--line-hi);background:var(--panel3)}
-.hh-prof.on{box-shadow:inset 2px 0 0 var(--accent)}
-.hh-avatar{flex:none;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font:700 11.5px var(--mono);color:#1a1424;background:linear-gradient(135deg,var(--accent),var(--accent2))}
-.hh-prof-text{display:flex;flex-direction:column;min-width:0;flex:1}
-.hh-prof-text b{font:600 13px var(--sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.hh-prof-text small{font:10.5px var(--mono);color:var(--faint)}
-.hh-prof-caret{color:var(--faint);font-size:12px}
-.hh-prof-menu{position:absolute;left:0;right:0;bottom:calc(100% + 8px);background:var(--panel3);border:1px solid var(--line-hi);border-radius:12px;padding:6px;display:flex;flex-direction:column;gap:2px;box-shadow:0 12px 32px rgba(0,0,0,.45);z-index:20}
-.hh-prof-menu[hidden]{display:none}
-.hh-prof-head{display:flex;flex-direction:column;padding:8px 10px 8px;border-bottom:1px solid var(--line);margin-bottom:4px}
-.hh-prof-head b{font:600 13px var(--sans);color:var(--txt)}
-.hh-prof-head span{font:10.5px var(--mono);color:var(--faint)}
-.hh-prof-menu a,.hh-prof-menu button{display:flex;align-items:center;gap:8px;background:none;border:0;border-radius:8px;padding:8px 10px;color:var(--dim);font:13px var(--sans);text-decoration:none;cursor:pointer;text-align:left}
-.hh-prof-menu a:hover,.hh-prof-menu button:hover,.hh-prof-menu a:focus-visible,.hh-prof-menu button:focus-visible{background:var(--panel2);color:var(--txt);outline:none}
-.hh-prof-menu a.on{color:var(--txt)}
-.hh-prof-menu .hh-prof-out{color:var(--crit)}
-/* Language switch (CZ | EN): a row in the profile menu, and under the sign-in form. */
-.hh-prof-lang{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px 8px;border-bottom:1px solid var(--line);margin-bottom:4px;color:var(--faint);font:10.5px var(--mono);text-transform:uppercase;letter-spacing:.06em}
+/* The Settings page, and the language switch of the first-run screen (access.js → setupScreen). */
 .hh-lang{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden}
-.hh-prof-menu .hh-lang button,.hh-lang button{background:none;border:0;border-radius:0;color:var(--faint);font:11px var(--mono);padding:4px 10px;cursor:pointer}
-.hh-prof-menu .hh-lang button:hover,.hh-lang button:hover{color:var(--txt);background:var(--panel2)}
-.hh-prof-menu .hh-lang button.on,.hh-lang button.on{background:var(--panel2);color:var(--txt);box-shadow:inset 0 -2px 0 var(--accent)}
+.hh-lang button{background:none;border:0;border-radius:0;color:var(--faint);font:11px var(--mono);padding:4px 10px;cursor:pointer}
+.hh-lang button:hover{color:var(--txt);background:var(--panel2)}
+.hh-lang button.on{background:var(--panel2);color:var(--txt);box-shadow:inset 0 -2px 0 var(--accent)}
 .hh-lang button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .hh-login-lang{display:flex;width:max-content;margin:18px auto 0}
-.hh-side-net{font:10.5px var(--mono);color:var(--faint);padding:8px 10px 0}
-@media(max-width:900px){
- .hh-prof-wrap{margin:0 0 0 auto}
- .hh-prof{width:auto;padding:5px 8px}.hh-prof-text,.hh-prof-caret{display:none}
- .hh-prof-menu{bottom:auto;top:calc(100% + 8px);left:auto;right:0;width:230px}
- .hh-side-net{display:none}
-}
 
 .set{display:flex;flex-direction:column;gap:16px}
 .set-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
@@ -50,3 +23,17 @@
 .set-status{min-height:1.2em;margin:8px 0 0;font-size:13px;color:var(--dim)}
 .set-status.good{color:var(--ok)}.set-status.bad{color:var(--crit)}
 .set-actions{margin-top:8px}
+/* Settings: time zone, and what the role allows. */
+.set .ui-head{margin-bottom:0}
+.set-grid>div{display:contents}
+.set-form select{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;color:var(--txt);font:14px var(--sans);max-width:100%}
+.set-form select:focus{outline:none;border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
+.set-clock{margin:10px 0 0;font:12.5px var(--mono);color:var(--dim)}
+.set-allowed-head{margin:14px 0 6px}
+.set-allowed{display:flex;flex-wrap:wrap;gap:6px 8px;margin:0 0 12px;padding:0;list-style:none;font-size:12.5px;color:var(--txt)}
+.set-allowed li{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border:1px solid var(--line);border-radius:999px;background:var(--panel2)}
+.set-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.set-dot.write{background:var(--warn)}
+.set-card a{color:var(--accent)}
+.set-card .hh-choice{margin-top:var(--space-2)}
+.set-card .hh-choice button{min-height:32px;padding:var(--space-1) var(--space-3);font-size:var(--text-xs)}

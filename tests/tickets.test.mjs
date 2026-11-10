@@ -251,8 +251,12 @@ test('tickets HTTP and MCP: split multibyte request chunks preserve Czech text',
 
 // Small DOM harness for async view behaviour; real form/CSP/layout checks use the throwaway preview.
 class TrackerNode{
- constructor(tag,text=''){this.tag=tag;this.text=text;this.children=[];this.attrs={};this.listeners={};this.style={};this._value=undefined;this.classList={add:c=>{this.attrs.class=(this.attrs.class||'')+' '+c;}};}
+ constructor(tag,text=''){this.tag=tag;this.tagName=tag.toUpperCase();this.text=text;this.children=[];this.attrs={};this.listeners={};this.style={setProperty(){}};this._value=undefined;
+  const list=()=>(this.attrs.class||'').split(/\s+/).filter(Boolean),set=a=>{this.attrs.class=a.join(' ');};
+  this.classList={contains:c=>list().includes(c),add:(...c)=>set([...new Set([...list(),...c])]),remove:(...c)=>set(list().filter(x=>!c.includes(x))),toggle:(c,on=!list().includes(c))=>{on?this.classList.add(c):this.classList.remove(c);return on;}};}
  setAttribute(k,v){this.attrs[k]=String(v);if(k==='value')this.value=v;}
+ removeAttribute(k){delete this.attrs[k];}
+ get dataset(){return Object.fromEntries(Object.entries(this.attrs).filter(([k])=>k.startsWith('data-')).map(([k,v])=>[k.slice(5),v]));}
  addEventListener(k,fn){this.listeners[k]=fn;}
  append(...nodes){for(const n of nodes){n.parent=this;this.children.push(n);}}
  replaceChildren(...nodes){for(const n of this.children)n.parent=null;this.children=[];this.append(...nodes);}
@@ -277,7 +281,7 @@ const nodes=(root,predicate)=>[root,...root.children.flatMap(n=>nodes(n,()=>true
 const flush=async()=>{for(let i=0;i<6;i++)await delay(0);};
 function dom(t){
  const saved={document:globalThis.document,Node:globalThis.Node,fetch:globalThis.fetch,location:globalThis.location,dispatchEvent:globalThis.dispatchEvent};
- globalThis.Node=TrackerNode;globalThis.document={createElement:tag=>new TrackerNode(tag),createTextNode:text=>new TrackerNode('#text',text),activeElement:null};
+ globalThis.Node=TrackerNode;globalThis.document={createElement:tag=>new TrackerNode(tag),createElementNS:(ns,tag)=>new TrackerNode(tag),createTextNode:text=>new TrackerNode('#text',text),activeElement:null};
  document.body=new TrackerNode('body');document.activeElement=document.body;globalThis.location={hash:'#items'};setPrincipal({username:'ui-writer',role:'admin'});
  t.after(()=>{setPrincipal(null);Object.assign(globalThis,saved);});
 }
@@ -288,11 +292,11 @@ test('tickets UI: late filter replies cannot replace newer results or steal focu
  const root=trackerView({canWrite:true},'items');document.body.append(root);
  const reply=(p,title)=>p.resolve(Response.json({...base,tickets:title?[{id:'HH-1',title,status:'open',type:'bug',priority:'normal',labels:[],release:null,assignee:null,comments:0,updatedAt:new Date().toISOString()}]:[],total:title?1:0}));
  pending.splice(0).forEach(p=>reply(p));await flush();
- const status=nodes(root,n=>n.attrs['aria-label']==='Všechny stavy')[0];assert.ok(status);
- const releaseFilter=nodes(root,n=>n.attrs['aria-label']==='Všechny releasy')[0];assert.equal(nodes(releaseFilter,n=>n.tag==='option'&&n.attrs.value==='1').length,1);
+ const status=nodes(root,n=>n.attrs['aria-label']==='All statuses')[0];assert.ok(status);
+ const releaseFilter=nodes(root,n=>n.attrs['aria-label']==='All releases')[0];assert.equal(nodes(releaseFilter,n=>n.tag==='option'&&n.attrs.value==='1').length,1);
  status.listeners.change({target:{value:'done'}});const old=pending.splice(0);
  status.focus();status.listeners.change({target:{value:'open'}});const newest=pending.splice(0);newest.forEach(p=>reply(p,'Newest result'));await flush();
- assert.ok(root.textContent.includes('Newest result'));assert.equal(document.activeElement.getAttribute('aria-label'),'Všechny stavy');
+ assert.ok(root.textContent.includes('Newest result'));assert.equal(document.activeElement.getAttribute('aria-label'),'All statuses');
  old[0].resolve(Response.json({error:{message:'Stale failure'}},{status:503}));reply(old[1],'Old result');await flush();
  assert.ok(root.textContent.includes('Newest result'));assert.ok(!root.textContent.includes('Stale failure'));
  // A delayed response also must not repopulate an old session's view.
@@ -301,13 +305,13 @@ test('tickets UI: late filter replies cannot replace newer results or steal focu
  setPrincipal({username:'ui-reader',role:'viewer'});
  const reader=trackerView({canWrite:false},'items');document.body.append(reader);const reset=pending.splice(0);
  assert.ok(reset.every(p=>!p.url.includes('project=')&&!p.url.includes('status=open')));reset.forEach(p=>reply(p));await flush();
- assert.ok(!reader.textContent.includes('+ Nová položka'));
+ assert.ok(!reader.textContent.includes('+ New item'));
 });
 
 test('tickets UI: session reset closes dialogs and discards a pending dialog load',async t=>{
  dom(t);const {s}=await store(t);const data=await s.list();globalThis.fetch=async()=>Response.json(data);
  const root=trackerView({canWrite:true},'projects');document.body.append(root);await flush();
- const add=()=>nodes(root,n=>n.tag==='button'&&n.textContent==='+ Nová položka')[0].listeners.click();
+ const add=()=>nodes(root,n=>n.tag==='button'&&n.textContent==='+ New item')[0].listeners.click();
  await add();assert.equal(nodes(document.body,n=>n.tag==='dialog').length,1);
  setPrincipal(null);assert.equal(nodes(document.body,n=>n.tag==='dialog').length,0);
  setPrincipal({username:'ui-writer',role:'admin'});let resolve;globalThis.fetch=()=>new Promise(r=>resolve=r);
@@ -322,11 +326,11 @@ test('tickets UI: edits send changed fields, oversized comments stay editable, t
  };
  const root=trackerView({canWrite:true},'items',ticket.id);document.body.append(root);await flush();
  assert.ok(root.textContent.includes(ticket.title));assert.equal(nodes(root,n=>n.tag==='img').length,0);assert.ok(!nodes(root,n=>n.tag==='a').some(n=>n.attrs.href?.startsWith('javascript:')));
- const edit=nodes(root,n=>n.tag==='form'&&n.textContent.startsWith('Upravit'))[0];assert.ok(edit);
+ const edit=nodes(root,n=>n.tag==='form'&&n.textContent.startsWith('Edit'))[0];assert.ok(edit);
  const fields=Object.fromEntries(['title','description','type','status','priority','release','assignee','labels','refs'].map(k=>[k,{value:Array.isArray(ticket[k])?ticket[k].join(k==='refs'?'\n':', '):ticket[k]||''}]));fields.priority.value='high';fields.querySelector=()=>({disabled:false});
  edit.listeners.submit({preventDefault(){},currentTarget:fields});await flush();
  assert.deepEqual(posts[0].body,{id:ticket.id,rev:1,priority:'high'});assert.equal((await s.get(ticket.id)).description,ticket.description);
- const comment=nodes(root,n=>n.tag==='form'&&n.textContent.includes('Přidat komentář'))[0],button={disabled:false},text={value:'ž'.repeat(8000)};
+ const comment=nodes(root,n=>n.tag==='form'&&n.textContent.includes('Add comment'))[0],button={disabled:false},text={value:'ž'.repeat(8000)};
  // This fits 16 KiB; use three-byte text to cross the byte limit while staying below maxlength.
  text.value='漢'.repeat(6000);await comment.listeners.submit({preventDefault(){},currentTarget:{text,querySelector:()=>button}});
  assert.equal(posts.length,1);assert.equal(button.disabled,false);assert.equal(text.value.length,6000);assert.ok(root.textContent.includes('maximum 16 kB'));
@@ -340,7 +344,7 @@ test('tickets UI: a quick status change keeps the unsaved comment and edited des
  let gets=0;globalThis.fetch=async(url,options={})=>{if(options.method==='POST')return Response.json(await s.update(JSON.parse(options.body),'ui'));gets++;return Response.json(url.startsWith('/api/tickets/')?await s.get(ticket.id):await s.list());};
  const root=trackerView({canWrite:true},'items',ticket.id);document.body.append(root);await flush();const before=gets;
  byName(root,'text').value='half-written comment';byName(root,'description').value='new description draft';
- const start=buttonText(root,'Začít');await start.listeners.click({currentTarget:start});await flush();
+ const start=buttonText(root,'Start');await start.listeners.click({currentTarget:start});await flush();
  assert.equal((await s.get(ticket.id)).status,'in-progress');assert.equal(gets,before,'no refetch after a write');
  assert.equal(byName(root,'text').value,'half-written comment');assert.equal(byName(root,'description').value,'new description draft');
  assert.equal(byName(root,'status').value,'in-progress');assert.equal((await s.get(ticket.id)).description,'old');
@@ -349,7 +353,7 @@ test('tickets UI: a saved comment clears its box even when every later read fail
  dom(t);const {s}=await store(t);const ticket=await s.create({project:'home-hub',title:'No duplicates'},'a');let down=false;
  globalThis.fetch=async(url,options={})=>{if(options.method==='POST')return Response.json(await s.comment(JSON.parse(options.body),'ui'));if(down)return Response.json({error:{message:'down'}},{status:503});return Response.json(url.startsWith('/api/tickets/')?await s.get(ticket.id):await s.list());};
  const root=trackerView({canWrite:true},'items',ticket.id);document.body.append(root);await flush();down=true;
- byName(root,'description').value='kept edit';const form=nodes(root,n=>n.tag==='form'&&n.textContent.includes('Přidat komentář'))[0],button={disabled:false};
+ byName(root,'description').value='kept edit';const form=nodes(root,n=>n.tag==='form'&&n.textContent.includes('Add comment'))[0],button={disabled:false};
  await form.listeners.submit({preventDefault(){},currentTarget:{text:{value:'only once'},querySelector:()=>button}});await flush();
  assert.equal((await s.get(ticket.id)).comments.length,1);assert.ok(root.textContent.includes('only once'));
  assert.equal(byName(root,'text').value,'');assert.equal(byName(root,'description').value,'kept edit');assert.ok(!root.textContent.includes('down'));
@@ -358,9 +362,9 @@ test('tickets UI: a release action shows the saved state when the follow-up refr
  dom(t);const {s}=await store(t);await s.saveRelease({project:'home-hub',version:'2.4'},'a');let down=false;
  globalThis.fetch=async(url,options={})=>{if(options.method==='POST')return Response.json(await s.saveRelease(JSON.parse(options.body),'ui'));if(down)return Response.json({error:{message:'down'}},{status:503});return Response.json(await s.list());};
  const root=trackerView({canWrite:true},'releases');document.body.append(root);await flush();down=true;
- const mark=buttonText(root,'Označit jako vydané');await mark.listeners.click({currentTarget:mark});await flush();
+ const mark=buttonText(root,'Mark as released');await mark.listeners.click({currentTarget:mark});await flush();
  assert.equal((await s.list()).releases[0].status,'released');
- const back=buttonText(root,'Vrátit do plánu');assert.ok(back);assert.ok(!back.disabled);assert.ok(root.textContent.includes('nepodařilo obnovit'));
+ const back=buttonText(root,'Back to planned');assert.ok(back);assert.ok(!back.disabled);assert.ok(root.textContent.includes('could not be refreshed'));
 });
 test('tickets UI: the main column may shrink so wide tables scroll inside it on phones',async()=>{
  const css=await readFile(new URL('../public/hub.css',import.meta.url),'utf8');
@@ -378,4 +382,84 @@ test('tickets MCP: project_save creates and renames projects; read keys cannot s
  const renamed=await call(writer,'project_save',{id:'ob1',rev:1,name:'Open Brain',description:'Memory layer'});assert.equal(renamed.structuredContent.name,'Open Brain');
  assert.equal((await call(writer,'ticket_create',{project:'ob1',title:'Recall outcomes'})).structuredContent.id,'OB-1');
  const log=JSON.stringify(await (await fetch(h.origin+'/api/admin/audit',{headers:h.admin})).json());assert.ok(log.includes('project_save'));
+});
+
+// Empty states, language and the tracker polish (inline status, assignee suggestions, previews).
+import {setLang} from '../public/i18n.js';
+import {setSite} from '../public/site.js';
+const EMPTY={updatedAt:null,projects:[],releases:[],total:0,tickets:[]};
+test('tickets UI: an empty tracker explains itself in English and hands a ready prompt to an agent',async t=>{
+ dom(t);globalThis.fetch=async()=>Response.json(EMPTY);
+ for(const page of ['projects','items','releases']){
+  const root=trackerView({canWrite:true,username:'alex'},page);document.body.append(root);await flush();const text=root.textContent;
+  assert.ok(text.includes('No project here yet'),page);assert.ok(text.includes('project_save')&&text.includes('ticket_create')&&text.includes('tickets:write'),`${page}: the prompt names the tools and the scope`);
+  assert.ok(text.includes('/mcp')&&text.includes('Authorization: Bearer'),`${page}: the MCP connection snippet`);
+  assert.equal(nodes(root,n=>n.tag==='ol')[0].children.length,3,'numbered steps');
+  assert.ok(buttonText(root,'+ New project'),'a writer can create the project right here');assert.ok(!text.includes('+ New item'),'no item without a project');
+  assert.doesNotMatch(text,/[ěščřžůĚŠČŘŽŮ]/,`${page}: no Czech on an English hub`);
+ }
+ const reader=trackerView({canWrite:false},'projects');document.body.append(reader);await flush();
+ assert.ok(reader.textContent.includes('No project here yet'));assert.ok(!buttonText(reader,'+ New project'));assert.ok(reader.textContent.includes('Ask the administrator'));
+ // The same page in the source language.
+ setLang('cs');t.after(()=>setLang('en'));
+ const cs=trackerView({canWrite:true},'projects');document.body.append(cs);await flush();
+ assert.ok(cs.textContent.includes('Zatím tu není žádný projekt'));assert.ok(buttonText(cs,'+ Nový projekt'));
+});
+test('tickets UI: the new-project dialog proposes an id and a key from the name',async t=>{
+ dom(t);const {s}=await store(t);const posts=[];
+ globalThis.fetch=async(url,options={})=>{if(options.method==='POST'){posts.push(JSON.parse(options.body));return Response.json(await s.saveProject(JSON.parse(options.body),'ui'),{status:201});}return Response.json(EMPTY);};
+ const root=trackerView({canWrite:true},'projects');document.body.append(root);await flush();
+ buttonText(root,'+ New project').listeners.click();
+ const dialog=nodes(document.body,n=>n.tag==='dialog')[0],name=byName(dialog,'name'),id=byName(dialog,'id'),key=byName(dialog,'key');
+ name.value='Žluté Kolo App';name.listeners.input();assert.equal(id.value,'zlute-kolo-app');assert.equal(key.value,'ZKA');
+ name.value='Tracker';name.listeners.input();assert.equal(id.value,'tracker');assert.equal(key.value,'TRAC');
+ key.value='TRK';key.listeners.input();name.value='Tracker Two';name.listeners.input();assert.equal(key.value,'TRK','a key typed by hand is kept');assert.equal(id.value,'tracker-two');
+ const form=nodes(dialog,n=>n.tag==='form')[0];
+ await form.listeners.submit({preventDefault(){},currentTarget:{id,key,name,description:{value:'Sample'},type:{value:'app'},querySelector:()=>({disabled:false})}});
+ assert.deepEqual(posts,[{id:'tracker-two',key:'TRK',name:'Tracker Two',description:'Sample',type:'app'}]);assert.equal(dialog.open,false);
+});
+test('tickets UI: status changes inline, a filter can be cleared, the stat tiles narrow the list',async t=>{
+ dom(t);const {s}=await store(t);const a=await s.create({project:'home-hub',title:'Inline',assignee:'robin',labels:['ui']},'alex');await s.create({project:'home-hub',title:'Other'},'alex');
+ const posts=[],gets=[];globalThis.fetch=async(url,options={})=>{if(options.method==='POST'){const body=JSON.parse(options.body);posts.push(body);return Response.json(await s.update(body,'ui'));}
+  gets.push(url);return Response.json(await s.list(Object.fromEntries(new URL(url,'http://hub.test').searchParams)));};
+ const root=trackerView({canWrite:true,username:'alex'},'items');document.body.append(root);await flush();
+ const select=nodes(root,n=>n.tag==='select'&&n.attrs['aria-label']===`Status of ${a.id}`)[0];assert.ok(select,'a writer changes the status in the row');
+ assert.deepEqual(nodes(select,n=>n.tag==='option').map(o=>o.attrs.value),['open','in-progress','done','cancelled']);
+ select.listeners.change({target:{value:'in-progress'},stopPropagation(){}});await flush();
+ assert.deepEqual(posts,[{id:a.id,rev:1,status:'in-progress'}]);assert.equal((await s.get(a.id)).status,'in-progress');
+ // Quick filters: assignee and label come from the tickets themselves, with "me" on top.
+ const assignee=nodes(root,n=>n.attrs['aria-label']==='All assignees')[0];
+ assert.deepEqual(nodes(assignee,n=>n.tag==='option').map(o=>o.textContent),['All assignees','Unassigned','alex (me)','robin']);
+ assert.deepEqual(nodes(nodes(root,n=>n.attrs['aria-label']==='All labels')[0],n=>n.tag==='option').map(o=>o.attrs.value),['','ui']);
+ gets.length=0;assignee.listeners.change({target:{value:'robin'}});await flush();
+ assert.ok(gets[0].includes('assignee=robin'));assert.ok(root.textContent.includes('Inline')&&!root.textContent.includes('Other'));
+ buttonText(root,'Clear filters').listeners.click();await flush();assert.ok(root.textContent.includes('Other'));assert.ok(!buttonText(root,'Clear filters'));
+ gets.length=0;nodes(root,n=>n.tag==='button'&&n.textContent.startsWith('In progress'))[0].listeners.click();await flush();
+ assert.ok(gets[0].includes('status=in-progress'),'a stat tile is a quick filter');assert.ok(root.textContent.includes('Inline')&&!root.textContent.includes('Other'));
+ // A reader sees the status as text, with nothing to change.
+ const reader=trackerView({canWrite:false},'items');document.body.append(reader);await flush();assert.equal(nodes(reader,n=>n.tag==='select'&&/^Status of/.test(n.attrs['aria-label']||'')).length,0);
+});
+test('tickets UI: the assignee field suggests people, text has a preview, history reads as a timeline, dates follow the site',async t=>{
+ dom(t);setSite({timeZone:'Pacific/Auckland'});t.after(()=>setSite({timeZone:null}));
+ const at='2026-01-05T11:30:00.000Z',ticket={id:'HH-1',project:'home-hub',title:'Dated',description:'See **HH-2**',type:'task',status:'open',priority:'normal',release:null,assignee:null,labels:[],refs:[],reporter:'alex',createdAt:at,updatedAt:at,closedAt:null,rev:1,
+  comments:[],attachments:[{id:'11111111-1111-4111-8111-111111111111',name:'shot.png',type:'image/png',size:2048,sha256:'a'.repeat(64),by:'alex',at}],history:[{at,by:'alex',field:'created',from:null,to:'open'},{at,by:'alex',field:'attachment',from:null,to:'shot.png'}]};
+ globalThis.fetch=async url=>Response.json(url==='/api/tickets/people'?{people:[{name:'robin',kind:'user',assigned:2,active:1},{name:'agent-one',kind:'agent',assigned:0,active:0}]}
+  :url.startsWith('/api/tickets/')?ticket:{...EMPTY,projects:[{id:'home-hub',key:'HH',name:'Home Hub',rev:1}]});
+ const root=trackerView({canWrite:true,username:'alex'},'items','HH-1');document.body.append(root);await flush();
+ const input=byName(root,'assignee'),list=nodes(root,n=>n.tag==='datalist')[0];
+ assert.equal(input.attrs.list,list.attrs.id);assert.deepEqual(nodes(list,n=>n.tag==='option').map(o=>o.attrs.value),['alex','robin','agent-one'],'me first, then the hub\'s people');
+ assert.ok(buttonText(root,'Take it'),'one click assigns the item to me');
+ assert.ok(root.textContent.includes('6 Jan 2026, 00:30'),'dates are shown in the site\'s time zone, in the reader\'s language');
+ assert.deepEqual(nodes(root,n=>(n.attrs.class||'').split(' ').includes('tk-event')).map(n=>nodes(n,x=>x.tag==='b')[0].textContent),['Attachment added: shot.png','Item created'],'history, newest first');
+ assert.equal(nodes(root,n=>n.tag==='img'&&n.attrs.src==='/api/tickets/HH-1/attachments/11111111-1111-4111-8111-111111111111').length,1,'an image attachment has a preview');
+ // Preview of the comment being written: rendered Markdown, the ticket id a link; an empty box is not previewed.
+ const box=byName(root,'text'),toggle=nodes(root,n=>n.tag==='button'&&n.textContent==='Preview')[0];
+ toggle.listeners.click();assert.equal(box.hidden,undefined,'nothing to preview yet');
+ box.value='Fixed in **HH-2**';toggle.listeners.click();assert.equal(box.hidden,true);
+ const preview=nodes(root,n=>(n.attrs.class||'')==='tk-md-preview'&&n.children.length)[0];
+ assert.equal(nodes(preview,n=>n.tag==='strong').length,1);assert.equal(nodes(preview,n=>n.tag==='a')[0].attrs.href,'#items/HH-2');
+ toggle.listeners.click();assert.equal(box.hidden,false);assert.equal(box.value,'Fixed in **HH-2**');
+ setLang('cs');t.after(()=>setLang('en'));
+ const cs=trackerView({canWrite:false},'items','HH-1');document.body.append(cs);await flush();
+ assert.ok(cs.textContent.includes('Historie změn')&&!cs.textContent.includes('6 Jan 2026'),'another language, another date format');assert.match(cs.textContent,/6\. .*2026/);
 });

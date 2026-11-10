@@ -118,7 +118,7 @@ test('ticket page: a ticket chain across projects still leads back to the projec
   const {backPath}=await import('../public/tracker-view.js');
   const projects=[{id:'home-hub',name:'Home Hub'},{id:'sample-game',name:'Sample Game'}],dune={id:'GAME-7',project:'sample-game'};
   const nav=backPath(dune,projects,'#projects/home-hub'),link=nav.children.filter(c=>c.tag==='a')[1];
-  assert.equal(link.attrs.href,'#projects/home-hub');assert.equal(link.textContent,'Home Hub');assert.equal(nav.textContent,'Projekty/Home Hub/GAME-7');
+  assert.equal(link.attrs.href,'#projects/home-hub');assert.equal(link.textContent,'Home Hub');assert.equal(nav.textContent,'Projects/Home Hub/GAME-7');
   assert.equal(backPath(dune,projects,'#projects').children.filter(c=>c.tag==='a')[1].attrs.href,'#projects/sample-game','from the overview: the ticket\'s own project');
   assert.equal(backPath(dune,projects,'#review/R-4').attrs.href,'#review/R-4');assert.equal(backPath(dune,projects,'').attrs.href,'#items');
  }finally{[globalThis.document,globalThis.Node]=before;}

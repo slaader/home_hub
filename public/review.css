@@ -31,7 +31,7 @@
 .rv-commenting{outline:2px dashed color-mix(in srgb,var(--accent) 70%,transparent);outline-offset:2px}
 .rv-highlight{position:absolute;border:2px solid var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);border-radius:3px;pointer-events:none}
 .rv-pin{position:absolute;transform:translate(-50%,-100%);pointer-events:auto;min-width:22px;height:22px;padding:0 6px;border-radius:11px 11px 11px 2px;border:2px solid #fff;
- background:var(--accent);color:#1a1012;font:700 11px var(--mono);cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.45)}
+ background:var(--accent);color:var(--color-accent-text);font:700 11px var(--mono);cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.45)}
 .rv-pin.saved{background:var(--accent2)}
 .rv-pin.done{background:var(--ok);opacity:.75}
 .rv-pin[hidden]{display:none}
@@ -48,7 +48,7 @@
 .rv-draft-body{display:flex;flex-direction:column;gap:4px;min-width:0}
 .rv-draft-body textarea{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;color:var(--txt);font:13px var(--sans);resize:vertical;width:100%;box-sizing:border-box}
 .rv-draft-body textarea:focus{outline:none;border-color:var(--accent)}
-.rv-pin-badge{min-width:26px;height:26px;border-radius:13px 13px 13px 3px;border:0;background:var(--accent);color:#1a1012;font:700 11px var(--mono);cursor:pointer}
+.rv-pin-badge{min-width:26px;height:26px;border-radius:13px 13px 13px 3px;border:0;background:var(--accent);color:var(--color-accent-text);font:700 11px var(--mono);cursor:pointer}
 .rv-pin-badge.saved{background:var(--accent2)}
 /* An empty status line and the generic empty-state padding left a large gap under the toolbar. */
 .rv .acc-status:empty{display:none}
@@ -71,7 +71,7 @@
 .rv-bar-left,.rv-bar-right{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .rv-bar .acc-btn[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
 .rv-bar .acc-btn:disabled{opacity:.45;cursor:default}
-.rv-decide textarea[aria-label=Poznámka]{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;color:var(--txt);font:13px var(--sans);resize:vertical;width:100%;box-sizing:border-box}
+.rv-decide textarea[data-key=note]{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;color:var(--txt);font:13px var(--sans);resize:vertical;width:100%;box-sizing:border-box}
 .rv-saved summary{cursor:pointer;font:12px var(--mono);color:var(--dim)}
 .rv-saved[open] summary{margin-bottom:8px}
 /* 3D models: <model-viewer> fills a fixed-ratio box; pins are its hotspots and dim when they face away. */
@@ -81,7 +81,7 @@
 .rv-model.rv-commenting model-viewer{cursor:crosshair}
 .rv-model-note{margin:0}
 .rv-model-note[hidden]{display:none}
-.rv-pin3d{min-width:22px;height:22px;padding:0 6px;border-radius:11px 11px 11px 2px;border:2px solid #fff;background:var(--accent);color:#1a1012;font:700 11px var(--mono);cursor:pointer;
+.rv-pin3d{min-width:22px;height:22px;padding:0 6px;border-radius:11px 11px 11px 2px;border:2px solid #fff;background:var(--accent);color:var(--color-accent-text);font:700 11px var(--mono);cursor:pointer;
  box-shadow:0 2px 8px rgba(0,0,0,.45);transform:translate(50%,-50%);transition:opacity .15s}
 .rv-pin3d.saved{background:var(--accent2)}
 .rv-pin3d.done{background:var(--ok)}
@@ -130,3 +130,67 @@
 .rv-draft-tools input[hidden]{display:none}
 .rv-comments .rv-shots{margin-top:6px}
 .rv-comments .rv-shot{width:96px;height:64px}
+/* The round's decisions at a glance, with a jump to the next open item */
+.rv-summary{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-4);border:1px solid var(--color-border);border-radius:var(--radius-m);background:var(--color-surface)}
+.rv-summary-text{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);font-size:var(--text-s)}
+.rv-summary-text .sec-pill{margin-left:0}
+.rv-summary-bar{flex:1;min-width:120px;height:8px;display:flex;border-radius:var(--radius-pill);overflow:hidden;background:var(--panel2)}
+.rv-summary-bar span{display:block;height:100%}
+.rv-summary-bar .accept{background:var(--color-good)}.rv-summary-bar .revise{background:var(--color-info)}.rv-summary-bar .reject{background:var(--color-bad)}
+.rv-card-bar{height:4px;border-radius:var(--radius-pill);overflow:hidden;background:var(--panel2)}
+.rv-card-bar span{display:block;height:100%;background:var(--color-good)}
+.rv-bar-title{margin-right:var(--space-1);font:var(--weight-medium) var(--text-xs) var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--color-text-faint)}
+.rv-hint{margin:0;font-size:var(--text-s);line-height:var(--leading-body);color:var(--color-text-dim)}
+/* How variants are compared: side by side, one at a time (tabs), swipe */
+.rv-modes{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2)}
+.rv-tabs{display:inline-flex;gap:var(--space-1)}
+.rv-tabs button{min-width:40px;height:32px;padding:0 var(--space-2);border:1px solid var(--color-border);border-radius:var(--radius-s);background:var(--color-surface-raised);color:var(--color-text-dim);font:var(--weight-bold) var(--text-s) var(--font-mono);cursor:pointer}
+.rv-tabs button.on{color:var(--color-accent);border-color:var(--color-accent)}
+.rv-row[data-focus] .rv-variant{border-color:var(--color-border-strong)}
+.rv-swipe{display:flex;flex-direction:column;gap:var(--space-2);min-width:0}
+.rv-swipe-controls{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2)}
+.rv-swipe-side{display:inline-flex;align-items:center;gap:var(--space-2);font:var(--text-xs) var(--font-mono);color:var(--color-text-faint)}
+.rv-swipe-side select{max-width:220px;padding:var(--space-1) var(--space-2);border:1px solid var(--color-border);border-radius:var(--radius-s);background:var(--color-surface-raised);color:var(--color-text);font:var(--text-s) var(--font-sans)}
+.rv-swipe-stage{--pos:50%;position:relative;align-self:center;max-width:100%;overflow:hidden;border:1px solid var(--color-border);border-radius:var(--radius-m);background:var(--panel3);user-select:none;-webkit-user-select:none;touch-action:pan-y}
+.rv-swipe-stage>img{display:block;max-width:100%;max-height:82vh;height:auto}
+.rv-swipe-top{position:absolute;inset:0;clip-path:inset(0 calc(100% - var(--pos)) 0 0)}
+.rv-swipe-top img{display:block;width:100%;height:100%;object-fit:contain;object-position:left top}
+.rv-swipe-range{position:absolute;inset:0;z-index:2;width:100%;height:100%;margin:0;opacity:0;cursor:ew-resize}
+.rv-swipe-line{position:absolute;top:0;bottom:0;left:var(--pos);z-index:1;width:2px;margin-left:-1px;background:#fff;box-shadow:0 0 0 1px rgb(0 0 0/.4);pointer-events:none}
+.rv-swipe-line::after{content:'⇆';position:absolute;top:50%;left:50%;width:34px;height:34px;transform:translate(-50%,-50%);display:grid;place-items:center;border-radius:50%;background:#fff;color:#16141f;font-size:14px;box-shadow:var(--shadow-raised)}
+.rv-swipe-range:focus-visible+.rv-swipe-line::after{outline:3px solid var(--color-focus);outline-offset:2px}
+.rv-swipe-tag{position:absolute;top:var(--space-2);z-index:1;min-width:26px;padding:2px var(--space-2);border-radius:var(--radius-s);background:rgb(0 0 0/.6);color:#fff;font:var(--weight-bold) var(--text-xs) var(--font-mono);text-align:center;pointer-events:none}
+.rv-swipe-tag.left{left:var(--space-2)}.rv-swipe-tag.right{right:var(--space-2)}
+/* Comments as a thread: the comment, then the round that answered it */
+.rv-thread{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--space-3)}
+.rv-msg{display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--space-3);align-items:start}
+.rv-msg-body{display:flex;flex-direction:column;gap:var(--space-2);min-width:0;padding:var(--space-3);border:1px solid var(--color-border);border-radius:var(--radius-m);background:var(--panel2)}
+.rv-msg-head{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);font-size:var(--text-s)}
+.rv-msg-head .tk-avatar{margin-left:0}.rv-msg-head .sec-pill{margin-left:0}
+.rv-reply{display:flex;flex-direction:column;gap:var(--space-1);padding:var(--space-2) var(--space-3);border-left:2px solid var(--color-good);border-radius:0 var(--radius-s) var(--radius-s) 0;background:color-mix(in srgb,var(--color-good) 7%,transparent)}
+.rv-wait{align-self:flex-start;margin-left:0}
+.rv-pin-badge.old{display:inline-grid;place-items:center;padding:0 var(--space-1);border:1px solid var(--color-border-strong);background:var(--color-surface-raised);color:var(--color-text-dim);cursor:default}
+.rv-carried{margin-top:var(--space-1)}
+/* 3D view tools */
+.rv-model-tools{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2)}
+.rv-spin[aria-pressed=true]{border-color:var(--color-accent);color:var(--color-accent)}
+/* Phone width: one variant at a time, larger touch targets, switches that scroll sideways */
+@media(max-width:700px){
+ .rv-item{padding:var(--space-3);border-radius:var(--radius-m)}
+ .rv-item-head{flex-wrap:wrap}
+ .rv-item-title{order:5;flex:1 1 100%;font-size:var(--text-m)}
+ .rv-variant{padding:var(--space-2)}
+ .rv-variant-head{flex-wrap:wrap}
+ .rv-variant-actions .acc-btn,.rv-bar-left .acc-btn,.rv-tabs button{min-height:40px}
+ .rv-variant-actions .acc-btn{flex:1 1 auto;white-space:normal}
+ .rv-switches .tk-toolbar-left{flex-wrap:nowrap;max-width:100%;overflow-x:auto}
+ .rv-tabs{flex-wrap:wrap}
+ .rv-model{aspect-ratio:1/1}
+ .rv-cards{grid-template-columns:1fr}
+ .rv-msg{grid-template-columns:minmax(0,1fr)}
+ .rv-msg>.rv-pin-badge{justify-self:start}
+ .rv-comments li{grid-template-columns:auto minmax(0,1fr)}
+ .rv-comments li>.acc-btn{grid-column:2;justify-self:start}
+ .rv-summary-bar{flex-basis:100%}
+ .rv-card-bin{opacity:.9}
+}

@@ -3,11 +3,13 @@ import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';import os from 'n
 import {hashPassword} from '../server/auth.mjs';import {createAccessStore} from '../server/access-store.mjs';
 import {createHandler} from '../server/index.mjs';import {createKnowledgeEditor,entryHash} from '../scripts/knowledge-edit.mjs';
 const credentials={username:'admin',...hashPassword('administrator-test-password')};
-test('view-only users and hash-only keys persist, revoke immediately, and cannot become admins',async t=>{
+test('new users are view-only unless given a role, hash-only keys persist and revoke immediately, the owner is out of reach',async t=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'hub-access-'));t.after(()=>rm(dir,{recursive:true,force:true}));const s=createAccessStore(dir,credentials);
  const created=await s.createUser({username:'guest',name:'Guest'});assert.equal(created.user.role,'viewer');assert(created.initialPassword);
  assert.equal((await s.authenticate('guest',created.initialPassword)).role,'viewer');
- assert.throws(()=>s.createUser({username:'root',role:'admin'}),/invalid/);assert.throws(()=>s.updateUser({id:'owner',disabled:true}),/invalid/);
+ assert.throws(()=>s.createUser({username:'root',admin:true}),/invalid/);await assert.rejects(s.createUser({username:'root',role:'owner'}),/invalid/,'nobody is made an owner');
+ await assert.rejects(s.createUser({username:'root',role:'no-such-role'}),/invalid/);
+ for(const change of [{disabled:true},{role:'viewer'},{remove:true},{name:'x'}])assert.throws(()=>s.updateUser({id:'owner',...change}),/invalid/);
  const issued=await s.issueKey({name:'Reader',permission:'read'});assert.equal(s.verifyKey(issued.token).permission,'read');
  const disk=await readFile(path.join(dir,'access.json'),'utf8');assert(!disk.includes(issued.token));assert(!disk.includes(created.initialPassword));assert(!JSON.stringify(s.keys()).includes('hash'));
  const restarted=createAccessStore(dir,credentials);assert(restarted.verifyKey(issued.token));await restarted.revokeKey({id:issued.key.id});assert.equal(restarted.verifyKey(issued.token),null);assert.equal(createAccessStore(dir,credentials).verifyKey(issued.token),null);

@@ -12,8 +12,8 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {createAuth} from './auth.mjs';
 import {openDb} from './db.mjs';
-import {createAccessStore,apiBearerOf} from './access-store.mjs';
-import {registerScopes,scopeFor,sessionOnly,useRoutes} from './scopes.mjs';
+import {createAccessStore,apiBearerOf,validCredentials} from './access-store.mjs';
+import {registerScopes,scopeFor,scopeIds,sessionOnly,useRoutes} from './scopes.mjs';
 import {createMcp,MCP_TOOLS} from './mcp.mjs';
 import {createDeviceTokens,bearerOf} from './device-tokens.mjs';
 import {readBuild} from './build-info.mjs';
@@ -21,12 +21,14 @@ import {repoRoot,readEdition} from './edition.mjs';
 import {site as loadedSite,siteConfigPath} from './site-config.mjs';
 import {defineModule,createRegistry,loadPlugins} from './plugins.mjs';
 import sessionModule from './core/session.mjs';
+import shellModule from './core/shell.mjs';
 import accessModule from './core/access.mjs';
 import homeModule from './core/home.mjs';
 import inventoryModule from './core/inventory.mjs';
 import trackerModule from './core/tracker.mjs';
 import reviewModule from './core/review.mjs';
 import securityModule from './core/security.mjs';
+import routerModule from './core/router.mjs';
 
 const root=repoRoot;
 // The running commit, shown in the UI footer. Read once: a deploy restarts the server.
@@ -37,7 +39,7 @@ export const MODEL_VIEWER_STYLE_HASH=(()=>{try{const m=/<style>([\s\S]*?)<\/styl
 export const PAGE_CSP=`default-src 'self'; script-src 'self'; style-src 'self'${MODEL_VIEWER_STYLE_HASH?' '+MODEL_VIEWER_STYLE_HASH:''}; img-src 'self' blob:; connect-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`;
 
 // Core modules, in set-up order (a later one may use the state of an earlier one).
-export const CORE_MODULES=Object.freeze([sessionModule,accessModule,homeModule,inventoryModule,trackerModule,reviewModule,securityModule].map(m=>defineModule(m,{core:true})));
+export const CORE_MODULES=Object.freeze([sessionModule,shellModule,accessModule,homeModule,inventoryModule,trackerModule,reviewModule,securityModule,routerModule].map(m=>defineModule(m,{core:true})));
 // Plugins found in the overlay directory when the process started.
 export const STARTUP_PLUGINS=Object.freeze(await loadPlugins());
 // Core + plugins as one registry; scopes of every module join the scope table (server/scopes.mjs).
@@ -88,7 +90,7 @@ export function createHandler(options) {
   for(const image of siteImages(siteImagesDirectory===undefined?(options.site?null:siteConfigPath()&&path.join(path.dirname(siteConfigPath()),'images')):siteImagesDirectory)){
    if(assets.has(image.url))throw new Error(`site image ${image.url} clashes with an asset of module "${assets.get(image.url).module}"`);assets.set(image.url,image);}
   const home=states.get('home'),tracker=states.get('tracker'),inventory=states.get('inventory');
-  const mcp=createMcp({version:'2',tools:registry.tools,ctx:{home:()=>home.payload(),search:q=>db.search(q),tickets:tracker.tickets,ticketFiles:tracker.ticketFiles,review:states.get('review').review,
+  const mcp=createMcp({version:'2',tools:registry.tools,instructions:registry.instructions,ctx:{home:()=>home.payload(),search:q=>db.search(q),tickets:tracker.tickets,ticketFiles:tracker.ticketFiles,review:states.get('review').review,
    inventory:{read:inventory.read,put:inventory.put},log:entry=>accessStore.logApi(entry),moduleContext:id=>({state:states.get(id),hub})}});
   const handler=async (req,res) => {
     res.setHeader('Content-Security-Policy',PAGE_CSP);
@@ -103,7 +105,8 @@ export function createHandler(options) {
       if(req.method==='GET'&&pathname==='/healthz') return json(200,{ok:true});
       // Native clients send a device token instead of the cookie; such requests need no Origin header (browsers never attach it on their own).
       const bearer=bearerOf(req.headers.authorization),apiBearer=apiBearerOf(req.headers.authorization),device=bearer?deviceTokens.verify(bearer):null;
-      const principal=apiBearer?accessStore.verifyKey(apiBearer):device?{id:device,username:'Native device',role:'admin',permission:'write',authKind:'device'}:req.headers.authorization?null:auth.principal(req.headers.cookie);
+      // Every principal carries the scopes it holds: a person's role, a key's account, everything for a device token.
+      const principal=apiBearer?accessStore.verifyKey(apiBearer):device?{id:device,username:'Native device',role:'admin',permission:'write',authKind:'device',scopes:scopeIds()}:req.headers.authorization?null:auth.principal(req.headers.cookie);
       const signedIn=Boolean(principal),canWrite=principal?.permission==='write',canAdmin=principal?.role==='admin'&&principal.authKind==='session';
       if(req.headers.authorization&&!principal&&pathname.startsWith('/api/'))return error(401,'AUTH_REQUIRED','This access credential is no longer valid. Please sign in again.');
       // MCP for agents: POST only, service-account (or legacy) API key, no browser origins.
@@ -116,6 +119,9 @@ export function createHandler(options) {
         const out=await mcp(raw,principal);res.writeHead(out.status,out.headers||{});return res.end(out.body||'');
       }
       const hit=registry.match(req.method==='HEAD'?'GET':req.method,pathname);route=hit?.route||null;
+      // People and devices are held to the route's scope like keys are: a role is a set of scopes (server/scopes.mjs).
+      const lacksScope=Boolean(principal&&principal.authKind!=='api-key'&&typeof route?.scope==='string'&&!principal.scopes?.includes(route.scope));
+      const scopeRefused=()=>error(403,'SCOPE_REQUIRED',`Your role lacks the "${route.scope}" permission.`);
       // What a route handler gets. subject = what a write touched (ticket id, entry id), for the write log.
       c={req,res,url,pathname,params:hit?.params||null,query:Object.fromEntries(url.searchParams),principal,device,signedIn,canWrite,canAdmin,input:undefined,subject:null,
        json,error,hub,state:route?states.get(route.module):null,fromBrowser:!device&&!apiBearer};
@@ -134,6 +140,7 @@ export function createHandler(options) {
         if((!device&&!(apiBearer&&!browserOnly)&&!origins.includes(req.headers.origin))||req.headers['content-type']!==route.contentType){req.resume();return error(403,'ORIGIN_REJECTED','Request not allowed.');}
         if(!signedIn){req.resume();return error(401,'AUTH_REQUIRED','Please sign in.');}
         if(!canWrite||(browserOnly&&principal.authKind==='api-key')){req.resume();return error(403,'READ_ONLY',route.denied||'This account or API key has read-only access.');}
+        if(lacksScope){req.resume();return scopeRefused();}
         return await route.handler(c);
       }
       if(req.method==='POST') {
@@ -141,6 +148,7 @@ export function createHandler(options) {
         if(!route) return error(404,'NOT_FOUND','Not found.');
         if(!route.public&&!signedIn)return error(401,'AUTH_REQUIRED','Please sign in.');
         if(route.write&&!canWrite)return error(403,'READ_ONLY','This account or API key has read-only access.');
+        if(lacksScope)return scopeRefused();
         req.setEncoding('utf8');let body='';for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>route.bodyLimit)return error(413,'TOO_LARGE','Request too large.');}
         if(route.parse){
           try{c.input=JSON.parse(body);}catch{return error(400,'INVALID_INPUT','Invalid request.');}
@@ -153,6 +161,7 @@ export function createHandler(options) {
       const asset=pathname.startsWith('/api/')?null:assets.get(pathname);
       if(route&&!asset){
         if(!route.public&&!signedIn)return error(401,'AUTH_REQUIRED','Please sign in.');
+        if(lacksScope)return scopeRefused();
         return await route.handler(c);
       }
       if(pathname.startsWith('/api/'))return signedIn?error(404,'NOT_FOUND','Not found.'):error(401,'AUTH_REQUIRED','Please sign in.');
@@ -175,8 +184,12 @@ export function createHandler(options) {
 if(process.argv[1]===fileURLToPath(import.meta.url)){
   const directory=process.env.DATA_DIR||path.join(root,'data');
   const authFile=process.env.AUTH_FILE||path.join(root,'private/auth.json');
-  const credentials=JSON.parse(await readFile(authFile,'utf8'));
-  if(!/^[a-f0-9]{128}$/.test(credentials.hash)||!/^[a-f0-9]{32}$/.test(credentials.salt))throw new Error('Invalid auth configuration');
+  // First run: without an auth file the hub starts with no owner and shows "finish setup" instead of a
+  // sign-in; `node scripts/setup.mjs` creates the owner, and the running hub picks the file up. A file
+  // that exists but is not a valid one still stops the server.
+  const credentials=existsSync(authFile)?JSON.parse(await readFile(authFile,'utf8')):{};
+  if(existsSync(authFile)&&!validCredentials(credentials))throw new Error('Invalid auth configuration');
+  if(!validCredentials(credentials))console.info(`No owner account yet (${authFile} is missing). Create it with: node scripts/setup.mjs${process.env.AUTH_FILE?` --auth-file ${authFile}`:''}`);
   const preview=process.env.LOCAL_PREVIEW==='1';const port=Number(process.env.PORT||8781);
   // Where browsers reach this hub: ORIGIN, else the site's publicOrigin; a local preview is its own origin.
   const origin=process.env.ORIGIN||(preview?`http://127.0.0.1:${port}`:loadedSite().publicOrigin);

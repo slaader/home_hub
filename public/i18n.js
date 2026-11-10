@@ -38,6 +38,13 @@ export function tp(n,forms,vars){
  const i=en?(n===1?0:1):n===1?0:n>=2&&n<=4?1:2;
  return fill(list[Math.min(i,list.length-1)],{n,...vars});
 }
+// A sentence the server built from data: its translatable parts when it sent them (server/text.mjs:
+// [{key, params}]), else the source text through the dictionary. A list parameter holds labels that are
+// translated one by one.
+export function say(text,parts){
+ if(!Array.isArray(parts)||!parts.length)return text?t(text):'';
+ return parts.map(p=>t(p.key,Object.fromEntries(Object.entries(p.params||{}).map(([k,v])=>[k,Array.isArray(v)?v.map(x=>t(x)).join(', '):v])))).join(' ');
+}
 export function setLang(next){
  if(!valid(next)||next===lang)return;
  lang=chosen=next;

@@ -5,19 +5,25 @@
 // are cached by ETag, per request. Anonymous GitHub is limited to 60 requests per hour; an optional token from
 // GITHUB_TOKEN or private/github-token (GITHUB_TOKEN_FILE overrides the path) raises that. The token
 // goes only to api.github.com and is never printed or written to data/. A failed source keeps its
-// previous value, marked stale.
+// previous value, marked stale. The programs come from the site's software watch list
+// (local/software-watch.json); without one there is nothing to check and nothing is written.
 import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {checkUpstreams,createFetchJson,loadGithubToken} from '../server/systems-upstream.mjs';
-import {softwareWatchPath} from '../server/site-config.mjs';
+import {readWatch} from '../server/software-watch.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const args=process.argv.slice(2);
 const opt=name=>{const i=args.indexOf(name);return i>=0?args[i+1]:null;};
 const dataDir=path.resolve(opt('--data')||process.env.DATA_DIR||path.join(root,'data'));
 const outDir=process.env.SYSTEMS_DIR||path.join(dataDir,'systems');
-const registry=JSON.parse(await readFile(softwareWatchPath(),'utf8'));
+const {registry,source}=await readWatch();
+if(!registry.items.length){
+ console.log(source==='none'?'No software watch list yet (local/software-watch.json), so there is no upstream to check. Nothing was written.\nCopy items from config/software-watch.json, or let an agent add them with the MCP tool software_watch_put (scope software:write).'
+  :'The software watch list has no items, so there is no upstream to check. Nothing was written.');
+ process.exit(0);
+}
 const file=path.join(outDir,'upstream.json');
 const previous=await readFile(file,'utf8').then(JSON.parse).catch(()=>null);
 const started=Date.now();

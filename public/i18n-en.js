@@ -7,5 +7,7 @@ import systems from './i18n-en-systems.js';
 import access from './i18n-en-access.js';
 import inventory from './i18n-en-inventory.js';
 import server from './i18n-en-server.js';
-export const PARTS=Object.freeze({shell,home,security,systems,access,inventory,server});
+import tracker from './i18n-en-tracker.js';
+import review from './i18n-en-review.js';
+export const PARTS=Object.freeze({shell,home,security,systems,access,inventory,server,tracker,review});
 export default Object.freeze(Object.assign({},...Object.values(PARTS)));

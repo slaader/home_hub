@@ -127,19 +127,25 @@ function wrap(db,file){
 
  // Full-text search. Input is plain words, never FTS syntax: each word is quoted and prefix-matched (AND).
  const KINDS=['ticket','review'];
- function search({q,kind,project,limit=20}={}){
+ // max: the largest limit a caller may ask for. HTTP and MCP callers get 100; a store that filters the hits
+ // further (tickets-store search) passes its own ceiling.
+ function search({q,kind,project,limit=20}={},{max=100}={}){
   if(typeof q!=='string'||q.length>200)throw new Error('invalid');
   if(kind!==undefined&&kind!==''&&!KINDS.includes(kind)||project!==undefined&&project!==''&&!/^[a-z][a-z0-9-]{1,39}$/.test(project))throw new Error('invalid');
-  limit=Number(limit);if(!Number.isInteger(limit)||limit<1||limit>100)throw new Error('invalid');
+  limit=Number(limit);if(!Number.isInteger(limit)||limit<1||limit>max)throw new Error('invalid');
   const words=q.normalize('NFC').match(/[\p{L}\p{N}_]+/gu)?.slice(0,12)||[];
   if(!words.length)return {q,total:0,results:[]};
   const match=words.map(w=>`"${w}"*`).join(' ');
   const where=['search MATCH ?'],args=[match];
   if(kind){where.push('kind=?');args.push(kind);}if(project){where.push('project=?');args.push(project);}
+  // A query that is an id (APP-12, R-3) puts that very record first; everything else is ranked by relevance.
   const rows=db.prepare(`SELECT kind,id,project,updated,highlight(search,4,char(1),char(2)) title,snippet(search,5,char(1),char(2),'…',14) snippet,bm25(search,0,0,0,0,4,1) score
-   FROM search WHERE ${where.join(' AND ')} ORDER BY score LIMIT ?`).all(...args,limit);
+   FROM search WHERE ${where.join(' AND ')} ORDER BY (id=?) DESC, score LIMIT ?`).all(...args,q.trim().toUpperCase(),limit);
   // \u0001…\u0002 mark the matches; the UI renders them as <mark> through text nodes, never as HTML.
   return {q,total:rows.length,results:rows.map(r=>({kind:r.kind,id:r.id,project:r.project,updatedAt:r.updated,title:r.title,snippet:r.snippet,score:Number((-r.score).toPrecision(4))}))};
  }
- return {file,db,collection,sessions,search,close(){open.delete(file);db.close();}};
+ // How many documents of each kind the index holds: lets a client tell "nothing to search yet" from "no match".
+ const indexed=q('SELECT kind,count(*) n FROM search GROUP BY kind');
+ function searchStats(){const out=Object.fromEntries(KINDS.map(k=>[k,0]));for(const r of indexed.all())if(Object.hasOwn(out,r.kind))out[r.kind]=Number(r.n);return out;}
+ return {file,db,collection,sessions,search,searchStats,close(){open.delete(file);db.close();}};
 }

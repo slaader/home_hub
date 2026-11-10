@@ -43,13 +43,29 @@ Rules that keep the split honest:
 
 `npm test` runs `scripts/run-tests.mjs`: the core tests (`tests/*.test.mjs`) on a generic fixture site
 (`tests/fixtures/site.json`) with no plugins, then, when `local/` exists, the overlay's tests
-(`local/plugins/*/tests/*.test.mjs`, `local/tests/*.test.mjs`) with that site and its plugins. It takes a few
-seconds. **There is no reason to run a subset on this repo** — do the whole thing every time, always.
+(`local/plugins/*/tests/*.test.mjs`, `local/tests/*.test.mjs`) with that site and its plugins. It takes under
+ten seconds. **There is no reason to run a subset on this repo** — do the whole thing every time, always.
+
+The run ends with one line per half and a total, and exits non-zero when either half failed. In a tree with
+an overlay it looks like this (the `overlay` numbers are that household's):
+
+```
+core     tests 339  pass 338  fail 0  skipped 1
+overlay  tests 69  pass 69  fail 0
+total    tests 408  pass 407  fail 0
+```
+
+- **Core: 339 tests in 47 files (2026-11-10), and none may fail, on any machine.** In a tree that has
+  `local/`, one is reported as skipped: `public edition: no overlay in the tree…` checks an export, and it
+  runs there, so an export passes 339 of 339 with no `overlay` line.
+- **Overlay: whatever the household added.** Its count, and which of its tests need files that are not in
+  git (data, generated media, a runtime on another machine), are written down in `local/AGENTS.md`. A failing
+  overlay test that is not on that list is a real failure.
 
 ```bash
 npm test                                     # core, then the overlay when there is one
 npm test -- tests/security.test.mjs          # one file, while iterating only (the runner sets the right site)
-python3 tests/router_unifi_test.py           # the UniFi collector, separately
+python3 tests/router_unifi_test.py           # the UniFi collector (10 tests), separately
 LOCAL_PREVIEW=1 PORT=8891 AUTH_FILE=/abs/path/test-auth.json DATA_DIR=/abs/scratch/data node server/index.mjs
 ```
 

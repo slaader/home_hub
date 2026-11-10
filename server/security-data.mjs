@@ -8,6 +8,8 @@ import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {site as loadedSite} from './site-config.mjs';
+import {tx,sentences,textOf} from './text.mjs';
+import {collectorState} from './collector-state.mjs';
 
 export const SECURITY_SCHEMA=1;
 const KEY_TYPE=/^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com)(-cert-v01@openssh\.com)?$/;
@@ -127,13 +129,33 @@ export function readableComment(comment){
  return /�|ï¿½|[\u0080-\u009f]/.test(text)?'':clean(text,200);
 }
 
-const privateIp=ip=>/^(192\.168|10)\./.test(ip);
-function machineIndex(descriptors,probes){
+// How well a key type holds up today, from what ssh-keygen -l prints (type name and bits):
+// weak = replace it (DSA, RSA under 2048 bits, ECDSA under 256), legacy = fine for now but not for a new
+// key (RSA under 3072 bits), ok = everything else, null = the probe could not read the type.
+export function keyStrength(type,bits){
+ const t=String(type||'').toUpperCase().replace(/-SK$/,''),n=Number(bits)||0;
+ if(!t)return null;
+ if(t==='DSA'||t==='DSS')return 'weak';
+ if(t==='RSA')return n<2048?'weak':n<3072?'legacy':'ok';
+ if(t==='ECDSA')return n&&n<256?'weak':'ok';
+ return 'ok';
+}
+// A finding: level, the key it is about, and a Czech title and detail. A title or detail built with
+// tx()/sentences() also leaves its translatable parts in titleT / detailT (server/text.mjs).
+const finding=(level,title,detail='',key)=>({level,...(key?{key}:{}),title:textOf(title),detail:textOf(detail),
+ ...(title?.parts?{titleT:title.parts}:{}),...(detail?.parts?{detailT:detail.parts}:{})});
+
+const privateIp=ip=>/^(192\.168|10|172\.(1[6-9]|2\d|3[01]))\./.test(ip);
+// Who is who: names, host names and addresses from the site configuration, refined by the collected
+// machine descriptors (data/machines/*.json) and, for a machine neither knows, by what its probe reports.
+function machineIndex(descriptors,probes,site){
  const byName=new Map(),machines=new Map();
+ for(const m of site?.machines||[])machines.set(m.id,{id:m.id,name:m.name||m.id,hostname:m.hostname||'',ips:m.ip?[m.ip]:[]});
  for(const d of Array.isArray(descriptors)?descriptors:Object.values(descriptors||{})){
   if(!d?.id)continue;
   const ips=(d.addresses||[]).map(a=>a?.ip).filter(ip=>typeof ip==='string'&&/^\d+\.\d+\.\d+\.\d+$/.test(ip));
-  machines.set(d.id,{id:d.id,name:d.name||d.id,hostname:d.hostname||'',ips});
+  const known=machines.get(d.id);
+  machines.set(d.id,{id:d.id,name:d.name||known?.name||d.id,hostname:d.hostname||known?.hostname||'',ips:ips.length?ips:known?.ips||[]});
  }
  for(const [id,p] of Object.entries(probes)){
   const m=machines.get(id)||{id,name:id,hostname:'',ips:[]};
@@ -170,7 +192,7 @@ const expandHome=(file,home)=>file.startsWith('~/')?path.posix.join(home,file.sl
 export function buildSecurity({probes:rawProbes={},forgejo=null,extraMachines=[],descriptors=[],collectedFrom='',now=Date.now(),site=loadedSite()}){
  const probes={};
  for(const [id,p] of Object.entries(rawProbes))probes[id]=p?.text!=null?{host:parseProbe(p.text)}:{error:clean(p?.error||'nedostupné',300)};
- const index=machineIndex(descriptors,probes);
+ const index=machineIndex(descriptors,probes,site);
  const forgejoHost=(forgejo?.host||site.security.gitHost||'').toLowerCase();
  const machines=[],keys=new Map(),otherKeys=[],unknownAuthorized=[],findings=[];
  // The label comes from the primary copy (not a backup); unreadable comments fall back to the file name.
@@ -270,30 +292,35 @@ export function buildSecurity({probes:rawProbes={},forgejo=null,extraMachines=[]
   const where=[...new Set(k.copies.map(c=>mName(c.machine)))].join(', ');
   const rootOn=[...new Set(k.access.filter(a=>a.target.kind==='host'&&['nopasswd','root'].includes(a.sudo)&&!a.restricted).map(a=>`${mName(a.target.machine)} (${a.target.user})`))];
   if(rootOn.length&&k.copies.some(c=>c.encrypted===false))rootKeys.push(`${label} (${where}) → ${rootOn.join(', ')}`);
-  if(!k.access.length)findings.push({level:'info',key:k.id,title:`${label}: nikam nevede`,detail:`Neplatí v žádném authorized_keys ani ve Forgejo. Leží na ${where}. Kandidát na smazání.`});
+  if(!k.access.length)findings.push(finding('info',tx('{key}: nikam nevede',{key:label}),tx('Neplatí v žádném authorized_keys ani ve Forgejo. Leží na {where}. Kandidát na smazání.',{where}),k.id));
   const copies=k.copies.length;
-  if(copies>1)findings.push({level:'info',key:k.id,title:`${label}: ${copies} kopie`,detail:k.copies.map(c=>`${mName(c.machine)}:${c.path}`).join(' · ')});
+  if(copies>1)findings.push(finding('info',tx('{key}: počet kopií {n}',{key:label,n:copies},`${label}: ${copies} kopie`),k.copies.map(c=>`${mName(c.machine)}:${c.path}`).join(' · '),k.id));
   for(const c of k.copies)if(/^[0-7]{3,4}$/.test(c.mode)&&/[1-7]/.test(c.mode.slice(-2)))
-   findings.push({level:'high',key:k.id,title:`${label}: soubor čitelný i pro ostatní (${c.mode})`,detail:`${mName(c.machine)}:${c.path}`});
-  for(const r of k.routes)if(r.accepted===false)findings.push({level:'info',key:k.id,title:`${label}: alias „${r.alias}“ na ${mName(r.machine)} míří na ${r.target.kind==='host'?`${mName(r.target.machine)} (${r.remoteUser})`:r.target.label}, ale cíl klíč nepřijímá`,detail:'Zastaralý záznam v ~/.ssh/config nebo chybějící authorized_keys.'});
+   findings.push(finding('high',tx('{key}: soubor čitelný i pro ostatní ({mode})',{key:label,mode:c.mode}),`${mName(c.machine)}:${c.path}`,k.id));
+  for(const r of k.routes)if(r.accepted===false)findings.push(finding('info',tx('{key}: alias „{alias}“ na {machine} míří na {target}, ale cíl klíč nepřijímá',{key:label,alias:r.alias,machine:mName(r.machine),target:r.target.kind==='host'?`${mName(r.target.machine)} (${r.remoteUser})`:r.target.label}),'Zastaralý záznam v ~/.ssh/config nebo chybějící authorized_keys.',k.id));
+  const strength=keyStrength(k.type,k.bits),kind=[k.type,k.bits].filter(Boolean).join(' ');
+  if(strength==='weak')findings.push(finding('warn',tx('{key}: slabý typ klíče ({type})',{key:label,type:kind}),'DSA a krátké RSA nebo ECDSA klíče už nejsou bezpečné. Vygeneruj nový klíč ed25519 a starý odeber z authorized_keys.',k.id));
+  else if(strength==='legacy')findings.push(finding('info',tx('{key}: starší typ klíče ({type})',{key:label,type:kind}),'RSA pod 3072 bitů se pro nové klíče nedoporučuje. Při příští výměně použij ed25519.',k.id));
  }
- if(rootKeys.length)findings.push({level:'warn',title:`${rootKeys.length} klíčů bez passphrase otevírá účet se sudo bez hesla, tedy root`,
-  detail:`Kdo získá soubor klíče, je root na cílovém stroji. Jde o záměr pro agenty, ochranu dělají jen from= a AllowUsers. ${rootKeys.join(' · ')}`});
- for(const u of unknownAuthorized)findings.push({level:['nopasswd','root'].includes(accountOf(u.machine,u.user)?.sudo.level)?'warn':'info',title:`Na ${mName(u.machine)} (${u.user}) je povolený cizí klíč „${(u.comment||u.fingerprint).slice(0,48)}“`,detail:`Jeho privátní část není na žádném z prověřených strojů (jiné zařízení nebo zapomenutý klíč).${u.from.length?` Jen z ${u.from.join(', ')}.`:' Bez omezení adresy.'}${u.restricted?' Omezený příkaz.':''}`});
- for(const u of forgejoUnknown)findings.push({level:'warn',title:`Forgejo: cizí klíč „${u.title}“ (${u.kind==='forgejo'?`účet ${u.account}`:`repozitář ${u.repo}`})`,detail:'Privátní část není na žádném z prověřených strojů.'});
+ if(rootKeys.length)findings.push(finding('warn',tx('Klíče bez passphrase, které otevírají účet se sudo bez hesla, tedy root: {n}',{n:rootKeys.length},`${rootKeys.length} klíčů bez passphrase otevírá účet se sudo bez hesla, tedy root`),
+  tx('Kdo získá soubor klíče, je root na cílovém stroji. Jde o záměr pro agenty, ochranu dělají jen from= a AllowUsers. {keys}',{keys:rootKeys.join(' · ')})));
+ for(const u of unknownAuthorized)findings.push(finding(['nopasswd','root'].includes(accountOf(u.machine,u.user)?.sudo.level)?'warn':'info',
+  tx('Na {machine} ({user}) je povolený cizí klíč „{key}“',{machine:mName(u.machine),user:u.user,key:(u.comment||u.fingerprint).slice(0,48)}),
+  sentences('Jeho privátní část není na žádném z prověřených strojů (jiné zařízení nebo zapomenutý klíč).',u.from.length?tx('Jen z {from}.',{from:u.from.join(', ')}):'Bez omezení adresy.',u.restricted?'Omezený příkaz.':null)));
+ for(const u of forgejoUnknown)findings.push(finding('warn',tx(u.kind==='forgejo'?'Forgejo: cizí klíč „{title}“ (účet {name})':'Forgejo: cizí klíč „{title}“ (repozitář {name})',{title:u.title,name:u.kind==='forgejo'?u.account:u.repo}),'Privátní část není na žádném z prověřených strojů.'));
  for(const m of machines){
   if(!m.reachable||!m.ssh)continue;
-  if(m.ssh.passwordAuth)findings.push({level:'warn',title:`${m.name}: SSH přijímá i heslo`,detail:m.ssh.allowUsers.length?`Omezeno přes AllowUsers na ${m.ssh.allowUsers.join(', ')}.`:'Bez omezení adres (AllowUsers).'});
+  if(m.ssh.passwordAuth)findings.push(finding('warn',tx('{machine}: SSH přijímá i heslo',{machine:m.name}),m.ssh.allowUsers.length?tx('Omezeno přes AllowUsers na {users}.',{users:m.ssh.allowUsers.join(', ')}):'Bez omezení adres (AllowUsers).'));
   for(const a of m.accounts){
-   if(a.sudo.expired?.length)findings.push({level:'info',title:`${m.name}: prošlé pravidlo sudo pro ${a.user}`,detail:a.sudo.expired.join(' · ')});
+   if(a.sudo.expired?.length)findings.push(finding('info',tx('{machine}: prošlé pravidlo sudo pro {user}',{machine:m.name,user:a.user}),a.sudo.expired.join(' · ')));
    for(const e of a.authorizedKeys)if(!e.from.length&&!e.restricted&&['nopasswd','root'].includes(a.sudo.level)&&!m.ssh.allowUsers.some(x=>x.startsWith(`${a.user}@`)))
-    findings.push({level:'warn',title:`${m.name} (${a.user}): klíč „${e.comment||e.fingerprint.slice(0,20)}“ bez omezení adresy`,detail:'Účet má sudo bez hesla a ani from= ani AllowUsers neomezují, odkud se klíč smí použít.'});
+    findings.push(finding('warn',tx('{machine} ({user}): klíč „{key}“ bez omezení adresy',{machine:m.name,user:a.user,key:e.comment||e.fingerprint.slice(0,20)}),'Účet má sudo bez hesla a ani from= ani AllowUsers neomezují, odkud se klíč smí použít.'));
   }
   const present=new Set(m.accounts.map(a=>a.user));
   const stale=(m.ssh.accessGroup||[]).filter(u=>!u.startsWith('%')&&u!=='*'&&!present.has(u));
-  if(stale.length)findings.push({level:'info',title:`${m.name}: Remote Login povoluje neexistující účty`,detail:`com.apple.access_ssh obsahuje ${stale.join(', ')}, kteří na stroji nejsou.`});
+  if(stale.length)findings.push(finding('info',tx('{machine}: Remote Login povoluje neexistující účty',{machine:m.name}),tx('com.apple.access_ssh obsahuje {users}, kteří na stroji nejsou.',{users:stale.join(', ')})));
  }
- for(const o of otherKeys)if(o.backup)findings.push({level:'info',title:`${mName(o.machine)}: záloha klíče ${o.label}`,detail:o.path});
+ for(const o of otherKeys)if(o.backup)findings.push(finding('info',tx('{machine}: záloha klíče {label}',{machine:mName(o.machine),label:[o.label]}),o.path));
  const level={high:0,warn:1,info:2};findings.sort((a,b)=>level[a.level]-level[b.level]);
 
  for(const x of extraMachines)machines.push({id:x.id,name:index.machines.get(x.id)?.name||x.name||x.id,ips:index.machines.get(x.id)?.ips||x.ips||[],hostname:index.machines.get(x.id)?.hostname||'',reachable:false,sshOpen:x.sshOpen,note:clean(x.note,200),accounts:[],ssh:null});
@@ -303,6 +330,13 @@ export function buildSecurity({probes:rawProbes={},forgejo=null,extraMachines=[]
   findings};
 }
 
+// The machines the key collector reads: every site machine with an ssh alias unless ssh.keys is false.
+export const securityMachines=s=>s.machines.filter(m=>m.ssh&&m.ssh.keys).map(m=>({id:m.id,name:m.name}));
+// Where the key inventory stands (collector-state.mjs); with a snapshot, its age decides between ok and stale.
+export function securitySetup(site,{collectedAt=null,now=Date.now()}={}){
+ const machines=securityMachines(site);
+ return {...collectorState('security',{configured:machines.length>0,collectedAt,now}),machines,siteMachines:site.machines.length,gitHost:site.security.gitHost};
+}
 export async function loadSecurity(directory,file=process.env.SECURITY_FILE||path.join(directory,'security','ssh-keys.json')){
  let doc;
  try{doc=JSON.parse(await readFile(file,'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw new Error('invalid');}

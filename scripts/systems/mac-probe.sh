@@ -40,7 +40,8 @@ emit HOST "$(hostname -s 2>/dev/null || hostname)" Darwin "$(id -un)" "$ROOT" "$
 # --- operating system and hardware -------------------------------------------------------
 emit OS "$(sw_vers -productName 2>/dev/null)" "$(sw_vers -productVersion 2>/dev/null)" "$(sw_vers -buildVersion 2>/dev/null)" "$(uname -r)" "$(uname -m)"
 emit HW "$(sysctl -n hw.model 2>/dev/null)" "$(sysctl -n machdep.cpu.brand_string 2>/dev/null)" "$(sysctl -n hw.memsize 2>/dev/null)" "$(sysctl -n hw.ncpu 2>/dev/null)"
-emit UPTIME "$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/.*sec = \([0-9]*\).*/\1/p')"
+# kern.boottime prints "{ sec = 1793827174, usec = 338775 } Wed Nov ...": take sec, not the usec after it.
+emit UPTIME "$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/^{ sec = \([0-9]*\),.*/\1/p')"
 
 # --- pending Apple updates (contacts Apple; can take a minute) ------------------------------
 swu=$(T 150 softwareupdate -l 2>&1 </dev/null); swu_rc=$?

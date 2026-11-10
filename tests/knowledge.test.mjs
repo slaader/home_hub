@@ -69,7 +69,7 @@ test('entry edits check the version stamp, drop emptied fields and reject unknow
  assert.equal(entry.address,undefined);assert.equal(entry.login,'Bearer token');assert.equal(entry.secrets[0].check,undefined);
  assert.equal(entry.verified_by,'user edit in Home Hub');assert.equal(next.updated_at,'2026-11-02');
  assert.throws(()=>applyEdit(next,edit),/conflict/);
- assert.throws(()=>editInput({id:'gw',base:entryHash(gw),fields:{depends_on:[]}}),/invalid/);
+ assert.throws(()=>editInput({id:'gw',base:entryHash(gw),fields:{kind:'tool'}}),/invalid/);
  assert.throws(()=>editInput({id:'../x',base:entryHash(gw),fields:{}}),/invalid/);
  const {mkdtemp,writeFile,readFile}=await import('node:fs/promises'),os=(await import('node:os')).default;
  const dir=await mkdtemp(path.join(os.tmpdir(),'hub-edit-')),file=path.join(dir,'knowledge.json');await writeFile(file,JSON.stringify(base()));

@@ -60,7 +60,7 @@ function machine(raw,i){
  return {id:raw.id,name:str(raw.name??raw.id,60,`${where}.name`,{empty:false}),hostname:str(raw.hostname??'',253,`${where}.hostname`),ip,role,picture,thermoId,hardware,ssh,stack};
 }
 export function validateSite(raw={}){
- keys(raw,['$comment','siteName','lanCidrs','timeZone','defaultLanguage','publicOrigin','machines','inventory','tracker','security','strings','plugins'],'the file');
+ keys(raw,['$comment','siteName','lanCidrs','timeZone','defaultLanguage','publicOrigin','machines','inventory','tracker','security','router','strings','plugins'],'the file');
  const lanCidrs=list(raw.lanCidrs??[],16,'lanCidrs').map((c,i)=>parseCidr(c)?.text??fail(`lanCidrs[${i}] must be an IPv4 network such as 10.0.0.0/24`));
  const timeZone=raw.timeZone??null;
  if(timeZone!==null){try{new Intl.DateTimeFormat('en',{timeZone});}catch{fail('timeZone must be an IANA zone such as Europe/Berlin, or null');}}
@@ -85,6 +85,13 @@ export function validateSite(raw={}){
  const security=keys(raw.security??{},['gitHost','gitUrl','certificates','order'],'security');
  const certificates=list(security.certificates??[],20,'security.certificates').map((c,i)=>{keys(c,['match','label'],`security.certificates[${i}]`);try{new RegExp(c.match);}catch{fail(`security.certificates[${i}].match must be a regular expression`);}return {match:str(c.match,200,`security.certificates[${i}].match`,{empty:false}),label:str(c.label,120,`security.certificates[${i}].label`,{empty:false})};});
  const order=list(security.order??[],50,'security.order').map((id,i)=>ids.includes(id)?id:fail(`security.order[${i}] is not a machine id`));
+ // The router feed (server/router-data.mjs): adapter = "unifi" (included) or the id of an adapter a plugin provides;
+ // host = the gateway the included collector reads (default: the machine with role "router"); site = its UniFi site name.
+ let router=null;if(raw.router!==undefined&&raw.router!==null){keys(raw.router,['adapter','host','site'],'router');
+  if(typeof raw.router.adapter!=='string'||!/^[a-z][a-z0-9-]{1,31}$/.test(raw.router.adapter))fail('router.adapter must be an adapter id such as "unifi"');
+  const host=raw.router.host??null;if(host!==null&&(typeof host!=='string'||!/^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/.test(host)))fail('router.host must be an IPv4 address or a host name');
+  const name=raw.router.site??null;if(name!==null&&(typeof name!=='string'||!/^[A-Za-z0-9_-]{1,64}$/.test(name)))fail('router.site must be a UniFi site name such as "default"');
+  router={adapter:raw.router.adapter,host,site:name};}
  if(raw.plugins!==undefined&&!plain(raw.plugins))fail('plugins must be an object keyed by plugin id');
  // Translations of the site's own labels (the UI's source language is Czech): {"en": {"source text": "translation"}}.
  const strings={};
@@ -92,7 +99,7 @@ export function validateSite(raw={}){
  return deepFreeze({siteName:str(raw.siteName??'',60,'siteName'),lanCidrs,timeZone,defaultLanguage,publicOrigin,machines,
   inventory:{places,secretStores},tracker:{projects},
   security:{gitHost:security.gitHost?str(security.gitHost,253,'security.gitHost'):null,gitUrl:security.gitUrl?str(security.gitUrl,300,'security.gitUrl'):null,certificates,order},
-  strings,plugins:raw.plugins??{}});
+  router,strings,plugins:raw.plugins??{}});
 }
 function deepFreeze(v){if(v&&typeof v==='object'&&!Object.isFrozen(v)){Object.freeze(v);for(const x of Object.values(v))deepFreeze(x);}return v;}
 export const EMPTY_SITE=validateSite({});

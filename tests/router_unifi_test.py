@@ -1,6 +1,9 @@
 import importlib.util, io, json, os, pathlib, stat, sys, tempfile, unittest
 os.environ['UNIFI_HOST'] = '10.0.0.1'
 os.environ.pop('UNIFI_LAN', None)
+os.environ['HOME_HUB_SITE_CONFIG'] = 'none'  # the module settings come from the environment above, never from a real site
+os.environ.pop('UNIFI_SITE', None)
+os.environ.pop('HOME_HUB_ROOT', None)
 spec = importlib.util.spec_from_file_location('unifi', pathlib.Path(__file__).resolve().parents[1] / 'scripts/collect-router-unifi.py')
 unifi = importlib.util.module_from_spec(spec); spec.loader.exec_module(unifi)
 NOW = '2026-10-31T21:00:00+00:00'
@@ -121,6 +124,35 @@ class UnifiTests(unittest.TestCase):
     with self.assertRaises(unifi.CollectorError) as ctx: unifi.load_key()
     self.assertEqual(str(ctx.exception), 'key-invalid')
    finally: unifi.KEY_FILE = original
+ def test_site_configuration(self):
+  site = {'lanCidrs': ['10.0.0.0/24', '10.0.20.0/24', 'nonsense'], 'router': {'adapter': 'unifi', 'host': '10.0.0.254', 'site': 'home'},
+          'machines': [{'id': 'mini', 'ip': '10.0.0.25'}, {'id': 'gw', 'role': 'router', 'ip': '10.0.0.1'}]}
+  host, lans, name = unifi.site_settings(site, {})
+  self.assertEqual((host, [str(n) for n in lans], name), ('10.0.0.254', ['10.0.0.0/24', '10.0.20.0/24'], 'home'))
+  self.assertEqual(unifi.site_settings({'machines': site['machines']}, {})[:1], ('10.0.0.1',), 'the machine with role router is the gateway')
+  self.assertEqual([str(n) for n in unifi.site_settings({'machines': site['machines']}, {})[1]], ['10.0.0.0/24'], 'no lanCidrs: the /24 around the gateway')
+  host, lans, name = unifi.site_settings(site, {'UNIFI_HOST': '10.9.0.1', 'UNIFI_LAN': '10.9.0.0/16', 'UNIFI_SITE': 'lab'})
+  self.assertEqual((host, [str(n) for n in lans], name), ('10.9.0.1', ['10.9.0.0/16'], 'lab'), 'the environment overrides the file')
+  self.assertEqual(unifi.site_settings({}, {})[0], '192.168.1.1')
+  self.assertEqual(unifi.site_settings({'router': {'site': '../../etc'}}, {})[2], 'default', 'a site name that is not an id is refused')
+  self.assertEqual(len(unifi.site_settings({'router': {'host': 'gateway.example.lan'}}, {})[1]), 3, 'a host name has no /24: private ranges')
+  self.assertEqual(unifi.site_settings([] if False else {'lanCidrs': 'x', 'machines': 'y', 'router': 'z'}, {})[0], '192.168.1.1', 'wrong shapes are ignored')
+  with tempfile.TemporaryDirectory() as tmp:
+   root = pathlib.Path(tmp)
+   (root / 'site.json').write_text(json.dumps(site))
+   self.assertEqual(unifi.load_site({'HOME_HUB_SITE_CONFIG': str(root / 'site.json')})['router']['site'], 'home')
+   self.assertEqual(unifi.load_site({'HOME_HUB_SITE_CONFIG': 'none'}), {})
+   self.assertEqual(unifi.load_site({'HOME_HUB_SITE_CONFIG': str(root / 'missing.json')}), {})
+   (root / 'app').mkdir(); (root / 'data').mkdir()
+   self.assertEqual(unifi.default_root({}, root / 'app'), root, 'deployed as <root>/app beside data/')
+   self.assertEqual(unifi.default_root({}, root / 'data'), root / 'data', 'otherwise the checkout itself')
+   self.assertEqual(unifi.default_root({'HOME_HUB_ROOT': '/srv/hub'}, root), pathlib.Path('/srv/hub'))
+ def test_several_networks(self):
+  saved = unifi.LANS
+  try:
+   unifi.LANS = [unifi.ipaddress.ip_network('10.0.0.0/24'), unifi.ipaddress.ip_network('10.0.20.0/24')]
+   self.assertEqual([unifi.lan_ip(x) for x in ('10.0.0.5', '10.0.20.7', '10.0.20.255', '10.0.0.0', '10.0.30.1', 'x')], ['10.0.0.5', '10.0.20.7', None, None, None, None])
+  finally: unifi.LANS = saved
  def test_failure_keeps_previous_snapshot(self):
   with tempfile.TemporaryDirectory() as tmp:
    root = pathlib.Path(tmp); (root / 'data').mkdir()

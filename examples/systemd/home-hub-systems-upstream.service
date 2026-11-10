@@ -1,0 +1,15 @@
+# Home Hub: check the newest upstream versions of watched software
+# A user unit. Copy it to ~/.config/systemd/user/ together with its timer and adjust the two paths
+# below: the checkout (WorkingDirectory) and the data directory the server reads (--data = its DATA_DIR).
+# The collector is read-only on the machines it probes. See examples/systemd/README.md.
+[Unit]
+Description=Home Hub: check the newest upstream versions of watched software
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/home-hub
+ExecStart=/usr/bin/env node scripts/check-upstream.mjs --data %h/home-hub/data
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=30min
+# Optional, raises the GitHub rate limit (never logged):  Environment=GITHUB_TOKEN_FILE=%h/home-hub/private/github-token

@@ -23,6 +23,8 @@ export default {
     if(typeof c.input?.text!=='string'||!c.input.text.trim())return c.error(400,'DEMO_FAILED','text is required.');
     c.state.notes.push(c.input.text.trim());c.subject=`note-${c.state.notes.length}`;return c.json(201,{count:c.state.notes.length});}},
  ],
+ // This plugin's lines in the MCP initialize instructions; the second part is said only to keys with demo:write.
+ mcpInstructions:['Demo: demo_notes lists the notes.',{scope:'demo:write',text:'With demo:write: POST /api/demo/notes adds one.'}],
  mcpTools:[{name:'demo_notes',scope:'read',title:'Demo: notes',description:'The notes kept by the demo plugin.',
   inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true},
   run:(args,{state,principal})=>({notes:state.notes,for:principal.username})}],

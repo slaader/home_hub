@@ -3,7 +3,7 @@
 //   HOME_HUB_URL=https://… HOME_HUB_TOKEN=hhk_… node scripts/review-push.mjs review.json [--dry-run]
 // review.json has the shape of POST /api/review/publish (docs/review.md), except that media may name a local
 // file instead of a sha256:  {"file":"mockups/login-a.html"}  (relative to review.json; type from the extension).
-// A 3D model (.glb) may name its rendered still the same way:  {"file":"units/harvester-a.glb","poster":"units/harvester-a.png"}.
+// A 3D model (.glb) may name its rendered still the same way:  {"file":"units/unit-a.glb","poster":"units/unit-a.png"}.
 // Files are hashed, blobs the hub already has are skipped, the rest go up in 4 MiB chunks, then the set is
 // published. The token needs the review:write scope. Nothing is printed of the token. No dependencies.
 import {readFile,stat,open} from 'node:fs/promises';

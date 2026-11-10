@@ -2,18 +2,20 @@
 // (firewall, FileVault, SIP, Gatekeeper, update policy, SSH password login, exposed ports).
 // scripts/collect-systems.mjs runs scripts/systems/{mac,nas}-probe.sh on every machine and saves
 // data/systems/snapshot.json; scripts/check-upstream.mjs saves the newest upstream versions to
-// data/systems/upstream.json. buildSystems() joins both with config/software-watch.json.
+// data/systems/upstream.json. buildSystems() joins both with the site's software watch list
+// (server/software-watch.mjs: local/software-watch.json, empty without one).
 // SSH keys and sudo stay in the security section (security-data.mjs); this module links to it.
 import {readFile} from 'node:fs/promises';
 import path from 'node:path';
-import {fileURLToPath} from 'node:url';
 import {upstreamKey} from './systems-upstream.mjs';
 import {parseVersion,compareVersions,extractVersion} from './versions.mjs';
-import {site as loadedSite,softwareWatchPath} from './site-config.mjs';
+import {site as loadedSite} from './site-config.mjs';
+import {readWatch,watchPath,CMD_ARGS} from './software-watch.mjs';
+import {collectorState} from './collector-state.mjs';
+import {tx,sentences,textOf,field} from './text.mjs';
 export {parseVersion,compareVersions,extractVersion};
 
 export const SYSTEMS_SCHEMA=1;
-const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 // The machines the collector probes: every site machine with ssh.probe (mac or nas), in site order.
 export const systemMachines=s=>s.machines.filter(m=>m.ssh?.probe).map(m=>({id:m.id,name:m.name,kind:m.ssh.probe}));
 const clean=(v,n=300)=>typeof v==='string'?v.replace(/[\u0000-\u001f\u007f]/g,' ').trim().slice(0,n):'';
@@ -40,7 +42,8 @@ export function parseSystemsProbe(text){
   else if(t==='OS')h.os=h.platform==='mac'?{name:clean(f[1],40),version:clean(f[2],20),build:clean(f[3],20),kernel:clean(f[4],40),arch:clean(f[5],20)}
    :{name:clean(f[1],40),version:clean(f[2],20),base:clean(f[3],80),kernel:clean(f[4],60),arch:clean(f[5],20)};
   else if(t==='HW')h.hw={model:clean(f[1],60),cpu:clean(f[2],80),memBytes:num(f[3]),cpus:num(f[4])};
-  else if(t==='UPTIME'){const v=num(f[1]);if(v!=null)h.uptimeSeconds=h.platform==='mac'?(h.collectedAt?Math.max(0,Math.round(Date.parse(h.collectedAt)/1000-v)):null):Math.round(v);}
+  // macOS reports the boot time (epoch seconds), Linux the uptime. An empty field is "not known", not zero.
+  else if(t==='UPTIME'){const v=f[1]?num(f[1]):null;if(v!=null)h.uptimeSeconds=h.platform==='mac'?(h.collectedAt&&v>0?Math.max(0,Math.round(Date.parse(h.collectedAt)/1000-v)):null):Math.round(v);}
   else if(t==='SWU_NONE')h.osUpdates={checked:true,items:[],error:null};
   else if(t==='SWU_ERR')h.osUpdates={checked:false,items:[],error:clean(f[1],200)};
   else if(t==='SWU'){h.osUpdates.checked=true;const s=clean(f[1],400);
@@ -78,12 +81,17 @@ export function parseSystemsProbe(text){
 }
 
 // SPECS lines the macOS probe reads for one machine: "id|kind|arg1|arg2|launchd" (split on |).
+// A rule is data: every field is stripped of the characters that separate or quote a line, and a cmd
+// rule may pass only one of the fixed version flags (CMD_ARGS). Any other argument would let the list
+// run a program for something else than printing its version, so such a rule reaches the probe as an
+// unsupported kind and its row reads "not found".
 const specField=v=>String(v??'').replace(/[|\r\n']/g,' ').trim();
 export function systemsSpecs(registry,machine){
  const lines=[];
  for(const item of registry?.items||[]){const d=item.detect?.[machine];if(!d)continue;
-  const [a,b]=d.kind==='brew'?[d.formula,'']:d.kind==='cask'?[d.cask,'']:d.kind==='app'?[d.path,'']:d.kind==='cmd'?[d.path,d.args]:d.kind==='pydist'?[d.glob,d.package]:d.kind==='json'?[d.path,d.key]:['',''];
-  lines.push([item.id,d.kind,a,b,d.launchd].map(specField).join('|'));}
+  const kind=d.kind==='cmd'&&!CMD_ARGS.includes(d.args)?'unsupported-args':d.kind;
+  const [a,b]=kind==='brew'?[d.formula,'']:kind==='cask'?[d.cask,'']:kind==='app'?[d.path,'']:kind==='cmd'?[d.path,d.args]:kind==='pydist'?[d.glob,d.package]:kind==='json'?[d.path,d.key]:['',''];
+  lines.push([item.id,kind,a,b,d.launchd].map(specField).join('|'));}
  return lines.join('\n');
 }
 
@@ -116,29 +124,34 @@ const LEGACY_BUILD=/^b?\d{4,}$/;
 // semver releases) or node (odd major lines are short-lived, even lines compare within the line).
 // A stale upstream (the last check failed, the value is from an earlier success) can still prove an
 // update exists, but it cannot prove "current"/"ahead": those become 'unknown' (neověřeno).
+// note is the Czech sentence; noteT (when present) its translatable parts (server/text.mjs).
 export function versionStatus(args){
+ const {note,...st}=staleAware(args);
+ return note?{...st,...field('note',note)}:st;
+}
+function staleAware(args){
  const st=freshStatus(args),up=args.upstream;
  if(!up?.ok||!up.stale)return st;
- const since=up.checkedAt?` Poslední úspěšná kontrola ${String(up.checkedAt).slice(0,16).replace('T',' ')} UTC.`:'';
- const why=`Kontrola nejnovější verze selhala (${up.error||'chyba'}).${since}`;
- if(['current','ahead'].includes(st.status))return {...st,status:'unknown',note:`${why} Naposledy ${st.status==='current'?'aktuální':'novější než vydání'}.`};
- return {...st,note:[st.note,why].filter(Boolean).join(' ')};
+ const since=up.checkedAt?tx('Poslední úspěšná kontrola {when} UTC.',{when:String(up.checkedAt).slice(0,16).replace('T',' ')}):null;
+ const why=sentences(tx('Kontrola nejnovější verze selhala ({error}).',{error:up.error||'chyba'}),since);
+ if(['current','ahead'].includes(st.status))return {...st,status:'unknown',note:sentences(why,st.status==='current'?'Naposledy aktuální.':'Naposledy novější než vydání.')};
+ return {...st,note:sentences(st.note,why)};
 }
 function freshStatus({installed,build,scheme,upstream,up}){
  if(!installed)return {status:'missing',latest:null};
  if(!up||up.type==='none')return {status:'n/a',latest:null,note:up?.note||null};
  if(!upstream?.ok)return {status:'unknown',latest:upstream?.version||null,note:upstream?.error||'Nejnovější verzi se nepodařilo zjistit.'};
  let latest=upstream.version;
- if(scheme==='llamacpp'&&LEGACY_BUILD.test(installed)&&/\./.test(latest))return {status:'update',latest,note:`Nainstalovaný build ${installed.replace(/^b/,'')} je starší než první semver vydání.`};
+ if(scheme==='llamacpp'&&LEGACY_BUILD.test(installed)&&/\./.test(latest))return {status:'update',latest,note:tx('Nainstalovaný build {build} je starší než první semver vydání.',{build:installed.replace(/^b/,'')})};
  if(scheme==='node'&&upstream.latestByMajor){
   const major=parseVersion(installed)?.nums[0],lineLatest=upstream.latestByMajor[major],isLts=(upstream.ltsMajors||[]).includes(major);
-  if(major%2===1||!isLts||!lineLatest){const c=compareVersions(installed,upstream.version);return {status:c<0?'update':c>0?'ahead':'current',latest:upstream.version,note:`Řada Node ${major} není LTS; aktuální LTS je ${upstream.version}.`};}
+  if(major%2===1||!isLts||!lineLatest){const c=compareVersions(installed,upstream.version);return {status:c<0?'update':c>0?'ahead':'current',latest:upstream.version,note:tx('Řada Node {major} není LTS; aktuální LTS je {lts}.',{major,lts:upstream.version})};}
   latest=lineLatest;const c=compareVersions(installed,latest);
-  return {status:c<0?'update':c>0?'ahead':'current',latest,note:major===upstream.ltsMajor?'Aktivní LTS řada.':`LTS řada ${major}; nejnovější LTS je ${upstream.version}.`};
+  return {status:c<0?'update':c>0?'ahead':'current',latest,note:major===upstream.ltsMajor?'Aktivní LTS řada.':tx('LTS řada {major}; nejnovější LTS je {lts}.',{major,lts:upstream.version})};
  }
  let c=compareVersions(installed,latest);
  if(c===0&&build!=null&&upstream.build!=null)c=Math.sign(Number(build)-Number(upstream.build))||0;
- if(c==null)return {status:'unknown',latest,note:`Verze ${installed} a ${latest} nejdou porovnat.`};
+ if(c==null)return {status:'unknown',latest,note:tx('Verze {installed} a {latest} nejdou porovnat.',{installed,latest})};
  return {status:c<0?'update':c>0?'ahead':'current',latest};
 }
 
@@ -148,11 +161,14 @@ function softwareRows(registry,machines,upstream){
   const host=machines[machine];if(!host)continue;
   const recs=host.software?.[item.id],inst=installedOf(item,det,recs),up=det.upstream||item.upstream;
   const res=upstream?.results?.[upstreamKey(up)]||null;
-  const st=host.complete||recs?versionStatus({installed:inst.version,build:inst.build,scheme:item.scheme,upstream:res,up}):{status:'unknown',latest:null,note:'Stroj nebyl prozkoumán.'};
+  // A rule the probe refused (unknown kind, or a cmd rule with arguments beyond a version flag).
+  const refused=(recs||[]).find(r=>r.kind==='unsupported');
+  const st=refused?{status:'unknown',latest:null,note:refused.detail==='unsupported-args'?'Pravidlo cmd smí programu předat jen přepínač verze (--version, -version, -v, -V, version).':'Tenhle druh pravidla sonda nezná.'}
+   :host.complete||recs?versionStatus({installed:inst.version,build:inst.build,scheme:item.scheme,upstream:res,up}):{status:'unknown',latest:null,note:'Stroj nebyl prozkoumán.'};
   const run=host.running?.[item.id];
   rows.push({id:item.id,name:item.name,category:item.category,machine,installed:inst.version,raw:inst.raw,build:inst.build||null,path:inst.path,others:inst.others||[],
    source:sourceOf(det,(recs||[]).find(r=>r.kind===det.kind)),latest:st.latest,latestUrl:res?.url||null,publishedAt:res?.publishedAt||null,upstreamType:up?.type||null,
-   status:st.status,note:st.note||null,running:run?run.state:null,runLabel:run?.label||det.launchd||null,stale:Boolean(host.stale),
+   status:st.status,note:st.note||null,...(st.noteT?{noteT:st.noteT}:{}),running:run?run.state:null,runLabel:run?.label||det.launchd||null,stale:Boolean(host.stale),
    // Inventory entries (data/knowledge.json ids) this row describes, when the id/name heuristic would miss them.
    inventory:Array.isArray(det.inventory)?det.inventory.filter(x=>typeof x==='string').map(x=>clean(x,80)).filter(Boolean).slice(0,10):[],
    // Upstream freshness, separate from the machine snapshot's `stale`.
@@ -160,15 +176,15 @@ function softwareRows(registry,machines,upstream){
  }
  for(const [machine,host] of Object.entries(machines)){
   for(const a of host.apps||[])rows.push({id:`app:${a.name}`,name:a.name,category:'nas-apps',machine,installed:a.human||a.version,raw:a.version,path:null,others:[],
-   source:a.custom?{label:'Vlastní aplikace (custom app)',url:null}:{label:`TrueNAS katalog · ${a.train||'?'}`,url:`https://apps.truenas.com/catalog/${a.catalogApp||a.name}/`},
+   source:a.custom?{label:'Vlastní aplikace (custom app)',url:null}:{...field('label',tx('TrueNAS katalog · {train}',{train:a.train||'?'})),url:`https://apps.truenas.com/catalog/${a.catalogApp||a.name}/`},
    latest:a.upgrade?(a.latestHuman||a.latest):a.human,latestUrl:null,publishedAt:null,upstreamType:'truenas-app',
    status:a.upgrade?'update':'current',note:a.upgrade&&a.latestHuman===a.human?'Stejná verze aplikace, nový obraz kontejneru.':a.custom?'Vlastní aplikace: aktualizace = nový obraz.':null,
    running:a.state==='RUNNING'?'running':a.state==='STOPPED'?'absent':String(a.state||'').toLowerCase(),runLabel:a.state,stale:Boolean(host.stale)});
   for(const d of host.docker||[]){const [image,tag='latest']=d.image.split(/:(?=[^/]+$)/);
    rows.push({id:`docker:${d.name}`,name:d.name,category:'containers',machine,installed:tag,raw:d.image,path:null,others:[],
-    source:{label:`Docker obraz ${image}`,url:image.includes('/')?`https://hub.docker.com/r/${image}`:`https://hub.docker.com/_/${image}`},
+    source:{...field('label',tx('Docker obraz {image}',{image})),url:image.includes('/')?`https://hub.docker.com/r/${image}`:`https://hub.docker.com/_/${image}`},
     latest:null,latestUrl:null,publishedAt:d.created,upstreamType:'docker',status:tag==='latest'?'floating':'n/a',
-    note:tag==='latest'?`Plovoucí tag :latest, obraz z ${String(d.created||'?').slice(0,10)}; novější verze se pozná až podle digestu.`:null,running:/^Up/.test(d.status)?'running':'absent',runLabel:d.status,stale:Boolean(host.stale)});}
+    ...(tag==='latest'?field('note',tx('Plovoucí tag :latest, obraz z {date}; novější verze se pozná až podle digestu.',{date:String(d.created||'?').slice(0,10)})):{note:null}),running:/^Up/.test(d.status)?'running':'absent',runLabel:d.status,stale:Boolean(host.stale)});}
  }
  return rows;
 }
@@ -189,12 +205,14 @@ function osSummary(host){
 }
 
 // --- host protection checks ---------------------------------------------------------------------
-const check=(id,label,state,value,detail='')=>({id,label,state,value,detail});
+// value and detail are Czech text, or tx()/sentences() objects: then the check also carries valueT / detailT.
+const check=(id,label,state,value,detail='')=>({id,label,state,value:textOf(value),detail:textOf(detail),
+ ...(typeof value==='object'&&value?{valueT:value.parts}:{}),...(typeof detail==='object'&&detail?{detailT:detail.parts}:{})});
 function macChecks(host,os){
  const out=[],fw=num(host.firewall.global),a=host.autoUpdate,s=host.sshd;
  out.push(fw==null?check('firewall','Firewall (aplikační)','unknown','neověřeno'):fw===0?check('firewall','Firewall (aplikační)','warn','vypnutý','Příchozí spojení k aplikacím nic nefiltruje; spoléhá se na router.'):check('firewall','Firewall (aplikační)','ok',fw===2?'blokuje vše':'zapnutý',host.firewall.stealth==='on'?'Stealth mode zapnutý.':''));
  out.push(check('stealth','Stealth mode','info',host.firewall.stealth==='on'?'zapnutý':'vypnutý','Neodpovídá na ping a sondy zavřených portů.'));
- out.push(host.pf?.status==='unknown'||!host.pf?check('pf','Packet filter (pf)','unknown','neověřeno','pfctl potřebuje sudo.'):check('pf','Packet filter (pf)','info',host.pf.status==='enabled'?`zapnutý · ${host.pf.rules??'?'} pravidel`:'vypnutý','Výchozí kotvy Apple; vlastní pravidla žádná.'));
+ out.push(host.pf?.status==='unknown'||!host.pf?check('pf','Packet filter (pf)','unknown','neověřeno','pfctl potřebuje sudo.'):check('pf','Packet filter (pf)','info',host.pf.status==='enabled'?tx('zapnutý · {rules} pravidel',{rules:host.pf.rules??'?'}):'vypnutý','Výchozí kotvy Apple; vlastní pravidla žádná.'));
  out.push(check('filevault','FileVault (šifrování disku)',host.fileVault==='on'?'ok':host.fileVault==='off'?'crit':'unknown',host.fileVault==='on'?'zapnutý':host.fileVault==='off'?'vypnutý':'neověřeno'));
  out.push(check('sip','System Integrity Protection',host.sip==='on'?'ok':host.sip==='off'?'crit':'unknown',host.sip==='on'?'zapnutá':host.sip==='off'?'vypnutá':'neověřeno'));
  out.push(check('gatekeeper','Gatekeeper',host.gatekeeper==='on'?'ok':host.gatekeeper==='off'?'warn':'unknown',host.gatekeeper==='on'?'zapnutý':host.gatekeeper==='off'?'vypnutý':'neověřeno'));
@@ -202,31 +220,33 @@ function macChecks(host,os){
  out.push(check('security-responses','Automatické bezpečnostní opravy',sec.some(v=>v==='0')?'warn':'ok',sec.some(v=>v==='0')?'vypnuté':sec.every(v=>v==null)?'výchozí (zapnuté)':'zapnuté','Rapid Security Responses a systémové datové soubory.'));
  out.push(check('auto-macos','Automatická instalace macOS',a.AutomaticallyInstallMacOSUpdates==='1'?'ok':'info',a.AutomaticallyInstallMacOSUpdates==='1'?'zapnutá':'ručně',a.AutomaticDownload==='1'?'Stahování zapnuté.':''));
  const others=os.updates.filter(u=>u.kind!=='minor').map(u=>u.kind==='major'?`nabídka ${u.title}`:(u.title.includes(u.version)?u.title:`${u.title} ${u.version}`).trim());
- out.push(os.status==='update'?check('os-update','Aktualizace systému','warn',os.updates.filter(u=>u.kind==='minor').map(u=>u.title).join(', '),`Čeká instalace ve stejné hlavní verzi.${others.length?` Další: ${others.join(', ')}.`:''}`)
-  :os.status==='major'?check('os-update','Aktualizace systému','info',`nabídka ${os.updates.filter(u=>u.kind==='major').map(u=>u.title).join(', ')}`,`Stejná řada je aktuální.${others.length>1?` Další: ${others.slice(1).join(', ')}.`:''}`)
+ const more=list=>list.length?tx('Další: {others}.',{others:list.map(o=>o.replace(/^nabídka /,'')).join(', ')},`Další: ${list.join(', ')}.`):null;
+ out.push(os.status==='update'?check('os-update','Aktualizace systému','warn',os.updates.filter(u=>u.kind==='minor').map(u=>u.title).join(', '),sentences('Čeká instalace ve stejné hlavní verzi.',more(others)))
+  :os.status==='major'?check('os-update','Aktualizace systému','info',tx('nabídka {titles}',{titles:os.updates.filter(u=>u.kind==='major').map(u=>u.title).join(', ')}),sentences('Stejná řada je aktuální.',more(others.slice(1))))
   :os.status==='current'?check('os-update','Aktualizace systému','ok','aktuální'):check('os-update','Aktualizace systému','unknown','neověřeno',os.error||''));
  const pw=[s.passwordauthentication,s.kbdinteractiveauthentication];
  out.push(s.remotelogin==='off'?check('ssh-password','SSH přihlášení heslem','ok','SSH vypnuté')
   :pw.every(v=>v==null)?check('ssh-password','SSH přihlášení heslem','unknown','neověřeno','sshd -T potřebuje sudo.')
-  :pw.some(v=>v==='yes')?check('ssh-password','SSH přihlášení heslem','warn','povolené',s.allowUsers.length?`Jen z adres v AllowUsers: ${[...new Set(s.allowUsers.map(x=>x.split('@')[1]||x))].join(', ')}.`:'Bez omezení AllowUsers.')
+  :pw.some(v=>v==='yes')?check('ssh-password','SSH přihlášení heslem','warn','povolené',s.allowUsers.length?tx('Jen z adres v AllowUsers: {from}.',{from:[...new Set(s.allowUsers.map(x=>x.split('@')[1]||x))].join(', ')}):'Bez omezení AllowUsers.')
   :check('ssh-password','SSH přihlášení heslem','ok','jen klíče'));
  const shares=[['com.apple.screensharing','Sdílení obrazovky'],['com.apple.smbd','Sdílení souborů (SMB)'],['com.apple.RemoteDesktop.agent','Vzdálená správa (ARD)']].filter(([k])=>host.sharing[k]).map(([,l])=>l);
- out.push(check('sharing','Sdílení zapnuté',shares.length?'info':'ok',shares.length?shares.join(', '):'nic'));
+ out.push(check('sharing','Sdílení zapnuté',shares.length?'info':'ok',shares.length?tx('{items}',{items:shares}):'nic'));
  return out;
 }
 function nasChecks(host,os){
  // Snapshots written before inputHooks existed stored the probe's "none" as a policy; drop it.
  const out=[],pol=(host.nft?.inputPolicies||[]).filter(p=>p.policy!=='none'),s=host.sshd,ftp=host.services.find(x=>x.name==='ftp');
  out.push(host.nft?.unknown||!host.nft?check('firewall','Firewall (nftables)','unknown','neověřeno')
-  :!pol.length?check('firewall','Firewall (nftables)','warn','vstup nefiltrován',`Žádný řetězec na vstupním hooku${host.nft.tables?.length?` (tabulky ${host.nft.tables.join(', ')})`:', ruleset je prázdný'}; příchozí provoz nic nefiltruje, spoléhá se na router.`)
+  :!pol.length?check('firewall','Firewall (nftables)','warn','vstup nefiltrován',host.nft.tables?.length?tx('Žádný řetězec na vstupním hooku (tabulky {tables}); příchozí provoz nic nefiltruje, spoléhá se na router.',{tables:host.nft.tables.join(', ')})
+   :'Žádný řetězec na vstupním hooku, ruleset je prázdný; příchozí provoz nic nefiltruje, spoléhá se na router.')
   :pol.some(p=>['drop','reject'].includes(p.policy))?check('firewall','Firewall (nftables)','ok',pol.map(p=>p.policy).join(', '))
-  :check('firewall','Firewall (nftables)','warn','vstup povolen (accept)',`Jen pravidla Dockeru a tabulky ${host.nft.tables.filter(t=>!/^ip6? (nat|filter|raw)$/.test(t)).join(', ')||'—'}; TrueNAS vlastní firewall nemá.`));
- out.push(ftp?.state==='RUNNING'?check('ftp','FTP',host.ftp?.tls?'info':'warn',host.ftp?.tls?'zapnuté (TLS)':'zapnuté bez šifrování',`Port ${host.ftp?.port??21} na všech rozhraních${host.ftp?.onlyAnonymous?', jen anonymně':host.ftp?.onlyLocal?', jen místní účty':', místní účty s heslem'}.`)
+  :check('firewall','Firewall (nftables)','warn','vstup povolen (accept)',tx('Jen pravidla Dockeru a tabulky {tables}; TrueNAS vlastní firewall nemá.',{tables:host.nft.tables.filter(t=>!/^ip6? (nat|filter|raw)$/.test(t)).join(', ')||'—'})));
+ out.push(ftp?.state==='RUNNING'?check('ftp','FTP',host.ftp?.tls?'info':'warn',host.ftp?.tls?'zapnuté (TLS)':'zapnuté bez šifrování',tx(host.ftp?.onlyAnonymous?'Port {port} na všech rozhraních, jen anonymně.':host.ftp?.onlyLocal?'Port {port} na všech rozhraních, jen místní účty.':'Port {port} na všech rozhraních, místní účty s heslem.',{port:host.ftp?.port??21}))
   :check('ftp','FTP','ok','vypnuté'));
  out.push(!s.passwordauthentication?check('ssh-password','SSH přihlášení heslem','unknown','neověřeno'):[s.passwordauthentication,s.kbdinteractiveauthentication].includes('yes')?check('ssh-password','SSH přihlášení heslem','warn','povolené'):check('ssh-password','SSH přihlášení heslem','ok','jen klíče'));
  out.push(check('ssh-root','SSH jako root','info',s.permitrootlogin==='no'?'zakázáno':s.permitrootlogin==='without-password'||s.permitrootlogin==='prohibit-password'?'jen klíčem':s.permitrootlogin||'?'));
  out.push(check('ssh-forwarding','SSH přesměrování portů',s.allowtcpforwarding==='no'?'ok':'info',s.allowtcpforwarding==='no'?'zakázáno':s.allowtcpforwarding||'?'));
- out.push(os.status==='update'?check('os-update','Aktualizace TrueNAS','warn',os.updates[0]?.version||'?',(/CVE|security/i.test(os.updates[0]?.notes||'')?'Bezpečnostní vydání: ':'')+(os.updates[0]?.notes||'').slice(0,240))
+ out.push(os.status==='update'?check('os-update','Aktualizace TrueNAS','warn',os.updates[0]?.version||'?',/CVE|security/i.test(os.updates[0]?.notes||'')?tx('Bezpečnostní vydání: {notes}',{notes:(os.updates[0]?.notes||'').slice(0,240)}):(os.updates[0]?.notes||'').slice(0,240))
   :os.status==='current'?check('os-update','Aktualizace TrueNAS','ok','aktuální'):check('os-update','Aktualizace TrueNAS','unknown','neověřeno'));
  const shares=host.services.filter(x=>x.state==='RUNNING'&&['cifs','nfs','iscsitarget','webdav','rsync','snmp'].includes(x.name)).map(x=>({cifs:'SMB',nfs:'NFS',iscsitarget:'iSCSI'})[x.name]||x.name.toUpperCase());
  out.push(check('sharing','Sdílení zapnuté',shares.length?'info':'ok',shares.join(', ')||'nic'));
@@ -234,7 +254,11 @@ function nasChecks(host,os){
 }
 
 // --- payload ------------------------------------------------------------------------------------
-export function buildSystems({snapshot,upstream,registry,machines:probed=systemMachines(loadedSite()),now=Date.now()}){
+// Snapshots collected before the macOS probe read kern.boottime correctly hold an uptime of decades
+// (the boot time's microseconds were taken for its seconds). Such a value is not shown.
+const plausibleUptime=s=>Number.isFinite(s)&&s>=0&&s<20*365*86400?s:null;
+// collector (additive): where the two snapshots stand (collector-state.mjs) and where the watch list comes from.
+export function buildSystems({snapshot,upstream,registry,machines:probed=systemMachines(loadedSite()),now=Date.now(),watchSource=null}){
  const machines=snapshot?.machines||{};
  const software=softwareRows(registry||{items:[]},machines,upstream);
  const out=probed.map(m=>{
@@ -242,11 +266,12 @@ export function buildSystems({snapshot,upstream,registry,machines:probed=systemM
   if(!host)return {...m,reachable:false,stale:false,error:'Zatím neprozkoumáno.',os:null,checks:[],listening:[],brewOutdated:[],summary:null};
   const os=osSummary(host),checks=host.platform==='linux'?nasChecks(host,os):macChecks(host,os);
   const exposed=host.listening.filter(l=>l.scope!=='loopback');
-  checks.push(check('exposed','Porty otevřené do sítě',exposed.length?'info':'ok',`${new Set(exposed.map(l=>l.port)).size} portů`,[...new Set(exposed.map(l=>`${l.port} ${l.proc}`))].sort((x,y)=>parseInt(x)-parseInt(y)).slice(0,40).join(' · ')));
+  const ports=new Set(exposed.map(l=>l.port)).size;
+  checks.push(check('exposed','Porty otevřené do sítě',exposed.length?'info':'ok',tx('Portů: {n}',{n:ports},`${ports} portů`),[...new Set(exposed.map(l=>`${l.port} ${l.proc}`))].sort((x,y)=>parseInt(x)-parseInt(y)).slice(0,40).join(' · ')));
   const rows=software.filter(r=>r.machine===m.id);
   const count=(list,st)=>list.filter(x=>x.state===st).length;
   return {...m,reachable:Boolean(host.complete),stale:Boolean(host.stale),error:host.lastError||(host.errors||[])[0]||null,collectedAt:host.collectedAt,
-   hw:{model:host.hw.model||null,cpu:host.hw.cpu||null,ramGb:host.hw.memBytes?Math.round(host.hw.memBytes/1e9):null,cpus:host.hw.cpus},uptimeSeconds:host.uptimeSeconds,
+   hw:{model:host.hw.model||null,cpu:host.hw.cpu||null,ramGb:host.hw.memBytes?Math.round(host.hw.memBytes/1e9):null,cpus:host.hw.cpus},uptimeSeconds:plausibleUptime(host.uptimeSeconds),
    os,checks,listening:host.listening,brewOutdated:host.brewOutdated||[],
    summary:{osUpdate:os.status==='update'?1:0,softwareUpdates:rows.filter(r=>r.status==='update'&&!['nas-apps','containers'].includes(r.category)).length,
     appUpdates:rows.filter(r=>r.status==='update'&&r.category==='nas-apps').length,unknown:rows.filter(r=>['unknown'].includes(r.status)).length,
@@ -256,13 +281,21 @@ export function buildSystems({snapshot,upstream,registry,machines:probed=systemM
  return {schemaVersion:SYSTEMS_SCHEMA,generatedAt:new Date(now).toISOString(),collectedAt:snapshot?.collectedAt||times.at(-1)||null,oldestCollectedAt:times[0]||null,
   collectedFrom:snapshot?.collectedFrom||null,upstreamCheckedAt:upstream?.checkedAt||null,
   upstreamFailed:Object.values(upstream?.results||{}).filter(r=>r&&(r.stale||!r.ok)).length,categories:{...(registry?.categories||{}),'nas-apps':'Aplikace na NAS','containers':'Kontejnery (Docker)'},
-  machines:out,software};
+  machines:out,software,
+  collector:{...collectorState('systems',{configured:probed.length>0,collectedAt:snapshot?.collectedAt||times.at(-1)||null,now}),
+   upstream:collectorState('upstream',{configured:(registry?.items||[]).length>0,collectedAt:upstream?.checkedAt||null,now}),
+   watch:{source:watchSource,items:(registry?.items||[]).length}}};
+}
+// What the versions and protection pages need before there is a snapshot: is anything configured, and what.
+export function systemsSetup(site,{now=Date.now()}={}){
+ const probed=systemMachines(site);
+ return {...collectorState('systems',{configured:probed.length>0,now}),machines:probed,siteMachines:site.machines.length};
 }
 
-export async function loadSystems(directory,{registryFile=softwareWatchPath(),site=loadedSite()}={}){
+export async function loadSystems(directory,{registryFile=watchPath(),site=loadedSite(),now=Date.now()}={}){
  const dir=process.env.SYSTEMS_DIR||path.join(directory,'systems');
  let snapshot;try{snapshot=JSON.parse(await readFile(path.join(dir,'snapshot.json'),'utf8'));}catch{return null;}
  const upstream=await readFile(path.join(dir,'upstream.json'),'utf8').then(JSON.parse).catch(()=>null);
- const registry=JSON.parse(await readFile(registryFile,'utf8'));
- return buildSystems({snapshot,upstream,registry,machines:systemMachines(site)});
+ const watch=await readWatch({file:registryFile});
+ return buildSystems({snapshot,upstream,registry:watch.registry,machines:systemMachines(site),now,watchSource:watch.source});
 }

@@ -3,6 +3,8 @@
 // (services), the Thermo pull clients (cpu/gpu/power/temp/minutes) and router observations;
 // the grid layout below is the static contract agents extend via runtime_publish later.
 import {machineKind,inLan} from './site-config.mjs';
+import {machineFields,machineHash,runtimeHash,pictureUrl,defaultPicture,PICTURES,MACHINE_ROLES,DEVICE_LIMITS,RUNTIME_LAYERS} from './home-devices.mjs';
+import {TELEMETRY_AGENT_NAME,TELEMETRY_REPO_URL,TELEMETRY_STALE_SECONDS} from './thermo-client.mjs';
 
 const number=(v,max=Number.MAX_SAFE_INTEGER)=>typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=max?v:null;
 const text=(v,n=160)=>typeof v==='string'?v.replace(/[\u0000-\u001f\u007f]/g,'').slice(0,n):'';
@@ -15,10 +17,15 @@ export const homeDefinitions=site=>site.machines.map(m=>({id:m.id,name:m.name,ho
 // Per-machine runtime stack (the position-bound grid drawn on a machine page), when the site describes one.
 export const stackLayouts=site=>Object.fromEntries(site.machines.filter(m=>m.stack).map(m=>[m.id,m.stack]));
 export const homeMachineIds=site=>site.machines.map(m=>m.id);
-// A device added on the Home page (home-devices.mjs) as a tile definition; its picture is served from state.
-export const addedDefinition=d=>({id:d.id,name:d.name,hostname:d.hostname,ip:d.ip||'',kind:d.kind,added:true,
+// A machine from the store (added on the overview, or written by an agent) as a tile definition. image = an
+// uploaded picture served from state; picture = the built-in one behind it (pictureId, or the role's default).
+// source: "ui" or "agent". hash: what machine_upsert / machine_remove expect as base.
+export const addedDefinition=d=>({id:d.id,name:d.name,hostname:d.hostname,ip:d.ip||'',kind:machineKind(d),added:true,
  image:d.image?`/images/home/${d.id}.jpg?v=${encodeURIComponent(d.imageAt||'')}`:null,
- props:{cpu:d.props?.cpu||'',gpu:d.props?.gpu||'—',ramGb:d.props?.ramGb??null},...(d.kind==='thermo'?{thermo:d.id}:{})});
+ picture:pictureUrl(d.picture||defaultPicture(d.role)),pictureId:d.picture,
+ props:{cpu:d.props?.cpu||'',gpu:d.props?.gpu||'—',ramGb:d.props?.ramGb??null,...(d.props?.diskTotalBytes!=null?{diskTotalBytes:d.props.diskTotalBytes}:{})},
+ ...(d.thermoId?{thermo:d.thermoId}:{}),role:d.role,source:d.source,readOnly:false,hash:machineHash(d),
+ createdAt:d.createdAt||null,createdBy:d.createdBy||null,updatedAt:d.updatedAt||null,updatedBy:d.updatedBy||null});
 
 // Per-account order of the overview tiles (stored in access.json, see access-store.mjs).
 // A saved list must name only known machines, each once; it may be partial or empty (= default).
@@ -106,7 +113,7 @@ function volumesFor(thermo,machine){
 // takes its live state from that service; offline ⇒ dashed, never silently gone (that is the
 // user's rule: capability we have shows even when stopped, with models:[]).
 export function mergeStack(machine,services=[],layout=null){
- if(!layout)return null;const collected=layout.source==='collected';
+ if(!layout)return null;const collected=layout.source==='collected'||layout.source==='published';
  const byId=new Map(services.map(s=>[s.id,s]));
  const staticPaths=new Map(layout.blocks.flatMap(b=>(b.models||[]).map(m=>[m.id,m.path??null])));
  const blocks=layout.blocks.map(b=>{
@@ -114,27 +121,77 @@ export function mergeStack(machine,services=[],layout=null){
   // Collected layouts already carry the state seen on the device; live bridge data only
   // refines blocks whose service the bridge actually reports.
   if(collected&&!byId.has(b.service))return {...b,models:b.models||[]};
-  const svc=byId.get(b.service);const running=svc?.status==='reachable';
+  const svc=byId.get(b.service);const running=svc?.status==='reachable',port=svc?.url?String(svc.url).split(':')[2]||'':null;
+  // port and desc are sentences built here, in the source language; portT / descT carry their parts
+  // (server/text.mjs), so the browser can say them in the reader's language.
   return {...b,state:running?'on':'off',
-   port:svc?.url?`:${String(svc.url).split(':')[2]||''} · ${running?'živě':'dřív'}`:b.port,
+   port:port!==null?`:${port} · ${running?'živě':'dřív'}`:b.port,
+   ...(port!==null?{portT:[{key:running?':{port} · živě':':{port} · dřív',params:{port}}]}:{}),
    models:running?(svc.models||[]).map(m=>({id:m.id,state:m.state,sizeGb:m.sizeBytes!=null?Math.round(m.sizeBytes/1073741824*10)/10:null,path:staticPaths.get(m.id)??null,ttlSeconds:m.ttlSeconds??null,ttlRemainingSeconds:m.ttlRemainingSeconds??null})).slice(0,30):[],
    stats:running?{requests:svc.stats?.requests??null,uptimeSeconds:svc.stats?.uptimeSeconds??null}:null,
    pool:running&&svc.pool?{capacityGb:svc.pool.capacityGb,allocatedGb:svc.pool.allocatedGb}:null,
-   desc:running?b.desc:`${b.desc} — služba teď nedosaditelná.`};
+   desc:running?b.desc:`${b.desc} — služba teď nedosaditelná.`,
+   ...(running?{}:{descT:[{key:b.desc||'',params:{}},{key:'— služba teď nedosaditelná.',params:{}}]})};
  });
  return {...layout,blocks};
+}
+// A published runtime stack (runtime_publish, parseRuntime in home-devices.mjs) as the grid the page draws:
+// layers = the names of the layers that hold a block, top to bottom; a block's layer is an index into it.
+export function runtimeGrid(entry){
+ const stack=entry?.stack;if(!stack||!Array.isArray(stack.blocks)||!Array.isArray(stack.cols))return null;
+ const layerKeys=RUNTIME_LAYERS.filter(l=>stack.blocks.some(b=>b.layer===l));
+ return {source:'published',publishedAt:entry.publishedAt||null,publishedBy:entry.publishedBy||null,hash:runtimeHash(stack),
+  layers:layerKeys.map(l=>l.toUpperCase()),layerKeys,cols:[...stack.cols],engines:{...stack.engines},
+  blocks:stack.blocks.map(b=>({...b,layer:layerKeys.indexOf(b.layer),...(b.layer==='engine'?{engine:true}:{}),...(b.layer==='hardware'?{hw:true}:{}),models:(b.models||[]).map(m=>({...m}))}))};
+}
+// Telemetry of one machine, in words that never claim more than was seen:
+//   not-installed  the machine names no telemetry host (no thermoId)
+//   not-applicable a router: the agent does not run there, the router adapter reports it instead
+//   ok             the newest reading is at most TELEMETRY_STALE_SECONDS old
+//   stale          there are readings, but the newest is older than that
+//   unreachable    a host is named and nothing has been read from it. reason: no-login (the hub has no login
+//                  for that host id), denied (the agent refused the login), down (the last pull failed),
+//                  no-data (connected, nothing received yet), waiting (not tried yet)
+// A failed pull says the agent did not answer; it is not proof the machine is off.
+export function telemetryFor(def,thermo,nowSec){
+ if(!def.thermo)return {state:def.kind==='router'?'not-applicable':'not-installed',thermoId:null,lastSampleAt:null,ageSeconds:null,reason:null};
+ const ring=thermo?.seconds?.(def.thermo)||[],rows=thermo?.minutes?.(def.thermo)||[],live=thermo?.live?.()?.[def.thermo]?.reading;
+ const stamps=[ring.length?ring.at(-1).t:null,rows.length?rows.at(-1).t:null,live?.t].filter(Number.isFinite);
+ const newest=stamps.length?Math.max(...stamps):null,age=newest===null?null:Math.max(0,nowSec-newest);
+ const state=age===null?'unreachable':age<=TELEMETRY_STALE_SECONDS?'ok':'stale';
+ const status=thermo?.status?.()?.[def.thermo]?.state||null,hosts=thermo?.hosts?.();
+ const reason=state==='ok'?null:Array.isArray(hosts)&&!hosts.includes(def.thermo)?'no-login':status==='denied'?'denied':status==='down'?'down':status==='up'?'no-data':'waiting';
+ return {state,thermoId:def.thermo,lastSampleAt:newest===null?null:new Date(newest*1000).toISOString(),ageSeconds:age,reason};
+}
+// What the per-machine agent will report about local LLM runtimes (extension point home.runtimes, see
+// docs/plugins.md). Core only bounds and cleans it; without a provider a machine carries runtimes: null.
+const RUNTIME_STATES=['running','stopped','unknown'];
+export function runtimesFor(entry){
+ if(!entry||typeof entry!=='object'||!Array.isArray(entry.runtimes))return null;
+ return {source:text(entry.source,40),observedAt:text(entry.observedAt,40)||null,
+  runtimes:entry.runtimes.filter(r=>r&&typeof r==='object').slice(0,20).map(r=>({id:text(r.id,60),name:text(r.name,60)||text(r.id,60),kind:text(r.kind,40),
+   status:RUNTIME_STATES.includes(r.status)?r.status:'unknown',url:text(r.url,120)||null,version:text(r.version,40)||null,
+   models:Array.isArray(r.models)?r.models.filter(m=>m&&typeof m==='object').slice(0,30).map(m=>({id:text(m.id,120),state:text(m.state,16),sizeGb:number(m.sizeGb,100000)})):[],
+   stats:Array.isArray(r.stats)?r.stats.filter(x=>x&&typeof x==='object').slice(0,12).map(x=>({label:text(x.label,40),value:text(String(x.value??''),40)})):[]}))};
 }
 // Whole /api/home payload. site = the site configuration; thermo = createThermoPoller(); router =
 // readRouter() result. Two optional feeds come from plugins (docs/plugins.md → extension points):
 // snapshots = {machineId: {snapshot, bridge}} (what a host agent reports: services, memory, uptime) and
 // probed = {machineId: services[]|null} (service probes for a machine without an agent, e.g. a NAS).
 // Missing pieces degrade to offline tiles, never throw.
-export function buildHome({site,snapshots:computeLatest={},thermo,router=null,probed={},descriptors={},added=[],now=Date.now()}={}){
+// published = {machineId: {stack, publishedAt, publishedBy}} (runtime_publish): it replaces the stack of the
+// site configuration or of a collected descriptor. runtimes = {machineId: {...}} from home.runtimes providers.
+// sitePictures = {machineId: url} for the site machines that have their own tile picture.
+export function buildHome({site,snapshots:computeLatest={},thermo,router=null,probed={},descriptors={},added=[],published={},runtimes={},sitePictures=null,now=Date.now()}={}){
  const layouts=stackLayouts(site);
  const nowSec=Math.floor(now/1000);
  const poll=thermo?.interval?.()||{intervalSeconds:QUAD_WINDOW_SECONDS,lastPollAt:null};
- const machines=[...homeDefinitions(site),...added.map(addedDefinition)].map(base=>{
+ // source: where a machine is defined. "site" = the site configuration, read-only from the API.
+ const roles=new Map(site.machines.map(m=>[m.id,m.role]));
+ const machines=[...homeDefinitions(site).map(d=>({...d,role:roles.get(d.id),source:'site',readOnly:true})),...added.map(addedDefinition)].map(base=>{
   const collected=machineFromDescriptor(descriptors[base.id],site);const def={...base,...(collected||{}),props:{...base.props,...(collected?.props||{})}};
+  if(sitePictures&&!def.added)def.image=Object.hasOwn(sitePictures,def.id)?sitePictures[def.id]:null;
+  const publishedStack=Object.hasOwn(published||{},def.id)?runtimeGrid(published[def.id]):null;
   const nasServices=def.kind==='nas'&&Array.isArray(probed?.[def.id])?probed[def.id]:null;
   const entry=computeLatest?.[def.id]||{};const snapshot=entry.snapshot||null;
   const thermoStatus=def.thermo?thermo.status()?.[def.thermo]?.state:null;
@@ -167,16 +224,19 @@ export function buildHome({site,snapshots:computeLatest={},thermo,router=null,pr
    uptimeSeconds:snapshot?.uptimeSeconds??null,
    services:services.map(s=>({id:s.id,name:s.name,status:s.status,url:s.url,models:(s.models||[]).filter(m=>m.state==='loaded').map(m=>m.id)})),
    collectedAt:collected?.collectedAt||null,reviewNeeded:collected?.reviewNeeded||[],
-   stack:mergeStack(def.id,services,collected?.stack||layouts[def.id]||null)};
+   telemetry:telemetryFor(def,thermo,nowSec),
+   runtimes:runtimesFor(Object.hasOwn(runtimes||{},def.id)?runtimes[def.id]:null),
+   stack:mergeStack(def.id,services,publishedStack||collected?.stack||layouts[def.id]||null)};
  });
  const routerClients=router&&Array.isArray(router.devices)?router.devices.filter(d=>['associated','reachable','lease-only'].includes(d.presence)).length:null;
  return {poll,schemaVersion:1,generatedAt:new Date(now).toISOString(),machines,
+  telemetry:{agent:TELEMETRY_AGENT_NAME,repoUrl:TELEMETRY_REPO_URL,staleAfterSeconds:TELEMETRY_STALE_SECONDS},
   router:router?{status:router.status,freshness:router.freshness,observedAt:router.observedAt,model:router.model,firmware:router.firmware,clients:routerClients}:null};
 }
 export function homeHistoryQuery(input,added=[],site={machines:[]}){
  const machine=input?.machine,range=input?.range??'30m';
  if(![...site.machines,...added].some(h=>h.id===machine)||!Object.hasOwn(homeRanges,String(range)))throw new Error('invalid');
- if(!site.machines.some(m=>m.id===machine&&m.thermoId)&&!added.some(d=>d.id===machine&&d.kind==='thermo'))return {machine,range,points:[],complete:false,source:'žádný zdroj',reason:'Thermo nesahá na NAS/router'};
+ if(!site.machines.some(m=>m.id===machine&&m.thermoId)&&!added.some(d=>d.id===machine&&(d.thermoId||d.kind==='thermo')))return {machine,range,points:[],complete:false,source:'žádný zdroj',reason:'Thermo nesahá na NAS/router'};
  return {machine,range};
 }
 
@@ -213,4 +273,22 @@ export async function loadMachineDescriptors(dir,ids=[]){
  const {readFile}=await import('node:fs/promises');const out={};
  for(const id of ids){try{const d=JSON.parse(await readFile(`${dir}/${id}.json`,'utf8'));if(d?.id===id)out[id]=d;}catch{}}
  return out;
+}
+
+// The machines as the machine API lists them (GET /api/home/machines, MCP machine_list): the site's own
+// (read-only) and the stored ones with their hash. home = a buildHome() payload, for telemetry and the stack.
+// withStack: also return what is published for each machine, in the form runtime_publish takes.
+export function machineList({site,added=[],published={},home=null,withStack=false}={}){
+ const live=new Map((home?.machines||[]).map(m=>[m.id,m]));
+ const runtime=id=>{const m=live.get(id),entry=Object.hasOwn(published||{},id)?published[id]:null;
+  const source=entry?'published':m?.stack?.source==='collected'?'collected':m?.stack?'site':null;
+  return {source,publishedAt:entry?.publishedAt||null,publishedBy:entry?.publishedBy||null,hash:entry?runtimeHash(entry.stack):null,...(withStack?{stack:entry?.stack||null}:{})};};
+ const telemetry=id=>live.get(id)?.telemetry||null;
+ const machines=[
+  ...site.machines.map(m=>({id:m.id,name:m.name,hostname:m.hostname,ip:m.ip||null,role:m.role,hardware:{...m.hardware},thermoId:m.thermoId,picture:m.picture,
+   source:'site',readOnly:true,hash:null,customPicture:false,telemetry:telemetry(m.id),runtime:runtime(m.id)})),
+  ...added.map(d=>({...machineFields(d),source:d.source,readOnly:false,hash:machineHash(d),customPicture:d.image===true,
+   createdAt:d.createdAt||null,createdBy:d.createdBy||null,updatedAt:d.updatedAt||null,updatedBy:d.updatedBy||null,telemetry:telemetry(d.id),runtime:runtime(d.id)}))];
+ return {machines,pictures:PICTURES.map(id=>({id,url:pictureUrl(id)})),roles:[...MACHINE_ROLES],runtimeLayers:[...RUNTIME_LAYERS],lanCidrs:[...site.lanCidrs],
+  limits:{machines:DEVICE_LIMITS.devices},telemetry:{agent:TELEMETRY_AGENT_NAME,repoUrl:TELEMETRY_REPO_URL,staleAfterSeconds:TELEMETRY_STALE_SECONDS}};
 }

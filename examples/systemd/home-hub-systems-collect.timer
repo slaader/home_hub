@@ -1,0 +1,13 @@
+# Home Hub: runs home-hub-systems-collect.service every 6 hours. The interval matches what the hub expects
+# (server/collector-state.mjs): a snapshot older than a quarter over this interval is shown as stale.
+[Unit]
+Description=Home Hub: systems-collect every 6 hours
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=6h
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -8,8 +8,9 @@ with no third-party dependencies and a plain-JavaScript front end.
 
 Core features:
 
-- **Sign-in and access** — one built-in administrator, read-only viewers, service accounts with scopes and API
-  keys, device tokens for native clients, an access audit. Sessions and keys are stored as SHA-256 hashes.
+- **Sign-in and access** — one built-in owner, people with roles (Admin, Editor, Viewer and custom roles: sets
+  of scopes), service accounts with scopes and API keys, device tokens for native clients, an access audit.
+  Sessions and keys are stored as SHA-256 hashes. A fresh install has no owner until `node scripts/setup.mjs`.
 - **Overview** — a tile per machine from the site configuration, plus devices added in the UI. Live CPU, GPU,
   power, temperature and memory come from the Thermo app when it runs on the machine (optional).
 - **Inventory** — one checked file (`data/knowledge.json`): machines, runtimes, tools, stores and how they

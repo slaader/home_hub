@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 320" role="img" aria-label="Network storage">
+<title>Network storage</title>
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1c1a29"/><stop offset="1" stop-color="#0e0d15"/></linearGradient>
+<radialGradient id="glow" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#b79cff" stop-opacity=".2"/><stop offset="1" stop-color="#b79cff" stop-opacity="0"/></radialGradient>
+<linearGradient id="body" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34313f"/><stop offset="1" stop-color="#1d1b28"/></linearGradient>
+</defs>
+<rect width="480" height="320" fill="url(#bg)"/>
+<ellipse cx="240" cy="152" rx="220" ry="136" fill="url(#glow)"/>
+<ellipse cx="240" cy="266" rx="130" ry="9" fill="#000" opacity=".4"/>
+<g stroke-linecap="round" stroke-linejoin="round">
+<rect x="140" y="78" width="200" height="180" rx="14" fill="url(#body)" stroke="#403d52" stroke-width="2"/>
+<rect x="158" y="96" width="34" height="118" rx="5" fill="#0e0d15" stroke="#403d52" stroke-width="1.5"/><path d="M168 110h14" stroke="#403d52" stroke-width="3"/><circle cx="175" cy="200" r="3" fill="#62d6a1"/>
+<rect x="200" y="96" width="34" height="118" rx="5" fill="#0e0d15" stroke="#403d52" stroke-width="1.5"/><path d="M210 110h14" stroke="#403d52" stroke-width="3"/><circle cx="217" cy="200" r="3" fill="#62d6a1"/>
+<rect x="242" y="96" width="34" height="118" rx="5" fill="#0e0d15" stroke="#403d52" stroke-width="1.5"/><path d="M252 110h14" stroke="#403d52" stroke-width="3"/><circle cx="259" cy="200" r="3" fill="#62d6a1"/>
+<rect x="284" y="96" width="34" height="118" rx="5" fill="#0e0d15" stroke="#403d52" stroke-width="1.5"/><path d="M294 110h14" stroke="#403d52" stroke-width="3"/><circle cx="301" cy="200" r="3" fill="#62d6a1"/>
+<circle cx="164" cy="236" r="4" fill="#b79cff"/>
+<path d="M186 236h60" stroke="#403d52" stroke-width="3"/>
+<rect x="286" y="228" width="34" height="16" rx="4" fill="#0e0d15"/>
+</g>
+</svg>

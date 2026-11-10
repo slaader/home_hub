@@ -6,11 +6,11 @@ Everything Home Hub keeps is a file on the machine that runs it, under its state
 |---|---|---|
 | `state/hub.db` (+ `-wal`, `-shm`) | Tickets (projects, releases, tickets with comments and history), the review index (sets → rounds → items → feedback, blob metadata), browser sign-in sessions, the full-text search index | SQLite, `node:sqlite` built into Node, no npm package |
 | `state/review/blobs/` | Review files (mockups, images, `.glb`), content-addressed by sha256 | files |
-| `state/access.json`, `state/device-tokens.json` | Users, API keys, device tokens (hashes only) | JSON |
+| `state/access.json`, `state/device-tokens.json` | Users and their roles, custom roles, service accounts, API keys, per-account preferences, device tokens (hashes only) | JSON |
 | `state/compute/`, `state/thermo/` | Telemetry history, one line per sample | JSONL, monthly files |
 | `state/*-audit.jsonl` | Audit logs | JSONL |
 | `data/` | Inventory (`knowledge.json`), collector output | JSON |
-| `private/` | `auth.json` (admin hash and `passwordAt`), TLS key, tokens | JSON / PEM |
+| `private/` | `auth.json` (the owner's hash and `passwordAt`; written by `scripts/setup.mjs`), TLS key, tokens | JSON / PEM |
 
 ## hub.db
 
@@ -24,6 +24,9 @@ Everything Home Hub keeps is a file on the machine that runs it, under its state
   Sessions expire 12 hours after sign-in and end when the user's `passwordAt` moves (password change or reset).
 - `search`: an FTS5 table (`unicode61 remove_diacritics 2`, prefix indexes) filled by the stores. Bump
   `SEARCH_VERSION` in `db.mjs` when the indexed text changes; the index is rebuilt at the next start.
+  Readers: `db.search({q,kind,project,limit})` (plain words, each a prefix; a query that is an id ranks that
+  record first), `db.searchStats()` (documents per kind, so a client can tell an empty index from no match) and
+  the ticket store's `search()`, which filters the hits by ticket fields. None of them changes the schema.
 - `PRAGMA user_version` is the schema version. Newer code migrates forward; older code refuses a newer file
   rather than misreading it.
 

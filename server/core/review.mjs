@@ -6,13 +6,30 @@ import {pipeline} from 'node:stream/promises';
 import {createReviewStore,REVIEW_ID,SHA,LIMITS as REVIEW_LIMITS} from '../review-store.mjs';
 import {byteRange} from '../http-range.mjs';
 
-const reviewError=e=>[({invalid:400,'missing-blob':400,'digest-mismatch':400,'not-found':404,conflict:409,limit:409,'too-large':413})[e.message]||503,'REVIEW_FAILED',({invalid:'Neplatný požadavek na review (zkontroluj pole, projekt, tikety a typy souborů).','missing-blob':'Některý soubor ještě není nahraný (nahraj ho přes PUT /api/review/blobs/<sha256> nebo scripts/review-push.mjs).','digest-mismatch':'Nahraný soubor nesouhlasí se svým sha256; nahraj ho znovu od začátku.','not-found':'Review neexistuje.',conflict:'Záznam se mezitím změnil (nebo už existuje novější kolo). Načti ho znovu a změnu zopakuj.',limit:'Byl dosažen limit (počet záznamů nebo místo pro soubory).','too-large':'Soubor nebo jeho část je příliš velká.'})[e.message]||'Review teď nejde načíst ani uložit.'];
+// Messages come in two languages: Czech source text for the web UI (which translates it through its
+// dictionary, like every other string) and English for an API key, i.e. the push script or an agent.
+const REVIEW_MESSAGES={
+ invalid:['Neplatný požadavek na review (zkontroluj pole, projekt, tikety a typy souborů).','Invalid review request (check the fields, the project, the tickets and the file types).'],
+ 'missing-blob':['Některý soubor ještě není nahraný (nahraj ho přes PUT /api/review/blobs/<sha256> nebo scripts/review-push.mjs).','A file is not uploaded yet (upload it with PUT /api/review/blobs/<sha256> or scripts/review-push.mjs).'],
+ 'digest-mismatch':['Nahraný soubor nesouhlasí se svým sha256; nahraj ho znovu od začátku.','The uploaded file does not match its sha256; upload it again from the start.'],
+ 'not-found':['Review neexistuje.','The review does not exist.'],
+ conflict:['Záznam se mezitím změnil (nebo už existuje novější kolo). Načti ho znovu a změnu zopakuj.','The record changed in the meantime (or a newer round exists). Read it again and repeat the change.'],
+ limit:['Byl dosažen limit (počet záznamů nebo místo pro soubory).','A limit was reached (the number of records or the space for files).'],
+ 'too-large':['Soubor nebo jeho část je příliš velká.','The file or a part of it is too large.'],
+ unavailable:['Review teď nejde načíst ani uložit.','Review cannot be loaded or saved right now.'],
+};
+const reviewError=(e,c)=>[({invalid:400,'missing-blob':400,'digest-mismatch':400,'not-found':404,conflict:409,limit:409,'too-large':413})[e.message]||503,'REVIEW_FAILED',
+ (REVIEW_MESSAGES[e.message]||REVIEW_MESSAGES.unavailable)[c?.principal?.authKind==='api-key'?1:0]];
 const who=c=>c.principal.username;
 const write=(path,options,run)=>({method:'POST',path,scope:'review:write',error:reviewError,...options,async handler(c){c.subject=null;return run(c);}});
 
 export default {
  id:'review',title:'Review',
- assets:['review-view.js','review.css','vendor/model-viewer.min.js'],
+ mcpInstructions:[
+  'Review (variants published for a person to compare and decide): review_list with feedbackPending:true finds decisions waiting for you. review_get returns a set with the decision and comments per item.',
+  {scope:'review:write',text:'With review:write: review_publish creates a set, or the next round of one, listing the comment ids that round answers.'},
+ ],
+ assets:['review-view.js','review.css','vendor/model-viewer.min.js','i18n-en-review.js'],
  nav:[{group:'Project Tracker',hash:'review',label:'Review',view:'review-view.js#reviewPage',order:43}],
  setup:hub=>({review:createReviewStore(path.join(hub.stateDirectory,'review'),{tickets:hub.state('tracker').tickets,db:hub.db})}),
  routes:[
@@ -44,4 +61,12 @@ export default {
     res.writeHead(range.status,{'Content-Type':media.type,'Accept-Ranges':'bytes','Content-Length':range.end-range.start+1,...(range.status===206?{'Content-Range':`bytes ${range.start}-${range.end}/${media.size}`}:{})});
     if(req.method==='HEAD')res.end();else try{await pipeline(createReadStream(media.file,{start:range.start,end:range.end}),res);}catch{res.destroy();}}},
  ],
+ // Rows for the API reference (Users and API). The MCP tools review_list, review_get and review_publish do the same for agents.
+ apiDocs:[{title:'Review',routes:[
+  ['GET','/api/review?project=&ticket=&status=active|done|archived|all&feedback=pending','read','Sady variant k posouzení se stavem posledního kola.'],
+  ['GET','/api/review/sets/<R-n>','read','Celá sada: kola, položky, varianty, rozhodnutí a připomínky.'],
+  ['PUT','/api/review/blobs/<sha256>?offset=&size=','review:write','Nahrání souboru po částech (nejvýš 8 MiB na požadavek).'],
+  ['POST','/api/review/publish','review:write','Nová sada {project, title, items} nebo další kolo {set, items, addresses?}.'],
+  ['POST','/api/review/feedback','review:write','Rozhodnutí k položce {set, round, item, rev, variant, status, note?, comments?}.'],
+  ['POST','/api/review/sets','review:write','Archivace nebo přejmenování sady {id, rev, status?, title?}.']]}],
 };

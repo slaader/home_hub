@@ -19,14 +19,14 @@
 .sec-findings li .sec-dim{margin-top:2px;line-height:1.45;word-break:break-word}
 .sec-tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:10px}
 .sec-tabs button{background:var(--panel2);border:1px solid var(--line);color:var(--dim);border-radius:999px;padding:7px 14px;font:12px var(--mono);cursor:pointer}
-.sec-tabs button.on{color:var(--txt);border-color:color-mix(in srgb,var(--accent) 55%,var(--line));background:linear-gradient(90deg,rgba(255,158,122,.14),transparent)}
+.sec-tabs button.on{color:var(--txt);border-color:color-mix(in srgb,var(--accent) 55%,var(--line));background:linear-gradient(90deg,var(--color-accent-soft),transparent)}
 .sec-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
 .sec-table{width:100%;border-collapse:collapse;font-size:12.5px}
 .sec-table th{position:sticky;top:0;background:var(--panel3);text-align:left;font:600 9.5px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
 .sec-table td,.sec-table tbody th{padding:10px 12px;border-top:1px solid var(--line);vertical-align:top;text-align:left;font-weight:400}
 .sec-table tbody th{position:static;background:none;text-transform:none;letter-spacing:0;font:inherit;color:var(--txt);white-space:normal;border-bottom:0}
 .sec-table td:first-child,.sec-table tbody th{min-width:180px}
-.sec-table tbody tr:hover td,.sec-table tbody tr:hover th{background:rgba(255,255,255,.015)}
+.sec-table tbody tr:hover td,.sec-table tbody tr:hover th{background:var(--color-hover)}
 .sec-key{font:600 12.5px var(--mono);color:var(--txt);word-break:break-all}
 .sec-fp{font:10px var(--mono);color:var(--faint);margin:3px 0 5px}
 .sec-user{font:600 11.5px var(--mono);color:var(--accent2)}

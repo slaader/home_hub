@@ -7,7 +7,9 @@ import {existsSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import {exportPublic,publicReadme} from '../scripts/export-public.mjs';
+import {exportPublic,publicReadme,readmeFromSource,PUBLIC_README_MARK} from '../scripts/export-public.mjs';
+import {readFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
 import {publishPublicBranch} from '../scripts/publish-public-branch.mjs';
 import {scanText} from '../scripts/leak-scan.mjs';
 
@@ -37,6 +39,31 @@ test('export: core files only, edition public, a README of its own; refuses on a
  assert.throws(()=>exportPublic(out2,{root}),e=>/Refusing to export: 1 household detail/.test(e.message)&&e.findings[0].file==='server/note.mjs'&&e.findings[0].rule==='owner-name');
  assert.equal(existsSync(out2),false,'a refused export writes nothing');
  assert.deepEqual(scanText('README.md',publicReadme({commit:'abc1234'})),[],'the generated README passes the same scan');
+});
+
+test('export README: the repository README without its private sections, scanned like every other file',async t=>{
+ const {dir,root,git,put}=await repo(t);
+ const readme=secret=>`# Home Hub\n${PUBLIC_README_MARK}\n\nWhat it is.\n\n<!-- private:begin -->\n## Our deployment\nRuns on the studio, ask ${owner}.\n<!-- private:end -->\n\n## Appended later\nA module section${secret}.\n`;
+ await put('README.md',readme(''));git('add','-A');git('commit','-q','-m','a public README');
+ const out=path.join(dir,'out');exportPublic(out,{root});
+ const written=await readFile(path.join(out,'README.md'),'utf8');
+ assert.equal(written,`# Home Hub\n${PUBLIC_README_MARK}\n\nWhat it is.\n\n## Appended later\nA module section.\n`,'public text before and after the private block, nothing from inside it');
+ assert.doesNotMatch(written,/Our deployment|studio|private:|commit/,'no private section, no marker of one, no word about the private repository');
+ // A household detail outside the markers refuses the export instead of slipping through.
+ await put('README.md',readme(`, see ${owner}`));git('add','-A');git('commit','-q','-m','a leak in the public part');
+ assert.throws(()=>exportPublic(path.join(dir,'out2'),{root}),e=>/Refusing to export/.test(e.message)&&e.findings.some(f=>f.file==='README.md'&&f.rule==='owner-name'));
+ // An unclosed private block is an error, and a README that does not declare itself public is not used.
+ assert.throws(()=>readmeFromSource(`${PUBLIC_README_MARK}\n<!-- private:begin -->\nsecret`),/not closed/);
+ assert.equal(readmeFromSource('# Notes about one household\n'),null);
+ assert.match(publicReadme({source:'# Notes about one household\n'}),/^# Home Hub\n/);
+});
+
+test('this repository: the README is public apart from its marked private section',()=>{
+ const file=fileURLToPath(new URL('../README.md',import.meta.url)),source=readFileSync(file,'utf8');
+ const readme=publicReadme({source});
+ assert.match(readme,/^# Home Hub\n/);assert.doesNotMatch(readme,/private:begin|private:end/);
+ assert.deepEqual(scanText('README.md',readme),[],'no household detail in the public part of README.md');
+ for(const must of ['## Quick start','node scripts/setup.mjs','## Connect your agent','/mcp','## Security model','API keys never reach administration','## What works out of the box','docs/getting-started.md','docs/design.md'])assert.ok(readme.includes(must),must);
 });
 
 test('publish: an orphan branch, one commit per export, a neutral author, the working tree untouched, nothing pushed',async t=>{

@@ -1,5 +1,6 @@
 import { createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
+import { scopeIds } from './scopes.mjs';
 const derive = promisify(scrypt);
 export function hashPassword(password) {
   const salt = randomBytes(16).toString('hex');
@@ -24,6 +25,8 @@ export function createAuth(credentials, { secure = true, now = Date.now, account
   }
   // A session only lives while its user is active and still has the password it signed in with
   // (passwordAt changes on every reset, so an exact match avoids clock and same-millisecond races).
+  // Without an access store there is one account: the owner of the credentials, who may do everything.
+  const soleOwner=()=>({id:'owner',username:credentials.username,role:'admin',roleId:'owner',admin:true,permission:'write',scopes:scopeIds()});
   function current(session){const user=accounts.user(session.userId);return user&&(user.passwordAt??null)===session.passwordAt?user:null;}
   return {
     async login(username, password, ip) {
@@ -35,7 +38,7 @@ export function createAuth(credentials, { secure = true, now = Date.now, account
       if (typeof username !== 'string' || typeof password !== 'string' || password.length > 256) return { status: 400 };
       let user;
       if(accounts)user=await accounts.authenticate(username,password);
-      else{const candidate=await derive(password,credentials.salt,64);if(username===credentials.username&&timingSafeEqual(candidate,Buffer.from(credentials.hash,'hex')))user={id:'owner',username:credentials.username,role:'admin'};}
+      else{const candidate=await derive(password,credentials.salt,64);if(username===credentials.username&&timingSafeEqual(candidate,Buffer.from(credentials.hash,'hex')))user=soleOwner();}
       if(!user)return {status:401};
       attempts.delete(ip);
       const token = randomBytes(32).toString('hex'); sessions.set(hashOf(token), {until:now()+43200000,userId:user.id,passwordAt:user.passwordAt??null});
@@ -46,8 +49,10 @@ export function createAuth(credentials, { secure = true, now = Date.now, account
     },
     principal(raw=''){
       prune();const session=lookup(raw);
-      if(!session||session.until<=now())return null;const user=accounts?current(session):{id:'owner',username:credentials.username,role:'admin'};
-      return user?{...user,authKind:'session',permission:user.role==='admin'?'write':'read'}:null;
+      if(!session||session.until<=now())return null;const user=accounts?current(session):soleOwner();
+      // The access store says what the person's role allows (scopes, permission, admin); a store that
+      // does not is read the old way: an admin writes, anyone else reads.
+      return user?{...user,authKind:'session',permission:user.permission??(user.role==='admin'?'write':'read'),scopes:user.scopes??(user.role==='admin'?scopeIds():['read'])}:null;
     },
     logout(raw = '') {
       const token = tokenOf(raw); if (token) sessions.delete(hashOf(token)); return cookie('', 0);

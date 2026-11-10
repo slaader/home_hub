@@ -1,0 +1,15 @@
+# Home Hub: collect the SSH key inventory over SSH
+# A user unit. Copy it to ~/.config/systemd/user/ together with its timer and adjust the two paths
+# below: the checkout (WorkingDirectory) and the data directory the server reads (--data = its DATA_DIR).
+# The collector is read-only on the machines it probes. See examples/systemd/README.md.
+[Unit]
+Description=Home Hub: collect the SSH key inventory over SSH
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/home-hub
+ExecStart=/usr/bin/env node scripts/collect-security.mjs --data %h/home-hub/data
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=30min
+# Probes need the user's ssh config and keys. With an ssh-agent:  Environment=SSH_AUTH_SOCK=%t/ssh-agent.socket

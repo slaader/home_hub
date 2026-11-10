@@ -58,7 +58,8 @@ test('router: Inventář pages — the map for every account, versions for admin
  assert.match(app,/setIdentity\(null\)/,'edit rights are dropped on logout');
  const inv=await readFile(new URL('../public/inventory-view.js',import.meta.url),'utf8');
  assert.match(inv,/if\(pageAllowed\('versions',me\)\)loadSystems\(\)/,'only accounts that may read versions fetch /api/systems');
- assert.match(inv,/onSessionReset\(\(\)=>\{cache=null;[^}]*systems=null/,'inventory and versions are dropped on account change');
+ const invData=await readFile(new URL('../public/inventory-data.js',import.meta.url),'utf8');// the fetched inventory lives there
+ assert.match(invData,/onSessionReset\(\(\)=>\{cache=null;[^}]*systems=null/,'inventory and versions are dropped on account change');
  const home=await readFile(new URL('../public/home-view.js',import.meta.url),'utf8');
  assert.match(home,/const orderCache=sessionCache\(/,'tile order is bound to the principal');
 });

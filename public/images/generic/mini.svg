@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 320" role="img" aria-label="Mini computer">
+<title>Mini computer</title>
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1c1a29"/><stop offset="1" stop-color="#0e0d15"/></linearGradient>
+<radialGradient id="glow" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#b79cff" stop-opacity=".2"/><stop offset="1" stop-color="#b79cff" stop-opacity="0"/></radialGradient>
+<linearGradient id="body" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34313f"/><stop offset="1" stop-color="#1d1b28"/></linearGradient>
+</defs>
+<rect width="480" height="320" fill="url(#bg)"/>
+<ellipse cx="240" cy="152" rx="220" ry="136" fill="url(#glow)"/>
+<ellipse cx="240" cy="266" rx="130" ry="9" fill="#000" opacity=".4"/>
+<g stroke-linecap="round" stroke-linejoin="round">
+<path d="M132 186q0-22 22-22h172q22 0 22 22v40q0 22-22 22H154q-22 0-22-22z" fill="url(#body)" stroke="#403d52" stroke-width="2"/>
+<path d="M150 164q0-30 30-30h120q30 0 30 30" fill="#262431" stroke="#403d52" stroke-width="2"/>
+<rect x="210" y="204" width="60" height="5" rx="2.5" fill="#403d52"/>
+<circle cx="318" cy="206" r="4" fill="#62d6a1"/>
+<path d="M160 228h160" stroke="#0e0d15" stroke-width="3"/>
+</g>
+</svg>

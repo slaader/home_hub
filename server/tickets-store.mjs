@@ -67,20 +67,27 @@ export function createTicketStore(root,{db=openDb(path.join(root,'hub.db')),seed
 
  // Read side ---------------------------------------------------------------------------------
  const FILTERS=['project','status','type','priority','release','assignee','label','q','limit'];
- async function list(filter={}){
-  if(!onlyKeys(filter,FILTERS))fail('invalid');
-  const data=await read(),f=Object.fromEntries(Object.entries(filter).filter(([,v])=>v!==undefined&&v!==''));
+ // Validates the field filters shared by list() and search(); returns the cleaned filter and a ticket predicate.
+ function ticketFilter(filter,keys=FILTERS){
+  if(!onlyKeys(filter,keys))fail('invalid');
+  const f=Object.fromEntries(Object.entries(filter).filter(([,v])=>v!==undefined&&v!==''));
   for(const [k,v] of Object.entries(f))if(typeof v!=='string'&&(k!=='limit'||typeof v!=='number'))fail('invalid');
   if(f.status&&f.status.length>60)fail('invalid');
   if(f.type)oneOf(f.type,TICKET_TYPES);if(f.priority)oneOf(f.priority,TICKET_PRIORITIES);
-  if(f.project&&!PROJECT_ID.test(f.project)||f.release&&f.release!=='none'&&!VERSION.test(f.release)||f.label&&!LABEL.test(f.label)||f.assignee&&f.assignee.length>60||f.q&&f.q.length>100)fail('invalid');
+  if(f.project&&!PROJECT_ID.test(f.project)||f.release&&f.release!=='none'&&!VERSION.test(f.release)||f.label&&!LABEL.test(f.label)||f.assignee&&f.assignee.length>60)fail('invalid');
   const statuses=f.status?String(f.status).split(',').map(s=>oneOf(s,[...TICKET_STATUSES,'active'])).flatMap(s=>s==='active'?['open','in-progress']:[s]):null;
+  const match=t=>(!f.project||t.project===f.project)&&(!statuses||statuses.includes(t.status))&&(!f.type||t.type===f.type)
+   &&(!f.priority||t.priority===f.priority)&&(!f.release||(f.release==='none'?t.release===null:t.release===f.release))
+   &&(!f.assignee||(f.assignee==='none'?t.assignee===null:t.assignee===f.assignee))&&(!f.label||t.labels.includes(f.label));
+  return {f,match};
+ }
+ async function list(filter={}){
+  const {f,match}=ticketFilter(filter);
+  if(f.q&&f.q.length>100)fail('invalid');
+  const data=await read();
   const q=f.q?f.q.toLowerCase():null,limit=f.limit===undefined?null:Number(f.limit);
   if(limit!==null&&!(Number.isInteger(limit)&&limit>0&&limit<=LIMITS.tickets))fail('invalid');
-  let tickets=data.tickets.filter(t=>(!f.project||t.project===f.project)&&(!statuses||statuses.includes(t.status))&&(!f.type||t.type===f.type)
-   &&(!f.priority||t.priority===f.priority)&&(!f.release||(f.release==='none'?t.release===null:t.release===f.release))
-   &&(!f.assignee||(f.assignee==='none'?t.assignee===null:t.assignee===f.assignee))&&(!f.label||t.labels.includes(f.label))
-   &&(!q||[t.id,t.title,t.description,...t.labels].join('\n').toLowerCase().includes(q)));
+  let tickets=data.tickets.filter(t=>match(t)&&(!q||[t.id,t.title,t.description,...t.labels].join('\n').toLowerCase().includes(q)));
   tickets.sort((a,b)=>TICKET_STATUSES.indexOf(a.status)-TICKET_STATUSES.indexOf(b.status)||TICKET_PRIORITIES.indexOf(b.priority)-TICKET_PRIORITIES.indexOf(a.priority)||b.updatedAt.localeCompare(a.updatedAt));
   const total=tickets.length;if(limit)tickets=tickets.slice(0,limit);
   // Release progress is counted over all tickets, not just the filtered ones.
@@ -90,6 +97,29 @@ export function createTicketStore(root,{db=openDb(path.join(root,'hub.db')),seed
   return {updatedAt:data.updatedAt,projects:data.projects.map(publicProject),releases,total,tickets:tickets.map(summary)};
  }
  async function get(id){const data=await read(),t=ticketOf(data,id);return {...t,attachments:t.attachments||[]};}
+ // Full-text search over tickets (title, description, comments, attachment names, labels, refs, people) with the
+ // same field filters as list(). Plain words, every word a prefix match; best match first. Each hit is the list
+ // summary plus `snippet` (matched words wrapped in \u0001…\u0002) and `score`.
+ async function search(filter={}){
+  const {f,match}=ticketFilter(filter);
+  if(typeof f.q!=='string'||f.q.length>200||!/[\p{L}\p{N}_]/u.test(f.q))fail('invalid');
+  const limit=f.limit===undefined?20:Number(f.limit);if(!(Number.isInteger(limit)&&limit>0&&limit<=100))fail('invalid');
+  const data=await read(),byId=new Map(data.tickets.map(t=>[t.id,t]));
+  const hits=db.search({q:f.q,kind:'ticket',...(f.project?{project:f.project}:{}),limit:LIMITS.tickets},{max:LIMITS.tickets}).results
+   .map(r=>({r,t:byId.get(r.id)})).filter(x=>x.t&&match(x.t));
+  return {q:f.q,total:hits.length,tickets:hits.slice(0,limit).map(({r,t})=>({...summary(t),snippet:r.snippet,score:r.score}))};
+ }
+ // The names tickets know: assignees (with how many tickets they hold, and how many of those are active),
+ // reporters and comment authors. The assignee field suggests them.
+ async function people(){
+  const data=await read(),seen=new Map();
+  const of=name=>{if(typeof name!=='string'||!name)return null;if(!seen.has(name))seen.set(name,{name,assigned:0,active:0});return seen.get(name);};
+  for(const t of data.tickets){
+   const a=of(t.assignee);if(a){a.assigned++;if(!CLOSED.includes(t.status))a.active++;}
+   of(t.reporter);for(const c of t.comments)of(c.by);
+  }
+  return [...seen.values()].sort((a,b)=>b.active-a.active||b.assigned-a.assigned||a.name.localeCompare(b.name,'en'));
+ }
  // Attachments: the file itself lives in ticket-files (content-addressed); the ticket keeps the metadata.
  // Like comments they need no rev; adding or removing one is recorded in the history.
  async function attachment(id,attachmentId){const t=await get(id);return t.attachments.find(a=>a.id===attachmentId)||fail('not-found');}
@@ -198,5 +228,5 @@ export function createTicketStore(root,{db=openDb(path.join(root,'hub.db')),seed
    const p={id:input.id,key:input.key,name,description:description??'',type:type??null,createdAt:now,createdBy:by,updatedAt:now,rev:1,next:1};data.projects.push(p);return publicProject(p);
   });
  }
- return {list,get,create,update,comment,saveRelease,saveProject,attach,detach,attachment};
+ return {list,get,search,people,create,update,comment,saveRelease,saveProject,attach,detach,attachment};
 }

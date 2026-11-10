@@ -6,7 +6,7 @@ decision per item ("A, but with these changes"). The agent reads that decision t
 next round. It sits between paper.design (a canvas that is real HTML) and Claude artifacts (self-contained
 pages), but it is attached to a project instead of a chat.
 
-Status: phase 1 implemented (2026-11-08). Phase 2 (3D models, HH-2) implemented 2026-11-09. Phase 3 is planned.
+Status: phases 1 and 2 are implemented; phase 3 is planned.
 
 ## Phases
 
@@ -40,11 +40,11 @@ set R-<n>  {project, title, description, tickets[], status open|archived, rev, r
 ```
 
 - **Two kinds of item.** `mode:"choose"` (the default) shows alternatives and the owner takes one. `mode:"approve"`
-  shows deliverables to sign off one by one: follow-up work, clips, contact sheets, a new body. Each gets ✓ Schválit,
+  shows deliverables to sign off one by one: the screens of a flow, clips, contact sheets. Each gets ✓ Approve,
   or comments that send it back. The decision then has no `variant`; `approvals` maps each variant to `approved` or
   `changes`, and the status follows: `accept` when all are approved, `revise` when any has changes, `pending`
   otherwise (`reject` = redo the whole item, as before). Use approve whenever the variants are not alternatives.
-- `reference:true` marks a variant shown only for comparison, such as what the game ships now. It can be commented
+- `reference:true` marks a variant shown only for comparison, such as what is in production now. It can be commented
   on, but never taken or approved. In a choose item, leave "what we have now" as a normal variant if keeping it is
   a valid answer.
 - All variants of one item share one kind, so a row compares like with like. The page header switches between
@@ -56,15 +56,38 @@ set R-<n>  {project, title, description, tickets[], status open|archived, rev, r
 - A decision is saved in one request, guarded by `rev`: the chosen variant, the status and the new comments.
   `accept` means take it as it is. `revise` means take it, plus the comments. `reject` means none of these;
   make new ones (it needs a note or a comment). `pending` saves comments without deciding.
-- The page saves on its own: picking a variant saves it, a comment saves when you leave its text box. "Nic z
-  toho — předělat" opens the note box for what to redo; it takes links in the text and screenshots (paste or
+- The page saves on its own: picking a variant saves it, a comment saves when you leave its text box. "None of
+  these — redo" opens the note box for what to redo; it takes links in the text and screenshots (paste or
   pick a file, uploaded as blobs, at most 10 per item and 20 MiB each), and the reject is saved once the box has
   a reason and you leave it. An item is framed green when a variant is taken and red when it went back for rework.
 - A set is **done** (`done:true` in the summary) when every item of its latest round has a variant taken
-  (`accept` or `revise`). The list shows Otevřené (open, not done), Hotové (done) and Archiv; the bin on a card
+  (`accept` or `revise`). The list shows Open (not done), Done and Archive; the bin on a card
   archives the set.
 - `feedbackPending` on a set is true when any decision of the latest round is newer than that round, which
   means the agent has something to read.
+
+## The page (`#review`)
+
+The interface is written in Czech source strings with an English dictionary (`public/i18n-en-review.js`);
+a hub without a site configuration starts in English. Dates follow the reader's language and the site's
+time zone (site.json → `timeZone`, else the browser's).
+
+- **Nothing published yet.** The list explains what Review is for, lists the steps (a service account with
+  `review:write`, the push script or MCP `review_publish`), offers a prompt to copy for a coding agent and the
+  MCP connection snippet. An empty tab of a hub that has sets only says why that tab is empty.
+- **Comparing.** Each item with several variants has a switch: *Side by side* (the grid), *One at a time*
+  (one variant at full width with A / B / C tabs; ← → move between them; the default on a phone) and, for
+  image items, *Swipe*: two variants in one frame with a divider to drag (the mouse, a finger or the arrow
+  keys move it; pick which two with the selects). Pins are placed in the first two views.
+- **Deciding.** A bar under the header counts the round's decisions (taken, taken with changes, redo,
+  undecided) and jumps to the next undecided item, in another kind tab if need be. Each item shows its saved
+  state as a badge and a coloured frame, and one line says what to do while it is still undecided.
+- **Comments as a thread.** Saved comments list who wrote them, when, on which variant and place, with their
+  screenshots. Under a comment that a later round listed in `addresses` the thread shows that round as the
+  answer (who published it, its notes); otherwise it says the comment waits for the agent. Comments of earlier
+  rounds that no round has answered stay visible under the item as "Open from earlier rounds".
+- **3D.** Under each model: *Default view* (back to the framing the model loads with) and *Rotate* (a slow
+  turntable), next to the animation picker.
 
 ## HTML mockups are sandboxed
 
@@ -99,8 +122,8 @@ item is opened; no other page imports it, and it never loads anything from the n
 - **Poster.** A model may carry `poster: {sha256, type}`, a rendered still (png, jpeg or webp). It is the set's
   card cover and what the viewer shows while the model loads.
 - **Viewer.** Orbit (drag), zoom (wheel or pinch), pan (right drag or two fingers). If the file has animations,
-  a picker under the model plays them. With several variants, **🔗 Pohledy spolu** in the item header moves all
-  cameras together, so A/B/C are seen from the same side. **⤢ Zvětšit** shows one variant full width.
+  a picker under the model plays them. With several variants, **🔗 Views linked** in the item header moves all
+  cameras together, so A/B/C are seen from the same side. **⤢ Enlarge** shows one variant full width.
 - **Pins.** In comment mode a click on the surface (not a drag) pins a comment. The anchor is
 
   ```
@@ -128,9 +151,9 @@ item is opened; no other page imports it, and it never loads anything from the n
 ```gdscript
 var doc := GLTFDocument.new()
 var state := GLTFState.new()
-var root := load("res://units/harvester.tscn").instantiate()
+var root := load("res://units/unit.tscn").instantiate()
 doc.append_from_scene(root, state)              # node names become glTF node names; keep them meaningful
-doc.write_to_filesystem(state, "/tmp/review/harvester-a.glb")   # .glb = binary glTF
+doc.write_to_filesystem(state, "/tmp/review/unit-a.glb")   # .glb = binary glTF
 ```
 
 For the poster, render the same unit to a `SubViewport` and save `get_texture().get_image().save_png(...)`, or use
@@ -146,10 +169,10 @@ blender -b unit.blend -o /tmp/review/unit-a -F PNG -f 1     # poster: renders fr
 Then a manifest for the push script:
 
 ```json
-{"project":"my-game","title":"Harvester","tickets":["GAME-7"],
- "items":[{"id":"harvester","title":"Harvester","kind":"model","variants":[
-   {"id":"a","title":"Heavy","media":[{"file":"harvester-a.glb","poster":"harvester-a.png"}]},
-   {"id":"b","title":"Light","media":[{"file":"harvester-b.glb","poster":"harvester-b.png"}]}]}]}
+{"project":"my-game","title":"Transport unit","tickets":["GAME-7"],
+ "items":[{"id":"transport","title":"Transport unit","kind":"model","variants":[
+   {"id":"a","title":"Heavy","media":[{"file":"unit-a.glb","poster":"unit-a.png"}]},
+   {"id":"b","title":"Light","media":[{"file":"unit-b.glb","poster":"unit-b.png"}]}]}]}
 ```
 
 ## HTTP API
@@ -191,9 +214,10 @@ Reads need any sign-in. Writes need write permission; API keys need the `review:
 HOME_HUB_URL=https://… HOME_HUB_TOKEN=hhk_… node scripts/review-push.mjs path/to/review.json
 ```
 
-`review.json` uses the same shape as `review_publish`, but media name local files (`"file":
+The token is a service-account key with the `review:write` scope (Users and API → Service accounts), and the
+`project` in the manifest must exist in the Project Tracker. `review.json` uses the same shape as `review_publish`, but media name local files (`"file":
 "mockups/login-a.html"`, relative to the manifest). A `.glb` model may name its poster the same way
-(`"poster": "harvester-a.png"`). The script hashes the files, skips blobs the hub already
+(`"poster": "unit-a.png"`). The script hashes the files, skips blobs the hub already
 has, uploads the rest in chunks, publishes, and prints the set id and its URL. It has no dependencies.
 
 ## Project type

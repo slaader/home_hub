@@ -32,6 +32,14 @@ test('a module is validated field by field, and the message names the module',()
  assert.throws(()=>defineModule(mod({routes:[{method:'GET',path:'/api/p',handler:ok,typo:true}]})),/unknown field\(s\): typo/);
  assert.throws(()=>defineModule(mod({mcpTools:[{name:'p_tool',scope:'read',description:'d',inputSchema:{type:'object'}}]})),/needs run/);
  assert.throws(()=>defineModule(mod({pollers:[{id:'x'}]})),/pollers\[0\]/);
+ // mcpInstructions: one short text, or parts {text, scope?}
+ assert.throws(()=>defineModule(mod({mcpInstructions:['']})),/mcpInstructions\[0\] needs a text/);
+ assert.throws(()=>defineModule(mod({mcpInstructions:['x'.repeat(601)]})),/1 to 600 characters/);
+ assert.throws(()=>defineModule(mod({mcpInstructions:['two\nlines']})),/on one line/);
+ assert.throws(()=>defineModule(mod({mcpInstructions:[{text:'ok',when:'always'}]})),/unknown field\(s\): when/);
+ assert.throws(()=>defineModule(mod({mcpInstructions:[{text:'ok',scope:'Not A Scope'}]})),/scope must be a scope id/);
+ assert.throws(()=>defineModule(mod({mcpInstructions:Array(7).fill('ok')})),/at most 6 parts/);
+ assert.deepEqual(defineModule(mod({mcpInstructions:' Notes: notes_list lists them. '})).mcpInstructions,[{module:'p-one',text:'Notes: notes_list lists them.',scope:null}]);
  assert.throws(()=>defineModule(mod({assets:['../secret.js']})),/without "\.\."/);
  assert.throws(()=>defineModule(mod({nav:[{group:'G',hash:'p',label:'P',view:'p.js#page'}]})),/not listed in this module's assets/);
  assert.throws(()=>defineModule(mod({nav:[{hash:'p',view:'p.js'}]})),/needs label or labelKey/);
@@ -52,6 +60,7 @@ test('clashes between modules are start-up errors that name both sides',()=>{
  assert.throws(()=>createRegistry([...core,plug('p-one'),plug('p-one')]),/module id "p-one" is registered twice/);
  assert.throws(()=>buildRegistry([{id:'p-one',mcpTools:[{name:'home_status',scope:'read',description:'d',inputSchema:{type:'object'},run:ok}]}]),/MCP tool "home_status" is registered twice: by module "core" and by module "p-one"/);
  assert.throws(()=>createRegistry([...core,plug('p-one',{routes:[{method:'POST',path:'/api/p',scope:'nobody:defined',handler:ok}]})]),/uses scope "nobody:defined", which no module defines/);
+ assert.throws(()=>createRegistry([...core,plug('p-one',{mcpInstructions:[{text:'x',scope:'nobody:defined'}]})]),/mcpInstructions uses scope "nobody:defined", which no module defines/);
  // A plugin may use a core scope, and another plugin's.
  const r=createRegistry([...core,plug('p-one',{scopes:{'p:w':{label:'x',desc:'y'}}}),plug('p-two',{routes:[{method:'POST',path:'/api/p2',scope:'p:w',handler:ok},{method:'POST',path:'/api/p3',scope:'tickets:write',handler:ok}]})]);
  assert.equal(r.match('POST','/api/p2').route.scope,'p:w');
@@ -84,7 +93,7 @@ test('core: the scope table and the page list match what the core modules regist
  const admin=registry.manifest({role:'admin'}),viewer=registry.manifest({role:'viewer'});
  assert.deepEqual(admin.nav.map(g=>g.labelKey||g.label),['Domov','Inventář','Bezpečnost','Project Tracker','Správa']);
  assert.deepEqual(viewer.nav.map(g=>g.labelKey||g.label),['Domov','Inventář','Project Tracker','Správa'],'admin-only groups disappear for other roles');
- assert.deepEqual(admin.nav[1].items.map(i=>i.hash),['inventory-map','versions']);assert.deepEqual(viewer.nav[1].items.map(i=>i.hash),['inventory-map']);
+ assert.deepEqual(admin.nav[1].items.map(i=>i.hash),['inventory-map','services','versions']);assert.deepEqual(viewer.nav[1].items.map(i=>i.hash),['inventory-map','services']);
  assert.ok(viewer.pages.find(p=>p.hash==='versions').admin&&!viewer.pages.find(p=>p.hash==='versions').view,'an admin page is listed for routing, without its module');
  assert.deepEqual(admin.pages.find(p=>p.hash==='overview').view,{url:'/home-view.js',export:'homePage'});
 });
@@ -115,6 +124,9 @@ test('a loaded plugin: routes, scope checks, write log, MCP tool, manifest, asse
  const tools=(await rpc({method:'tools/list'},reader.headers)).result.tools.map(x=>x.name);
  assert.ok(tools.includes('demo_notes')&&tools.includes('home_status'));
  const called=(await rpc({method:'tools/call',params:{name:'demo_notes',arguments:{}}},reader.headers)).result;
+ // MCP instructions: the plugin's lines join the core ones; its scoped part only for a key that holds the scope
+ const told=async headers=>(await rpc({method:'initialize',params:{}},headers)).result.instructions;
+ assert.match(await told(reader.headers),/\nDemo: demo_notes lists the notes\.$/);assert.match(await told(writer.headers),/\nDemo: demo_notes lists the notes\. With demo:write: POST \/api\/demo\/notes adds one\.$/);
  assert.deepEqual(called.structuredContent,{notes:['first','second','third'],for:'reader'});
  // manifest: pages, sidebar, strings and API docs, filtered by role
  const anonymous=await (await fetch(h.origin+'/api/ui/manifest')).json();
@@ -122,8 +134,11 @@ test('a loaded plugin: routes, scope checks, write log, MCP tool, manifest, asse
  const m=await (await get('/api/ui/manifest')).json();
  assert.equal(m.signedIn,true);assert.deepEqual(m.pages.find(p=>p.hash==='demo').view,{url:'/plugins/demo/demo-view.js',export:'demoPage'});
  assert.deepEqual(m.nav.at(-1),{label:'Demo',labelKey:null,items:[{hash:'demo',label:'Notes',labelKey:null,soon:false,module:'demo'},{hash:'demo-admin',label:'Admin notes',labelKey:null,soon:false,module:'demo'},{hash:null,label:'Later',labelKey:null,soon:true,module:'demo'}]});
- assert.equal(m.strings.en['Demo – zápis'],'Demo – write');assert.equal(m.apiDocs[0].title,'Demo');assert.ok(m.modules.some(x=>x.id==='demo'&&!x.core));
+ assert.equal(m.strings.en['Demo – zápis'],'Demo – write');assert.ok(m.apiDocs.some(d=>d.title==='Demo'),'a plugin\'s API docs join the core ones');assert.ok(m.modules.some(x=>x.id==='demo'&&!x.core));
  assert.equal(m.inventory.places[0].id,'studio');
+ // the MCP tools as people read them (Users and API → Connect): the plugin's tool next to the core ones, nothing callable
+ assert.deepEqual(m.tools.find(x=>x.name==='demo_notes'),{name:'demo_notes',title:'Demo: notes',scope:'read',write:false,description:'The notes kept by the demo plugin.',module:'demo'});
+ assert.equal(m.tools.find(x=>x.name==='home_status').module,'core');
  const user=await h.post('/api/admin/users',{username:'viewer1',name:'V',password:'viewer-password-123'},cookie);assert.equal(user.status,201);
  const vLogin=await h.post('/api/session',{username:'viewer1',password:'viewer-password-123'}),vCookie={Cookie:vLogin.headers.get('set-cookie').split(';')[0]};
  const vm=await (await get('/api/ui/manifest',vCookie)).json();

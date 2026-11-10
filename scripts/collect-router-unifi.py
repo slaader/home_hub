@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
-"""Read-only UniFi inventory collector for Home Hub.
+"""Read-only UniFi inventory collector for Home Hub: the included router adapter ("unifi").
 
 Runs from a scheduled job on the machine that serves Home Hub (any unprivileged user that owns
 router-private/). It reads the UniFi Network local integration API on the gateway with an API key kept in
-router-private/unifi-api-key (0600) and writes data/router-observations.json in the shape the
-retired ASUS collector produced, so Home Hub needs no change. GET requests only. The router's
-self-signed certificate is pinned by SHA-256 fingerprint (router-private/unifi-cert-sha256);
+router-private/unifi-api-key (0600) and writes data/router-observations.json, the observation file
+server/router-data.mjs reads (client census plus the state of the network hardware). GET requests only.
+The router's self-signed certificate is pinned by SHA-256 fingerprint (router-private/unifi-cert-sha256);
 the key is never sent before the pin matches, and nothing here prints or stores the key.
+
+Which gateway and which networks: local/site.json. The gateway is router.host, else the address of the
+machine with role "router"; the networks are lanCidrs (clients outside them are dropped); router.site is
+the UniFi site name. UNIFI_HOST, UNIFI_LAN and UNIFI_SITE override the file. HOME_HUB_SITE_CONFIG selects
+another file ("none" = no file). HOME_HUB_ROOT is where data/ and router-private/ live (default: the
+checkout, or its parent when the checkout is deployed as <root>/app next to data/).
 
 Two backends, chosen by what exists under router-private/: unifi-api-key (Network 9.x integration API,
 X-API-KEY) or unifi-credentials.json (a dedicated View Only local admin signing in through the same
@@ -21,22 +27,69 @@ Usage: collect-router-unifi.py            # cron: write the snapshot, print noth
 """
 import datetime, fcntl, hashlib, http.client, ipaddress, json, os, pathlib, re, socket, ssl, stat, sys
 
-ROOT = pathlib.Path(os.environ.get('HOME_HUB_ROOT', '/mnt/HDDs/Applications/home-hub'))
+REPO = pathlib.Path(__file__).resolve().parents[1]
+PRIVATE_NETWORKS = ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16')
+SITE_ID = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
+
+
+def default_root(env=os.environ, repo=REPO):
+    """Where data/ and router-private/ live."""
+    if env.get('HOME_HUB_ROOT'):
+        return pathlib.Path(env['HOME_HUB_ROOT'])
+    # A checkout deployed as <root>/app keeps its data and secrets beside the code, not inside it.
+    if repo.name == 'app' and (repo.parent / 'data').is_dir():
+        return repo.parent
+    return repo
+
+
+def load_site(env=os.environ, repo=REPO):
+    """The site configuration as a dict; {} when there is none or it cannot be read."""
+    choice = env.get('HOME_HUB_SITE_CONFIG')
+    if choice == 'none':
+        return {}
+    try:
+        data = json.loads((pathlib.Path(choice) if choice else repo / 'local/site.json').read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def site_settings(site, env=os.environ):
+    """(gateway host, [networks], UniFi site name) from the environment, then site.json, then defaults."""
+    router = site.get('router') if isinstance(site.get('router'), dict) else {}
+    machines = [m for m in site.get('machines') or [] if isinstance(m, dict)] if isinstance(site.get('machines'), list) else []
+    gateway = next((m.get('ip') for m in machines if m.get('role') == 'router' and isinstance(m.get('ip'), str) and m.get('ip')), None)
+    host = env.get('UNIFI_HOST') or (router.get('host') if isinstance(router.get('host'), str) else None) or gateway or '192.168.1.1'
+    wanted = [env['UNIFI_LAN']] if env.get('UNIFI_LAN') else [c for c in site.get('lanCidrs') or [] if isinstance(c, str)][:16] if isinstance(site.get('lanCidrs'), list) else []
+    networks = []
+    for text in wanted:
+        try:
+            networks.append(ipaddress.ip_network(text, strict=False))
+        except ValueError:
+            pass
+    if not networks:
+        try:
+            networks = [ipaddress.ip_network(host + '/24', strict=False)]  # the /24 around the gateway
+        except ValueError:
+            networks = [ipaddress.ip_network(n) for n in PRIVATE_NETWORKS]  # the gateway is a host name
+    name = env.get('UNIFI_SITE') or router.get('site') or 'default'
+    return str(host), networks, name if isinstance(name, str) and SITE_ID.match(name) else 'default'
+
+
+ROOT = default_root()
 PRIVATE = ROOT / 'router-private'
 KEY_FILE = PRIVATE / 'unifi-api-key'
 PIN_FILE = PRIVATE / 'unifi-cert-sha256'
 CRED_FILE = PRIVATE / 'unifi-credentials.json'
 SESSION_FILE = PRIVATE / 'unifi-session.json'
-SITE = os.environ.get('UNIFI_SITE', 'default')
 TARGET = ROOT / 'data/router-observations.json'
-# The gateway and the LAN it serves: UNIFI_HOST and UNIFI_LAN (default: the /24 around the gateway).
-HOST = os.environ.get('UNIFI_HOST', '192.168.1.1')
+# The gateway, the networks it serves and its UniFi site name (see the module docstring).
+HOST, LANS, SITE = site_settings(load_site())
 PORT, BASE = 443, '/proxy/network/integration/v1'
 LEGACY = '/proxy/network/api/s/' + SITE
 USER_AGENT = 'home-hub-unifi-collector/1'
-LAN = ipaddress.ip_network(os.environ.get('UNIFI_LAN') or HOST + '/24', strict=False)
+LAN = LANS[0]
 MAC = re.compile(r'^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$')
-SITE_ID = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
 TIMEOUT, LIMIT, PAGE, MAX_PAGES, MAX_DEVICES, MAX_HARDWARE, KNOWN_DAYS = 10, 1024 * 1024, 200, 3, 500, 50, 90
 BANDS = {'2.4': 'Wi-Fi · 2.4 GHz', '5': 'Wi-Fi · 5 GHz', '6': 'Wi-Fi · 6 GHz'}
 MODELS = {'UDR7': 'UniFi Dream Router 7'}
@@ -326,7 +379,9 @@ def lan_ip(value):
         ip = ipaddress.ip_address(str(value).strip())
     except ValueError:
         return None
-    if ip not in LAN or ip in (LAN.network_address, LAN.broadcast_address):
+    network = next((n for n in LANS if ip in n), None)
+    # A host address only: not the network or broadcast address (a /31 or /32 has neither).
+    if network is None or (network.prefixlen < 31 and ip in (network.network_address, network.broadcast_address)):
         return None
     return str(ip)
 

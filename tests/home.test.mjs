@@ -44,14 +44,20 @@ test('stale minute rows fall back to live sample',()=>{
  const home=buildHome({snapshots:{},thermo:thermoStub({seconds:()=>[],minutes:()=>[],live:()=>({mini:{at:nowMs,reading:{t:nowSec,cpu:33,cpuMax:44,gpu:12,power:24,cpuTemp:52}}})}),now:nowMs});
  assert.equal(home.machines.find(m=>m.id==='mini').quad.cpu,33);
 });
-test('runtimes stack: live service marks blocks on, offline marks dashed off',()=>{
+test('runtimes stack: live service marks blocks on, offline marks dashed off',async()=>{
  const services=[{id:'llama-swap',status:'reachable',url:'http://127.0.0.1:8081',models:[{id:'gemma-4-26B-A4B-it-OptiQ-4bit',state:'loaded',sizeBytes:15e9}],stats:{requests:9,uptimeSeconds:3600},pool:null}];
  const mini=mergeStack('mini',services);
  const lswap=mini.blocks.find(b=>b.id==='lswap');
  assert.equal(lswap.state,'on');assert.equal(lswap.port,':8081 · živě');
+ // The same label as parts, so the English UI does not show the Czech word (server/text.mjs).
+ assert.deepEqual(lswap.portT,[{key:':{port} · živě',params:{port:'8081'}}]);assert.equal(lswap.descT,undefined);
  assert.equal(lswap.models[0].path,'~/models/gemma-4-26B-A4B-it-OptiQ-4bit');
  const omlx=mini.blocks.find(b=>b.id==='omlx');
  assert.equal(omlx.state,'off');assert.deepEqual(omlx.models,[]);assert.match(omlx.desc,/nedosaditelná/);
+ assert.deepEqual(omlx.descT.map(p=>p.key),[omlx.desc.replace(' — služba teď nedosaditelná.',''),'— služba teď nedosaditelná.']);
+ const {say,setLang}=await import('../public/i18n.js');setLang('en');
+ assert.equal(say(lswap.port,lswap.portT),':8081 · live');assert.match(say(omlx.desc,omlx.descT),/— the service cannot be reached right now\.$/);
+ setLang('cs');assert.equal(say(lswap.port,lswap.portT),lswap.port);assert.equal(say('Přehled'),'Přehled');
  const studio=mergeStack('studio',[]);
  assert.equal(studio.blocks.find(b=>b.id==='lserver').state,'off');// static capability stays dashed
  assert.equal(studio.blocks.find(b=>b.id==='lserver').models.length,0);

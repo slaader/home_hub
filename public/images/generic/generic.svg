@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 320" role="img" aria-label="Device">
+<title>Device</title>
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1c1a29"/><stop offset="1" stop-color="#0e0d15"/></linearGradient>
+<radialGradient id="glow" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#b79cff" stop-opacity=".2"/><stop offset="1" stop-color="#b79cff" stop-opacity="0"/></radialGradient>
+<linearGradient id="body" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34313f"/><stop offset="1" stop-color="#1d1b28"/></linearGradient>
+</defs>
+<rect width="480" height="320" fill="url(#bg)"/>
+<ellipse cx="240" cy="152" rx="220" ry="136" fill="url(#glow)"/>
+<ellipse cx="240" cy="266" rx="110" ry="9" fill="#000" opacity=".4"/>
+<g stroke-linecap="round" stroke-linejoin="round">
+<path d="M240 66l96 46v104l-96 46-96-46V112z" fill="url(#body)" stroke="#403d52" stroke-width="2"/>
+<path d="M144 112l96 46 96-46M240 158v104" fill="none" stroke="#403d52" stroke-width="2"/>
+<path d="M192 89l96 46" stroke="#b79cff" stroke-width="3" opacity=".9"/>
+<circle cx="288" cy="196" r="5" fill="#62d6a1"/>
+</g>
+</svg>

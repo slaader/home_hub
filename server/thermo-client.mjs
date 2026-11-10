@@ -7,6 +7,15 @@ import {readFile, writeFile, mkdir, rename, readdir} from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID, createHash} from 'node:crypto';
 
+// Thermo is a soft dependency: a separate telemetry agent that runs on each machine and has its own
+// repository. Without it the hub works and the overview says how to get it. This is the one place that
+// names the agent and where to find it.
+// TO BE FILLED: replace OWNER with the account the telemetry repository is published under.
+export const TELEMETRY_AGENT_NAME='Thermo';
+export const TELEMETRY_REPO_URL='https://github.com/OWNER/home-hub-telemetry';
+// A machine whose newest reading is older than this is "stale", not "ok" (AGENTS.md: stale after 3 minutes).
+export const TELEMETRY_STALE_SECONDS=180;
+
 const MAX_FRAME=1_048_576;
 export function encodeFrame(obj){const body=Buffer.from(JSON.stringify(obj));if(!body.length||body.length>MAX_FRAME)throw new Error('invalid');const header=Buffer.allocUnsafe(4);header.writeUInt32BE(body.length,0);return Buffer.concat([header,body]);}
 export function createFrameParser(onFrame){
@@ -291,6 +300,8 @@ export function createThermoPoller({hostsFile,extraHosts=async()=>[],stateDirect
  function addHost(config){if(sessions.has(config.id))sessions.get(config.id).close();open(config);if(timer)void poll().catch(()=>{});}
  function removeHost(id){sessions.get(id)?.close();sessions.delete(id);status.delete(id);latest.delete(id);seconds.delete(id);disks.delete(id);}
  return {start,stop:()=>{clearInterval(timer);for(const s of sessions.values())s.close();},poll,refresh,setIntervalMs,addHost,removeHost,
+  // Host ids the poller has a login for (the hosts file plus devices connected on the overview).
+  hosts:()=>[...sessions.keys()],
   interval:()=>({intervalSeconds:intervalMs/1000,lastPollAt}),
   status:()=>Object.fromEntries(status),
   live:()=>Object.fromEntries(latest),

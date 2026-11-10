@@ -1,23 +1,27 @@
-// Home page: machine tiles (art + props + last-minute quad) and per-machine child pages
-// (chart ranges + LEGO runtime-stack grid). Renders /api/home data; block links exist only
-// through grid position, exactly like the approved mockup. Deep link: #host-studio/lserver.
+// Overview: machine tiles (picture, state, hardware, live gauges, a 30-minute CPU trend) and one page per
+// machine (telemetry charts and volumes, the runtime stack as a position-bound grid, local LLM runtimes).
+// Renders /api/home. Machines come from the site configuration, from "Add device" here, or from an agent
+// over MCP (machine_upsert); an empty hub says so and how to fill it. Live numbers need the telemetry agent
+// (home-telemetry.js says what a machine shows without it). Deep link: #host-<id>/<stack block>.
+// Text-safe DOM only: el() for HTML, svg() for drawings; colours come from the design tokens (home.css).
 import {el,date} from './views.js';
 import {SERIES,renderCharts,disposeCharts,loadECharts,level} from './home-charts.js';
 import {onSessionReset,sessionCache,authGuard} from './session-cache.js';
 import {createOrderSaver} from './home-order.js';
-import {t,tp,locale} from './i18n.js';
-import {openAddDevice,removeDevice} from './home-add-device.js';
+import {t,tp,locale,say} from './i18n.js';
+import {openAddDevice,openEditDevice,removeDevice} from './home-add-device.js';
 import {timeZone} from './site.js';
-import {emptyState} from './ui.js';
-// Adding and removing devices needs write access (the server checks it again).
-let canEdit=false;
+import {emptyState,pageHeader} from './ui.js';
+import {statusPill,hasReadings,tileNotice,telemetryNotice,runtimesSection} from './home-telemetry.js';
+// Adding, editing and removing devices needs write access (the server checks it again).
+let canEdit=false,canAdmin=false;
 let cache=null,historyCache=new Map(),state={machine:null,blk:null,range:'30m'};
 // A different account must not be shown the previous one's tiles or history.
 onSessionReset(()=>{cache=null;historyCache.clear();editing=false;orderNote='';});
 
 // Tile order, per signed-in account on the server (GET/POST /api/profile/home-order, password sign-in
 // only). Cached per principal like other account data; when it cannot be read, tiles keep the default
-// order and the "Upravit pořadí" button is not offered.
+// order and "Reorder" is not offered.
 const orderCache=sessionCache(43200000);// as long as a sign-in lives (12 h)
 let editing=false,orderNote='';
 async function loadOrder(){
@@ -44,294 +48,355 @@ export async function sendOrder(order){
 // One save at a time, newest move wins, bound to the sign-in that made it (home-order.js).
 const orderSaver=createOrderSaver({cache:orderCache,send:sendOrder});
 
-const ART={
- mini:'<svg viewBox="0 0 72 56"><rect width="72" height="56" fill="#0a0d12"/><rect x="12" y="18" width="48" height="20" rx="4" fill="#1a2230" stroke="#4da3ff" stroke-opacity=".5"/><rect x="30" y="26" width="12" height="3" rx="1.5" fill="#4da3ff" fill-opacity=".6"/><path d="M20 42h32" stroke="#141a23" stroke-width="4"/></svg>',
- studio:'<svg viewBox="0 0 72 56"><rect width="72" height="56" fill="#0a0d12"/><rect x="14" y="16" width="44" height="26" rx="9" fill="#1a2230" stroke="#4da3ff" stroke-opacity=".5"/><rect x="26" y="27" width="20" height="3" rx="1.5" fill="#4da3ff" fill-opacity=".6"/><path d="M22 46h28" stroke="#141a23" stroke-width="4"/></svg>',
- m1:'<svg viewBox="0 0 72 56"><rect width="72" height="56" fill="#0a0d12"/><rect x="14" y="16" width="44" height="26" rx="9" fill="#1a2230" stroke="#4da3ff" stroke-opacity=".5"/><rect x="26" y="27" width="20" height="3" rx="1.5" fill="#4da3ff" fill-opacity=".6"/><path d="M22 46h28" stroke="#141a23" stroke-width="4"/></svg>',
- nas:'<svg viewBox="0 0 72 56"><rect width="72" height="56" fill="#0a0d12"/><rect x="12" y="8" width="48" height="17" rx="4" fill="#1a2230" stroke="#9ecbff" stroke-opacity=".4"/><rect x="12" y="30" width="48" height="17" rx="4" fill="#1a2230" stroke="#9ecbff" stroke-opacity=".4"/><circle cx="20" cy="16.5" r="2" fill="#3ddc84"/><circle cx="20" cy="38.5" r="2" fill="#3ddc84"/><path d="M28 16.5h26M28 38.5h26" stroke="#2a3444" stroke-width="2"/></svg>',
- router:'<svg viewBox="0 0 72 56"><rect width="72" height="56" fill="#0a0d12"/><rect x="14" y="32" width="44" height="14" rx="5" fill="#1a2230" stroke="#ffb020" stroke-opacity=".5"/><path d="M26 24a14 14 0 0 1 20 0M31 29a7 7 0 0 1 10 0" fill="none" stroke="#ffb020" stroke-opacity=".6" stroke-width="2"/><circle cx="21" cy="39" r="1.6" fill="#3ddc84"/></svg>'};
-// Sparkline colour per machine: a fixed palette by position among the site's machines; added devices share one.
-const PALETTE=['#4da3ff','#8f7bff','#4de3c0','#9ecbff','#ffb020'];
-const tint=m=>{const i=(cache?.machines||[]).filter(x=>!x.added).findIndex(x=>x.id===m.id);return PALETTE[i]||'#ff9e7a';};
-const engColor={gguf:'var(--gguf)',mlx:'var(--mlx)',torch:'var(--torch)',mix:'var(--mix)',edge:'var(--edge)',media:'var(--media)',cloud:'var(--cloud)',dev:'var(--devc)',share:'var(--share)',net:'var(--net)'};
-function htmlBox(tag,attrs,markup){const n=el(tag,attrs);n.innerHTML=markup;return n;}
-function ensureStyles(){}
+const SVG_NS='http://www.w3.org/2000/svg';
+function svg(tag,attrs={},...children){const n=document.createElementNS(SVG_NS,tag);for(const [k,v] of Object.entries(attrs))if(v!==undefined&&v!==null)n.setAttribute(k,v);n.append(...children.flat().filter(Boolean));return n;}
 async function load(){const lost=authGuard(),r=await fetch('/api/home');if(!r.ok){lost(r);throw new Error('home');}cache=await r.json();return cache;}
 async function loadHistory(machine,range,fresh=false){
  const key=`${machine}:${range}`;const hit=historyCache.get(key);if(!fresh&&hit&&Date.now()-hit.at<30000)return hit.value;
  const lost=authGuard(),r=await fetch(`/api/home/history?machine=${machine}&range=${range}`);if(!r.ok){lost(r);throw new Error('history');}
  const value=await r.json();historyCache.set(key,{at:Date.now(),value});return value;
 }
-function quadClass(k,v){const l=level(k==='CPU'?'cpu':k==='GPU'?'gpu':k==='TEPL.'?'temp':'',v);return l?`qc ${l}`:'qc';}
 const GiB=1073741824;
+const size=b=>b==null?null:b>=1e12?`${Math.round(b/1e11)/10} TB`:`${Math.round(b/1e9)} GB`;
 // Memory pressure from Thermo (build 97): 0 normal · 1 warning · 2 critical.
 export const pressureName=v=>v==null?null:v>=2?t('kritický'):v>=1?t('zvýšený'):t('normální');
 const pressureLevel=v=>v==null?'':v>=2?'crit':v>=1?'hot':'';
-// Ring gauge split into 100 %: one or more coloured arcs on a dim track, value in the middle.
-function ring({segments,center,unit,label,sub,cls=''}){
- const r=26,c=2*Math.PI*r;let offset=0;
- const arcs=segments.filter(x=>x.pct>0).map(x=>{const len=Math.min(100,x.pct)/100*c;const a=`<circle r="${r}" cx="32" cy="32" fill="none" stroke="${x.color}" stroke-width="6" stroke-linecap="butt" stroke-dasharray="${len.toFixed(2)} ${(c-len).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 32 32)"/>`;offset+=len;return a;}).join('');
- const ticks=[0,25,50,75].map(p=>{const ang=(p/100)*2*Math.PI-Math.PI/2;const x1=32+Math.cos(ang)*31,y1=32+Math.sin(ang)*31,x2=32+Math.cos(ang)*33.5,y2=32+Math.sin(ang)*33.5;return `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#3a3448" stroke-width="1"/>`;}).join('');
- const svg=`<svg viewBox="-2 -2 68 68" aria-hidden="true"><circle r="${r}" cx="32" cy="32" fill="none" stroke="#221e2c" stroke-width="6"/>${arcs}${ticks}</svg>`;
- const box=el('div',{class:`gauge ${cls}`});
- const dial=el('div',{class:'g-dial'});dial.innerHTML=svg;
- dial.append(el('div',{class:'g-center'},el('span',{class:'g-v'},center??'–'),unit?el('span',{class:'g-u'},unit):null));
- box.append(el('div',{class:'g-k'},label),dial,el('div',{class:'g-s',title:sub?.title||''},sub?.text||'\u00a0'));
- return box;
+// The picture of a machine: its own (uploaded, or the site's), else the built-in one for what it is.
+// The next candidate is tried when one fails to load.
+const GENERIC={computer:'desktop',nas:'nas',router:'router'};
+export function pictureChain(m){
+ const own=m.image===undefined&&!m.added?`/images/home/${m.id}.jpg`:m.image;
+ return [...new Set([own,m.picture,`/images/generic/${GENERIC[m.role]||GENERIC[m.kind==='thermo'?'computer':m.kind]||'generic'}.svg`].filter(Boolean))];
 }
-const loadColor=v=>v>=75?'#ff6b81':v>=50?'#ffc266':'#7be3b5';
+function art(m,cls='hv-art'){
+ const chain=pictureChain(m);let i=0;
+ const img=el('img',{src:chain[0],alt:'',loading:'lazy',decoding:'async',draggable:'false',onerror:()=>{i++;if(i<chain.length)img.src=chain[i];else img.remove();}});
+ return el('div',{class:cls},img);
+}
+
+// Ring gauge: coloured arcs on a dim track, the value in the middle. Arc colours are classes (home.css).
+function ring({segments,center,unit,label,sub,tone=''}){
+ const r=26,c=2*Math.PI*r;let offset=0;
+ const arcs=segments.filter(x=>x.pct>0).map(x=>{const len=Math.min(100,x.pct)/100*c;
+  const arc=svg('circle',{class:`arc ${x.cls}`,r,cx:32,cy:32,'stroke-dasharray':`${len.toFixed(2)} ${(c-len).toFixed(2)}`,'stroke-dashoffset':(-offset).toFixed(2),transform:'rotate(-90 32 32)'});offset+=len;return arc;});
+ return el('div',{class:`hv-gauge ${tone}`,role:'img','aria-label':`${label}: ${center??'–'} ${unit||''}${sub?.title?'. '+sub.title:''}`},
+  el('span',{class:'hv-k'},label),
+  el('div',{class:'hv-dial'},svg('svg',{viewBox:'0 0 64 64','aria-hidden':'true'},svg('circle',{class:'track',r,cx:32,cy:32}),arcs),
+   el('div',{class:'hv-dial-v'},el('b',{},center??'–'),unit?el('small',{},unit):null)),
+  el('span',{class:'hv-gauge-sub',title:sub?.title||null},sub?.text||' '));
+}
+const loadClass=v=>v>=75?'bad':v>=50?'warn':'good';
 function macGauges(m){
  const q=m.quad||{};
  const cpu=q.cpu!=null?Math.round(q.cpu):null,gpu=q.gpu!=null?Math.round(q.gpu):null;
  // GPU holds = Metal allocations (model weights stay here while loaded); in-use = active working set.
  const total=q.memTotal||null,used=q.memUsed??null,gmem=q.gpuMemAlloc??q.gpuMem??null,gactive=q.gpuMemAlloc!=null?q.gpuMem:null;
  const usedPct=total&&used!=null?used/total*100:null,gpuPct=total&&gmem!=null?Math.min(usedPct??100,gmem/total*100):0;
- const memCls=pressureLevel(q.memPressure)||(usedPct!=null&&usedPct>=90?'hot':'');
+ const memTone=pressureLevel(q.memPressure)||(usedPct!=null&&usedPct>=90?'hot':'');
  const memSub={text:gmem!=null?`GPU ${Math.round(gmem/GiB)} GB`:total?t('z {gb} GB',{gb:Math.round(total/GiB)}):'',
   title:gmem!=null?t('GPU drží {gb} GB (alokováno, např. načtený model){active}. Celkem RAM {total} GB.',{gb:Math.round(gmem/GiB),active:gactive!=null?t(', z toho právě aktivně {gb} GB',{gb:Math.round(gactive/GiB)}):'',total:total?Math.round(total/GiB):'?'}):t('Thermo na tomto Macu zatím neposílá paměť GPU (build < 97).')};
- const gauges=el('div',{class:'gauges'},
-  ring({segments:[{pct:cpu??0,color:loadColor(cpu??0)}],center:cpu,unit:'%',label:'CPU',cls:level('cpu',cpu)}),
-  ring({segments:[{pct:gpu??0,color:loadColor(gpu??0)}],center:gpu,unit:'%',label:'GPU',cls:level('gpu',gpu)}),
-  ring({segments:[{pct:gpuPct,color:'#c7a7ff'},{pct:Math.max(0,(usedPct??0)-gpuPct),color:'#4de3c0'}],center:used!=null?Math.round(used/GiB):null,unit:'GB',label:t('Paměť'),sub:memSub,cls:memCls}));
  const temp=q.temp!=null?Math.round(q.temp):null;
- const stats=el('div',{class:'mini-stats'},
-  el('span',{},el('span',{class:'pk'},t('Příkon')),el('b',{},q.power!=null?`${Math.round(q.power)} W`:'–')),
-  el('span',{class:level('temp',temp)},el('span',{class:'pk'},t('Tepl.')),el('b',{},temp!=null?`${temp} °C`:'–')),
-  el('span',{class:pressureLevel(q.memPressure)},el('span',{class:'pk'},t('Tlak')),el('b',{},pressureName(q.memPressure)??'–')));
- return el('div',{},gauges,stats);
+ const stat=(label,value,tone='')=>el('span',{class:tone},el('span',{class:'hv-k'},label),el('b',{},value));
+ return el('div',{class:`hv-metrics${m.telemetry?.state==='stale'?' stale':''}`},
+  el('div',{class:'hv-gauges'},
+   ring({segments:[{pct:cpu??0,cls:loadClass(cpu??0)}],center:cpu,unit:'%',label:'CPU',tone:level('cpu',cpu)}),
+   ring({segments:[{pct:gpu??0,cls:loadClass(gpu??0)}],center:gpu,unit:'%',label:'GPU',tone:level('gpu',gpu)}),
+   ring({segments:[{pct:gpuPct,cls:'gpu'},{pct:Math.max(0,(usedPct??0)-gpuPct),cls:'mem'}],center:used!=null?Math.round(used/GiB):null,unit:'GB',label:t('Paměť'),sub:memSub,tone:memTone})),
+  el('div',{class:'hv-stats'},
+   stat(t('Příkon'),q.power!=null?`${Math.round(q.power)} W`:'–'),
+   stat(t('Tepl.'),temp!=null?`${temp} °C`:'–',level('temp',temp)),
+   stat(t('Tlak'),pressureName(q.memPressure)??'–',pressureLevel(q.memPressure))));
 }
-function quadTiles(m){
- if(m.kind==='thermo')return macGauges(m);
- if(m.kind==='other')return el('div',{class:'tile-sec'},t('Bez živých dat — jen dlaždice.'));
- const q=m.quad||{};
- const tiles=[];
- if(m.id==='router')tiles.push(['CLIENTŮ',q.clients!=null?q.clients:null,''],['WI-FI',q.wifi!=null?q.wifi:null,''],['PŘÍKON',null,'W'],['TEPL.',null,'°C']);
- else if(m.id==='nas')tiles.push(['SLUŽBY',m.services?.length||0,''],['REACHABLE',(m.services||[]).filter(s=>s.status==='reachable').length,''],['PŘÍKON',null,'W'],['TEPL.',null,'°C']);
- return el('div',{class:'quad'},tiles.map(([k,v,u])=>el('div',{class:quadClass(k,v)},el('div',{class:'k'},t(k)),el('div',{class:'v'},v==null?'–':String(v),u?el('small',{},' '+u):null))));
+const cells=pairs=>el('div',{class:'hv-cells'},pairs.map(([k,v])=>el('div',{class:'hv-cell'},el('span',{class:'hv-k'},k),el('b',{},v==null?'–':String(v)))));
+// What a tile shows under its hardware: live gauges, another feed's counts, or why there are no live numbers.
+function liveBlock(m){
+ const meta=cache?.telemetry;
+ // Stale readings keep their last numbers (dimmed); with none left to show, the tile says since when.
+ if(m.kind==='thermo')return hasReadings(m)&&(m.quad||m.telemetry?.state!=='stale')?macGauges(m):tileNotice(m,meta);
+ if(m.kind==='router'){
+  const q=m.quad;if(!q&&cache?.router?.status==='not-configured')return el('div',{class:'hv-tile-note dim'},el('b',{},t('Router není nastavený. Otevři dlaždici a uvidíš, co doplnit.')));
+  if(!q)return el('div',{class:'hv-tile-note dim'},el('b',{},t('Router zatím nic nehlásí')),el('span',{},t('Počty klientů dodává adaptér routeru.')));
+  return cells([[t('Klienti'),q.clients],['Wi-Fi',q.wifi]]);
+ }
+ if(m.kind==='nas'&&(m.services?.length||m.online!=='unknown'))return cells([[t('Služby'),m.services?.length||0],[t('Dostupné'),(m.services||[]).filter(s=>s.status==='reachable').length]]);
+ return tileNotice(m,meta);
 }
 function propsLine(m){
- const p=m.props||{};const size=v=>v==null?null:v>=1e12?`${Math.round(v/1e12)} TB`:`${Math.round(v/1e9)} GB`;
+ const p=m.props||{};
  const items=[['CPU',p.cpu],['GPU',p.gpu&&p.gpu!=='—'?p.gpu:null],['RAM',p.ramGb!=null?`${p.ramGb} GB`:null],[p.pools?t('Pooly'):'Disk',size(p.diskTotalBytes)]].filter(([,v])=>v);
- return el('div',{class:'home-props'},items.map(([k,v])=>el('span',{class:'pp'},el('span',{class:'pk'},k),el('span',{class:'pv'},String(v)))));
+ return items.length?el('dl',{class:'hv-props'},items.flatMap(([k,v])=>[el('dt',{},k),el('dd',{title:String(v)},String(v))])):null;
 }
+const hostLine=m=>[m.hostname,m.ip&&m.ip!==m.hostname?m.ip:null].filter(Boolean).join(' · ');
+// What decides a tile's structure; while it stays the same a refresh only swaps the numbers.
+const tileShape=m=>[m.kind,hasReadings(m),m.name,hostLine(m),m.image||m.picture||'',JSON.stringify(m.props||{})].join('|');
 function tile(m){
- const prefetch=()=>{void loadHistory(m.id,state.range).catch(()=>{});void loadECharts().catch(()=>{});};
- return el('a',{class:`home-tile dev-${m.id}`,href:`#host-${m.id}`,onmouseenter:prefetch,onfocus:prefetch},
-  tileArt(m),
-  el('div',{},el('h3',{},m.name),el('div',{class:'home-host'},m.ip&&m.ip!==m.hostname?`${m.hostname} · ${m.ip}`:m.hostname),
-   tileStatus(m),propsLine(m),el('div',{class:'tile-live'},quadTiles(m)),tileSpark(m)));
+ const prefetch=()=>{if(hasReadings(m))void loadHistory(m.id,state.range).catch(()=>{});void loadECharts().catch(()=>{});};
+ const node=el('a',{class:'hv-tile',href:`#host-${m.id}`,'data-id':m.id,onmouseenter:prefetch,onfocus:prefetch},
+  art(m),
+  el('div',{class:'hv-tile-body'},
+   el('div',{class:'hv-tile-head'},el('h3',{},m.name),statusPill(m)),
+   el('p',{class:'hv-host'},hostLine(m)||' '),
+   propsLine(m),
+   el('div',{class:'hv-live'},liveBlock(m)),
+   tileSpark(m)));
+ node.dataset.shape=tileShape(m);return node;
 }
-function tileStatus(m){
- if(m.online==='unknown')return el('div',{class:'tstat stale'},el('i',{}),t('stav neznámý'));
- const online=m.online==='online'?'':'off',label=m.online==='online'?`online${m.lastSeen?t(' · naposledy {when}',{when:date(m.lastSeen)}):''}`:m.online==='stale'?'stale':'offline';
- return el('div',{class:`tstat ${m.online==='stale'?'stale':online==='off'?'off':''}`},el('i',{}),label);
-}
-// In-place refresh of one tile: status line, gauges and sparkline; the picture and layout stay put.
+// In-place refresh of one tile: state, gauges and trend; the picture and layout stay put.
 function updateTile(node,m){
- node.querySelector('.tstat')?.replaceWith(tileStatus(m));
- node.querySelector('.tile-live')?.replaceChildren(quadTiles(m));
- const spark=node.querySelector('.tile-spark');
- if(spark)loadHistory(m.id,'30m',true).then(h=>{const svg=sparkline(h.points||[],p=>p.cpu,tint(m),100);const old=spark.querySelector('.spark,.src');if(old)old.replaceWith(svg);else spark.append(svg);}).catch(()=>{});
+ if(node.dataset.shape!==tileShape(m)){node.replaceWith(tile(m));return;}
+ node.querySelector('.hv-status')?.replaceWith(statusPill(m));
+ node.querySelector('.hv-live')?.replaceChildren(...[liveBlock(m)].filter(Boolean));
+ const spark=node.querySelector('.hv-trend');
+ if(spark)loadHistory(m.id,'30m',true).then(h=>{spark.querySelector('.hv-spark,.hv-spark-empty')?.remove();spark.append(sparkline(h.points||[],p=>p.cpu,100));}).catch(()=>{});
 }
-function quadNote(m){
- const q=m.quad;if(!q?.observedAt)return null;
- const age=Math.max(0,Math.round((Date.now()-q.observedAt)/1000));
- return el('div',{class:'qnote'},t('Ø {window} s · před {age} s',{window:q.windowSeconds||'?',age}));
-}
-// Generated surrealist picture per machine; the small SVG stays as a fallback if it fails to load.
-function tileArt(m){
- const box=el('div',{class:'home-art'});
- // The small drawing: one made for this machine id if there is one, else by kind (nas, router), else a generic box.
- const fallback=()=>{box.innerHTML=ART[m.id]||ART[m.kind]||(/server/.test(m.id)?ART.m1:'')||ART.mini||'';};
- // An added device without a picture keeps the small drawing.
- if(m.added&&!m.image){fallback();return box;}
- const img=el('img',{src:m.image||`/images/home/${m.id}.jpg`,alt:'',loading:'lazy',decoding:'async',onerror:fallback});
- box.append(img);return box;
-}
-// 30-minute CPU trend on Mac tiles (same history endpoint as the device page, cached 30 s).
+// 30-minute CPU trend on tiles with readings (same history endpoint as the machine page, cached 30 s).
 function tileSpark(m){
- if(m.kind!=='thermo')return null;
- const box=el('div',{class:'tile-spark'},el('div',{class:'tile-sec'},t('CPU load · 30 min')));
- loadHistory(m.id,'30m').then(h=>{box.append(sparkline(h.points||[],p=>p.cpu,tint(m),100));}).catch(()=>{});
+ if(!hasReadings(m))return null;
+ const box=el('div',{class:'hv-trend'},el('span',{class:'hv-k'},t('CPU load · 30 min')));
+ loadHistory(m.id,'30m').then(h=>{box.append(sparkline(h.points||[],p=>p.cpu,100));}).catch(()=>{});
  return box;
 }
-function sparkline(points,pick,color,scale){
- const vals=points.map(pick).filter(v=>v!=null);if(!vals.length)return el('div',{class:'src'},t('zatím žádná data'));
- const max=Math.max(scale||0,...vals)*1.15||1,w=300,h=74,pd=3;
- const x=i=>pd+i*(w-2*pd)/Math.max(1,points.length-1),y=v=>h-12-(v/max)*(h-24);
+// One line in the CPU series colour on a 0–scale band with a mid rule; gaps in the data stay gaps.
+function sparkline(points,pick,scale){
+ const vals=points.map(pick).filter(v=>v!=null);if(!vals.length)return el('div',{class:'hv-spark-empty'},t('zatím žádná data'));
+ const max=Math.max(scale||0,...vals)*1.08||1,w=300,h=44,pd=2;
+ const x=i=>pd+i*(w-2*pd)/Math.max(1,points.length-1),y=v=>h-pd-(v/max)*(h-2*pd);
  let d='',open=false;
- points.forEach((p,i)=>{const v=pick(p);if(v==null)return;d+=(open?'L':'M')+x(i).toFixed(1)+' '+y(v).toFixed(1)+' ';open=true;});
- return htmlBox('div',{class:'spark'},`<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">`+[25,50,75].map(pc=>`<line class="grid-l" x1="${pd}" x2="${w-pd}" y1="${(h-12-pc/100*(h-24)).toFixed(1)}" y2="${(h-12-pc/100*(h-24)).toFixed(1)}"/>`).join('')+`<path d="${d}" fill="none" stroke="${color}" stroke-width="1.6"/></svg>`);
+ points.forEach((p,i)=>{const v=pick(p);if(v==null){open=false;return;}d+=(open?'L':'M')+x(i).toFixed(1)+' '+y(v).toFixed(1)+' ';open=true;});
+ const mid=y((scale||max)/2).toFixed(1);
+ return svg('svg',{class:'hv-spark',viewBox:`0 0 ${w} ${h}`,preserveAspectRatio:'none',role:'img','aria-label':t('CPU za posledních 30 minut, teď {v} %',{v:Math.round(vals.at(-1))})},
+  svg('line',{class:'rule',x1:pd,x2:w-pd,y1:mid,y2:mid}),svg('path',{class:'line',d:d.trim()}));
 }
-function chartCard(title,points,pick,live,color,scale,unit,src){
- const last=live!=null?live:null;
- return el('div',{class:'hc'},el('h4',{},title),
-  el('div',{class:'val'},last==null?'–':String(typeof last==='number'?Math.round(last*10)/10:last),el('small',{},' '+unit)),
-  sparkline(points,pick,color,scale),el('div',{class:'src'},src));
-}
+
+// --- machine page: runtime stack ---------------------------------------------------------------
 function overlap(a,b){return !(a.col1<b.col0||b.col1<a.col0);}
+// Layers of a published stack carry keys (translated here); a site's own stack names its layers itself.
+const LAYER_LABEL={input:'VSTUP',tool:'NÁSTROJ',runtime:'RUNTIME',engine:'ENGINE',hardware:'HARDWARE'};
+const layerName=(stack,i)=>stack.layerKeys?.[i]?t(LAYER_LABEL[stack.layerKeys[i]]):t(stack.layers[i]||'');
+// Engine families with a colour of their own (home.css); any other column key uses the accent.
+const ENGINES=['gguf','mlx','torch','mix','edge','media','cloud','dev','share','net'];
+const engineClass=key=>ENGINES.includes(key)?` eng-${key}`:'';
 // Detail panel beside the grid: empty hint until a block is picked, then the block's story.
 let animatePanel=false;
 function stackPanel(machine,blk){
  const still=animatePanel?'':' still';
- if(!blk)return el('aside',{class:'stack-panel empty'+still},
-  el('div',{class:'sp-empty-icon'},el('i'),el('i'),el('i')),
-  el('div',{class:'sp-empty-t'},t('Vyber blok v diagramu')),
-  el('div',{class:'sp-empty-s'},t('Ukáže se, na čem stojí, co je nad ním, port, stav a modely.')));
+ if(!blk)return el('aside',{class:'hv-panel empty'+still},
+  el('div',{class:'hv-panel-icon','aria-hidden':'true'},el('i'),el('i'),el('i')),
+  el('b',{},t('Vyber blok v diagramu')),
+  el('span',{},t('Ukáže se, na čem stojí, co je nad ním, port, stav a modely.')));
  const stack=machine.stack;
  const below=stack.blocks.filter(b=>b.layer===blk.layer+1&&overlap(b,blk));
  const above=stack.blocks.filter(b=>b.layer===blk.layer-1&&overlap(b,blk));
  const models=blk.models||[];
- const color=blk.engine||blk.hw?'var(--line-hi)':engColor[stack.cols[blk.col0]]||'var(--accent)';
- const chip=b=>el('button',{class:`sp-chip ${b.state==='off'?'off':''}`,onclick:()=>selectBlock(machine,b.id)},t(b.title));
- const panel=el('aside',{class:'stack-panel'+still},
-  el('div',{class:'sp-head'},
-   el('div',{},el('div',{class:'sp-layer'},t(stack.layers[blk.layer]||'')),el('h3',{},t(blk.title))),
-   el('button',{class:'sp-close','aria-label':t('Zavřít detail'),onclick:()=>selectBlock(machine,blk.id)},'×')),
-  el('div',{class:'sp-meta'},
-   blk.hw||blk.engine?null:el('span',{class:`sp-state ${blk.state==='off'?'off':'on'}`},blk.state==='off'?t('vypnuto'):t('běží')),
-   blk.port?el('span',{class:'sp-port'},t(blk.port)):null,
-   stack.engines?.[stack.cols[blk.col0]]&&!blk.hw?el('span',{class:'sp-eng'},t(stack.engines[stack.cols[blk.col0]])):null),
-  blk.desc?el('p',{class:'sp-desc'},t(blk.desc)):null,
-  el('div',{class:'sp-sec'},el('div',{class:'sp-k'},t('Stojí na')),el('div',{class:'sp-chips'},below.length?below.map(chip):el('span',{class:'sp-none'},t('— nejspodnější vrstva')))),
-  el('div',{class:'sp-sec'},el('div',{class:'sp-k'},t('Nad ním')),el('div',{class:'sp-chips'},above.length?above.map(chip):el('span',{class:'sp-none'},t('— nic')))),
-  blk.stats&&blk.stats.requests!=null?el('div',{class:'sp-sec'},el('div',{class:'sp-k'},t('Provoz')),el('div',{class:'sp-v'},`${tp(blk.stats.requests,'{n} request|{n} requesty|{n} requestů')} · uptime ${Math.round((blk.stats.uptimeSeconds||0)/3600)} h`)):null,
-  blk.pool?el('div',{class:'sp-sec'},el('div',{class:'sp-k'},t('Rozpočet paměti')),el('div',{class:'sp-v'},`${blk.pool.allocatedGb} / ${blk.pool.capacityGb} GB`)):null,
-  el('div',{class:'sp-sec'},el('div',{class:'sp-k'},t('Modely · {n}',{n:models.length})),
-   models.length?el('div',{class:'sp-models'},models.map(m=>el('div',{class:'mrow'},el('span',{class:`st ${m.state==='loaded'?'loaded':m.state==='loading'?'loading':'idle'}`}),
-    el('div',{},el('div',{},m.id,m.sizeGb?` · ${m.sizeGb} GB`:'',m.ttlRemainingSeconds?` · TTL ${Math.round(m.ttlRemainingSeconds/60)} min`:''),m.path?el('div',{class:'path'},m.path):null)))):el('span',{class:'sp-none'},t('žádné'))));
- panel.style.setProperty('--sp',color);
- return panel;
+ const chip=b=>el('button',{type:'button',class:`hv-chip ${b.state==='off'?'off':''}`,onclick:()=>selectBlock(machine,b.id)},t(b.title));
+ const sec=(label,...body)=>el('div',{class:'hv-panel-sec'},el('span',{class:'hv-k'},label),...body);
+ return el('aside',{class:`hv-panel${still}${blk.engine||blk.hw?'':engineClass(stack.cols[blk.col0])}`},
+  el('div',{class:'hv-panel-head'},
+   el('div',{},el('span',{class:'hv-k'},layerName(stack,blk.layer)),el('h3',{},t(blk.title))),
+   el('button',{type:'button',class:'hv-close','aria-label':t('Zavřít detail'),onclick:()=>selectBlock(machine,blk.id)},'×')),
+  el('div',{class:'hv-badges'},
+   blk.hw||blk.engine?null:el('span',{class:`hv-status ${blk.state==='off'?'dim':'ok'}`},el('i',{'aria-hidden':'true'}),blk.state==='off'?t('vypnuto'):t('běží')),
+   blk.port?el('span',{class:'hv-badge'},say(blk.port,blk.portT)):null,
+   stack.engines?.[stack.cols[blk.col0]]&&!blk.hw?el('span',{class:'hv-badge'},t(stack.engines[stack.cols[blk.col0]])):null),
+  blk.desc?el('p',{class:'hv-panel-desc'},say(blk.desc,blk.descT)):null,
+  sec(t('Stojí na'),el('div',{class:'hv-chips'},below.length?below.map(chip):el('span',{class:'hv-none'},t('— nejspodnější vrstva')))),
+  sec(t('Nad ním'),el('div',{class:'hv-chips'},above.length?above.map(chip):el('span',{class:'hv-none'},t('— nic')))),
+  blk.stats&&blk.stats.requests!=null?sec(t('Provoz'),el('span',{class:'hv-v'},`${tp(blk.stats.requests,'{n} request|{n} requesty|{n} requestů')} · uptime ${Math.round((blk.stats.uptimeSeconds||0)/3600)} h`)):null,
+  blk.pool?sec(t('Rozpočet paměti'),el('span',{class:'hv-v'},`${blk.pool.allocatedGb} / ${blk.pool.capacityGb} GB`)):null,
+  sec(t('Modely · {n}',{n:models.length}),
+   models.length?el('ul',{class:'hv-models'},models.map(m=>el('li',{class:m.state==='loaded'?'loaded':m.state==='loading'?'loading':''},
+    el('div',{},m.id,m.sizeGb?` · ${m.sizeGb} GB`:'',m.ttlRemainingSeconds?` · TTL ${Math.round(m.ttlRemainingSeconds/60)} min`:''),m.path?el('small',{},m.path):null))):el('span',{class:'hv-none'},t('žádné'))));
 }
 function stackGrid(machine){
- const stack=machine.stack;if(!stack)return el('div',{class:'src'},t('Runtime diagram pro tento stroj ještě není.'));
- const cols=stack.cols.length;
- const grid=el('div',{class:'stack'});grid.style.gridTemplateColumns=`64px repeat(${cols},minmax(76px,1fr))`;
- const layerCount=Math.max(...stack.blocks.map(b=>b.layer))+1;
+ const stack=machine.stack,cols=stack.cols.length;
+ const grid=el('div',{class:'hv-stack'});grid.style.gridTemplateColumns=`64px repeat(${cols},minmax(84px,1fr))`;
+ const layerCount=Math.max(...stack.blocks.map(b=>b.layer))+1,chosen=stack.blocks.find(x=>x.id===state.blk)||null;
  for(let L=0;L<layerCount;L++){
-  grid.append(el('div',{class:'lname'},t(stack.layers[L]||'')));
-  const placed=stack.blocks.filter(b=>b.layer===L).sort((a,b)=>a.col0-b.col0);
-  const busy=new Set();placed.forEach(b=>{for(let c=b.col0;c<=b.col1;c++)busy.add(c);});
+  grid.append(el('div',{class:'hv-layer'},layerName(stack,L)));
+  const placed=stack.blocks.filter(b=>b.layer===L);
   for(let c=0;c<cols;c++){
-   if(busy.has(c)&&!placed.some(b=>b.col0===c)){
-    if(!placed.some(b=>c>=b.col0&&c<=b.col1))continue;
-   }
-   if(busy.has(c)){
-    const b=placed.find(b=>c>=b.col0&&c<=b.col1);if(b.col0!==c)continue;
-    const color=b.engine?'#3a4558':engColor[stack.cols[b.col0]]||'var(--mlx)';
-    const sel=state.blk===b.id?' sel':'',rel=state.blk&&state.blk!==b.id&&(overlap(stack.blocks.find(x=>x.id===state.blk)||{},b))?' rel':'';
-    const btn=el('button',{class:`blk ${b.engine?'engine':''} ${b.hw?'hw':''} ${b.state==='off'?'off':''}${sel}${rel}`,onclick:()=>selectBlock(machine,b.id)},
-     el('span',{class:'t'},t(b.title)),el('span',{class:'p'},t(b.port||'')),b.state!=='off'&&!b.hw&&!b.engine?el('span',{class:'dot'}):null);
-    btn.style.setProperty('--c',color);btn.style.gridColumnStart=String(c+2);btn.style.gridColumnEnd=String(b.col1+3);grid.append(btn);
-   }else{
-    // column with nothing on this row → dashed gap unless a neighbour spans it
-    const spansLeft=placed.some(b=>b.col0<=c&&b.col1>=c);if(spansLeft)continue;
-    const g=el('div',{class:'gapbox'},t('NIC'));g.style.gridColumnStart=String(c+2);grid.append(g);
-   }
+   const b=placed.find(b=>c>=b.col0&&c<=b.col1);
+   // A column with nothing on this row is a dashed gap: "nothing in between" is information too.
+   if(!b){const gap=el('div',{class:'hv-gap'},t('NIC'));gap.style.gridColumnStart=String(c+2);grid.append(gap);continue;}
+   if(b.col0!==c)continue;
+   const sel=state.blk===b.id?' sel':'',rel=chosen&&chosen.id!==b.id&&overlap(chosen,b)?' rel':'';
+   const btn=el('button',{type:'button',class:`hv-blk${b.engine?' engine':''}${b.hw?' hw':''}${b.state==='off'?' off':''}${sel}${rel}${b.engine||b.hw?'':engineClass(stack.cols[b.col0])}`,'aria-pressed':String(state.blk===b.id),onclick:()=>selectBlock(machine,b.id)},
+    el('b',{},t(b.title)),el('small',{},say(b.port||'',b.portT)),b.state!=='off'&&!b.hw&&!b.engine?el('i',{class:'dot','aria-hidden':'true'}):null);
+   btn.style.gridColumnStart=String(c+2);btn.style.gridColumnEnd=String(b.col1+3);grid.append(btn);
   }
  }
- const sel=stack.blocks.find(b=>b.id===state.blk)||null;
- return el('section',{class:'stack-layout',id:'stack-slot'},el('div',{class:'stack-main'},el('div',{class:'stack-wrap'},grid),
-  el('div',{class:'legend'},
-   ...Object.entries(stack.engines||{}).map(([k,v])=>el('span',{},(()=>{const i=el('i');i.style.background=engColor[k]||'#4da3ff';return i;})(),t(v))),
-   el('span',{},el('i',{class:'g'}),t('nic mezi tím')),
-   el('span',{},el('i',{class:'g offkey'}),t('vypnuto (schopnost bez bloku)')))),
-  stackPanel(machine,sel));
+ return el('div',{class:'hv-stack-layout',id:'hv-stack-slot'},el('div',{class:'hv-stack-main'},el('div',{class:'hv-stack-wrap'},grid),
+  el('div',{class:'hv-legend'},
+   ...Object.entries(stack.engines||{}).map(([k,v])=>el('span',{class:engineClass(k).trim()},el('i',{'aria-hidden':'true'}),t(v))),
+   el('span',{},el('i',{class:'gap','aria-hidden':'true'}),t('nic mezi tím')),
+   el('span',{},el('i',{class:'gap off','aria-hidden':'true'}),t('vypnuto (schopnost bez bloku)')))),
+  stackPanel(machine,chosen));
 }
 function selectBlock(machine,id){
  state.blk=state.blk===id?null:id;
  history.replaceState(null,'',`#host-${machine.id}${state.blk?'/'+state.blk:''}`);
- const old=document.querySelector('#stack-slot');
+ const old=document.querySelector('#hv-stack-slot');
  animatePanel=true;const fresh=stackGrid(machine);animatePanel=false;
- if(old)old.replaceWith(fresh);else renderChild(document.querySelector('#home-slot'),machine);
+ if(old)old.replaceWith(fresh);
 }
-addEventListener('keydown',e=>{if(e.key==='Escape'&&state.blk&&document.querySelector('#stack-slot')){const m=cache?.machines.find(x=>location.hash.startsWith(`#host-${x.id}`));if(m)selectBlock(m,state.blk);}});
+addEventListener('keydown',e=>{if(e.key==='Escape'&&state.blk&&document.querySelector('#hv-stack-slot')){const m=cache?.machines.find(x=>location.hash.startsWith(`#host-${x.id}`));if(m)selectBlock(m,state.blk);}});
+const stamp=iso=>{const ms=Date.parse(iso);return Number.isFinite(ms)?new Intl.DateTimeFormat(locale(),{day:'numeric',month:'numeric',hour:'2-digit',minute:'2-digit',timeZone:timeZone()}).format(new Date(ms)):'';};
+// Where the drawn stack comes from: published by an agent, collected on the machine, or the site configuration.
+function stackSource(m){
+ const s=m.stack;if(!s)return null;
+ if(s.source==='published')return t('zveřejnil {who} · {when}',{who:s.publishedBy||'API',when:stamp(s.publishedAt)});
+ if(s.source==='collected')return t('sebráno ze stroje · {when}',{when:stamp(m.collectedAt)});
+ return t('z konfigurace webu');
+}
+function stackSection(m){
+ if(m.stack)return section(t('Runtime stack'),stackSource(m),stackGrid(m));
+ return section(t('Runtime stack'),null,emptyState({icon:'▤',title:t('Runtime stack zatím není'),
+  body:t('Vrstvený diagram toho, co na stroji běží: od API, které volají klienti, přes routery a servery modelů až po čip. Zveřejní ho agent, který stroj zná.'),
+  agentPrompt:t('Popiš runtime stack stroje „{id}“ v Home Hubu. Připoj se přes MCP klíčem servisního účtu se scopes read a home:write. Zjisti, co na stroji běží (brány a API, llama-swap, Ollama, LM Studio, llama.cpp, vLLM a podobně, na jakých portech, s jakými modely) a zveřejni to nástrojem runtime_publish: vrstvy input, tool, runtime, engine, hardware, jeden sloupec na rodinu enginu. Nezapisuj žádná hesla, tokeny ani klíče. Nakonec výsledek ověř nástrojem machine_list s runtime: true.',{id:m.id})}));
+}
+
+// --- machine page ------------------------------------------------------------------------------
 const RANGES={'30m':'30 min','7d':'7 dní','30d':'30 dní','6m':'6 měsíců'};
-const gb=b=>b==null?null:b>=1e12?`${Math.round(b/1e12)} TB`:`${Math.round(b/1e9)} GB`;
-// Device header: name left, properties right — small labels, highlighted values.
-function deviceProps(m){
- const p=m.props||{};
- const items=[['CPU',p.cpu],['GPU',p.gpu&&p.gpu!=='—'?p.gpu:null],['RAM',p.ramGb!=null?`${p.ramGb} GB`:null],[p.pools?t('Pooly'):'Disk',gb(p.diskTotalBytes)],['IP',m.ip]];
- return el('dl',{class:'dev-props'},items.filter(([,v])=>v).flatMap(([k,v])=>[el('dt',{},k),el('dd',{},String(v))]));
+const ROLES={computer:'počítač',nas:'NAS',router:'router',other:'jiné zařízení'};
+const section=(title,sub,...body)=>el('section',{class:'hv-sec'},el('div',{class:'hv-sec-head'},el('h2',{},title),sub?el('p',{},sub):null),...body.flat().filter(Boolean));
+function sourceBadge(m){
+ if(m.source==='site')return el('span',{class:'hv-badge',title:t('Stroj je zapsaný v local/site.json; přes API a tady v přehledu se nemění.')},t('z konfigurace webu'));
+ const when=m.createdAt?stamp(m.createdAt):'';
+ return el('span',{class:'hv-badge',title:when||null},m.source==='agent'?t('přidal agent {name}',{name:m.createdBy||'API'}):t('přidáno v přehledu'));
 }
-function renderChild(slot,machine){
- disposeCharts();
- const thermo=machine.kind==='thermo';
- const remove=machine.added&&canEdit?el('button',{type:'button',class:'hh-quiet dev-remove',onclick:async e=>{const b=e.currentTarget;b.disabled=true;
-   try{if(await removeDevice(machine)){cache=null;location.hash='#overview';}else b.disabled=false;}catch(err){b.disabled=false;alert(err.message);}}},t('Odebrat zařízení')):null;
- const head=el('div',{class:'dev-head'},
-  el('div',{class:'dev-title'},el('a',{href:'#overview',class:'home-back'},t('← přehled')),el('h2',{},machine.name),el('div',{class:'dev-host'},machine.hostname,machine.collectedAt?t(' · sebráno {when}',{when:date(machine.collectedAt)}):''),remove),
-  deviceProps(machine));
- slot.replaceChildren(head);
- if(thermo){
-  const bar=el('div',{class:'rangebar'},...Object.entries(RANGES).map(([r,label])=>el('button',{class:state.range===r?'on':'',onclick:()=>{state.range=r;renderChild(slot,latest(machine.id)||machine);},onmouseenter:()=>void loadHistory(machine.id,r).catch(()=>{})},t(label))));
-  const source=el('span',{class:'src'});
-  const cards=SERIES.map(def=>{const value=el('div',{class:'val'},'–');const sub=el('div',{class:'hc-sub'});const node=el('div',{class:'hc-chart'});
-   return {def,value,sub,node,card:el('div',{class:`hc hc-${def.key}`},el('h4',{},t(def.title)),value,sub,node)};});
+// Machine header: picture and name left, hardware right — small labels, highlighted values.
+function hostProps(m){
+ const p=m.props||{};
+ const items=[['CPU',p.cpu],['GPU',p.gpu&&p.gpu!=='—'?p.gpu:null],['RAM',p.ramGb!=null?`${p.ramGb} GB`:null],[p.pools?t('Pooly'):'Disk',size(p.diskTotalBytes)],['IP',m.ip]].filter(([,v])=>v);
+ return items.length?el('dl',{class:'hv-host-props'},items.map(([k,v])=>el('div',{},el('dt',{},k),el('dd',{},String(v))))):null;
+}
+function volumes(m){
+ if(!m.volumes?.length)return null;
+ return el('div',{class:'hv-volumes'},el('span',{class:'hv-k'},t('Disky')),m.volumes.map(v=>{
+  const pct=v.sizeBytes&&v.usedBytes!=null?Math.min(100,Math.round(v.usedBytes/v.sizeBytes*100)):null;
+  const bar=el('div',{class:`hv-bar${pct!=null&&pct>=90?' hot':''}`,role:'img','aria-label':pct!=null?t('{name}: obsazeno {pct} %',{name:v.name||v.mount,pct}):v.name||v.mount},el('i'));
+  bar.firstChild.style.width=`${pct??0}%`;
+  return el('div',{class:'hv-volume'},el('div',{},el('b',{},v.name||v.mount),el('span',{},`${size(v.usedBytes)??'–'} / ${size(v.sizeBytes)??'–'}${pct!=null?` · ${pct} %`:''}`)),bar);}));
+}
+function services(m){
+ if(m.kind!=='nas'||!m.services?.length)return null;
+ return el('div',{class:'hv-services'},el('span',{class:'hv-k'},t('Služby')),el('div',{class:'hv-chips'},m.services.map(s=>el('span',{class:`hv-status ${s.status==='reachable'?'ok':'dim'}`},el('i',{'aria-hidden':'true'}),s.name||s.id))));
+}
+// What must be drawn again when it changes; anything else is refreshed in place.
+const hostShape=m=>[m.name,hostLine(m),m.telemetry?.state,m.telemetry?.reason,m.hash||'',m.image||m.picture||'',Boolean(m.stack),m.stack?.source,m.stack?.hash||'',m.runtimes?JSON.stringify(m.runtimes).length:0,canEdit].join('|');
+function renderChild(slot,machine,{repaint:again,focus}={}){
+ disposeCharts();childCards=null;
+ const meta=cache?.telemetry;
+ const reload=()=>load().then(()=>{built=false;again?.();}).catch(()=>{});
+ const edit=part=>openEditDevice({machine,meta,focus:part,onSaved:reload});
+ const actions=machine.added&&canEdit?el('div',{class:'ui-head-actions'},
+  el('button',{type:'button',class:'ui-button',onclick:()=>edit()},t('Upravit zařízení')),
+  el('button',{type:'button',class:'ui-button hv-danger',onclick:async e=>{const b=e.currentTarget;b.disabled=true;
+    try{if(await removeDevice(machine)){cache=null;historyCache.clear();location.hash='#overview';}else b.disabled=false;}catch{b.disabled=false;}}},t('Odebrat zařízení'))):null;
+ const head=el('header',{class:'hv-host-head'},
+  el('a',{href:'#overview',class:'hv-back'},t('← přehled')),
+  el('div',{class:'hv-host-main'},art(machine,'hv-host-art'),
+   el('div',{class:'hv-host-title'},el('h1',{},machine.name),el('p',{class:'hv-host'},hostLine(machine)||' '),
+    el('div',{class:'hv-badges'},statusPill(machine),el('span',{class:'hv-badge'},t(ROLES[machine.role]||ROLES.other)),sourceBadge(machine),
+     machine.collectedAt?el('span',{class:'hv-badge'},t('sebráno {when}',{when:date(machine.collectedAt)})):null)),
+   actions),
+  hostProps(machine));
+ const notice=telemetryNotice(machine,meta,{onConnect:machine.added&&canEdit?()=>edit('telemetry'):null});
+ const telemetry=[notice];
+ if(hasReadings(machine)){
+  const bar=el('div',{class:'hv-ranges',role:'group','aria-label':t('Období grafů')},...Object.entries(RANGES).map(([r,label])=>el('button',{type:'button',class:state.range===r?'on':'','aria-pressed':String(state.range===r),
+   onclick:()=>{state.range=r;renderChild(slot,latest(machine.id)||machine,{repaint:again});},onmouseenter:()=>void loadHistory(machine.id,r).catch(()=>{})},t(label))));
+  const source=el('span',{class:'hv-source'});
+  const cards=SERIES.map(def=>{const value=el('div',{class:'hv-val'},'–'),sub=el('div',{class:'hv-chart-sub'}),node=el('div',{class:'hv-chart'});
+   // Two lines in one chart (memory and what the GPU holds of it) need a legend; one line is named by the title.
+   const legend=def.extra?el('div',{class:'hv-chart-legend'},el('span',{class:`key-${def.key}`},el('i',{'aria-hidden':'true'}),t(def.title).split(' ·')[0]),el('span',{class:'key-gpu'},el('i',{'aria-hidden':'true'}),t(def.extra.name))):null;
+   return {def,value,sub,node,card:el('article',{class:`hv-card key-${def.key}`},el('h3',{},el('i',{'aria-hidden':'true'}),t(def.title)),value,sub,legend,node)};});
   childCards=cards;
-  slot.append(el('div',{class:'dev-bar'},bar,source),el('div',{class:'home-charts'},cards.map(c=>c.card)));
+  telemetry.push(el('div',{class:'hv-chartbar'},bar,source),el('div',{class:'hv-charts'},cards.map(c=>c.card)),volumes(machine));
   const gen=++viewGen;
   loadHistory(machine.id,state.range).then(h=>{if(gen!==viewGen)return;const since=h.coverageSeconds?new Date(Date.now()-h.coverageSeconds*1000):null;
-   source.textContent=`${t(h.source||'')}${h.complete===false&&since?t(' · data teprve od {when}',{when:new Intl.DateTimeFormat(locale(),{day:'numeric',month:'numeric',hour:'2-digit',minute:'2-digit',timeZone:timeZone()}).format(since)}):''}`;return renderCharts(cards,h,state.range,machine.quad||{});})
-   .catch(()=>source.textContent=t('Historie nedostupná.'));
- }else slot.append(el('div',{class:'src dev-note'},machine.kind==='other'?t('Přidané zařízení bez Thermo: zatím jen dlaždice s údaji.'):machine.id==='nas'?t('Živé metriky NAS (CPU, RAM, teploty) zatím nesbíráme — přijde collector pro TrueNAS.'):t('Router zatím nemá živý collector; čísla jsou ze sběru.')));
- slot.append(stackGrid(machine));
+   source.textContent=`${t(h.source||'')}${h.complete===false&&since?t(' · data teprve od {when}',{when:stamp(since.toISOString())}):''}`;return renderCharts(cards,h,state.range,machine.quad||{});})
+   .catch(()=>{source.textContent=t('Historie nedostupná.');});
+ }else if(machine.kind==='router'){
+  const q=machine.quad;
+  telemetry.push(el('p',{class:'hv-note'},t('Router nemá telemetrického agenta: počty klientů dodává adaptér routeru.')),q?cells([[t('Klienti'),q.clients],['Wi-Fi',q.wifi]]):null);
+ }else telemetry.push(services(machine));
+ slot.replaceChildren(head,
+  section(t('Telemetrie'),hasReadings(machine)?t('Živá čísla a historie z agenta {name}.',{name:meta?.agent||'Thermo'}):null,telemetry),
+  stackSection(machine),
+  machine.kind==='router'?null:section(t('Lokální LLM runtimy'),machine.runtimes?null:t('Místo pro to, co o runtimech na stroji ohlásí telemetrický agent.'),runtimesSection(machine,meta)));
+ slot.dataset.shape=hostShape(machine);
+ // The router's machine page ends with the adapter's census and health (router-view.js, module "router").
+ if(machine.kind==='router')import('./router-view.js').then(v=>{if(slot.isConnected)slot.append(v.routerPanel());}).catch(()=>{});
+ if(focus)slot.querySelector('h1')?.focus?.();
 }
-function renderHome(){
- ensureStyles();
- if(!cache)return el('div',{class:'src'},t('Načítám…'));
- const slot=el('div',{id:'home-slot',class:'home-page'},
-  el('div',{class:'home-tiles'},cache.machines.map(m=>tile(m))));
- return slot;
-}
-let childCards=null,viewGen=0;
+let childCards=null,viewGen=0,built=false;
 const latest=id=>cache?.machines.find(x=>x.id===id);
-// Detail page refresh: new numbers into the existing chart instances (no rebuild, no jump).
-function refreshChild(machine){
- if(!childCards)return;
- const gen=viewGen,cards=childCards,range=state.range;
- loadHistory(machine.id,range,true).then(h=>{if(gen!==viewGen)return;return renderCharts(cards,h,range,machine.quad||{},{keep:true});}).catch(()=>{});
+// Machine page refresh: new numbers into the existing chart instances (no rebuild, no jump).
+function refreshChild(slot,machine,again){
+ if(slot.dataset.shape!==hostShape(machine)){renderChild(slot,machine,{repaint:again});return;}
+ slot.querySelector('.hv-host-head .hv-status')?.replaceWith(statusPill(machine));
+ if(childCards){const gen=viewGen,cards=childCards,range=state.range;
+  loadHistory(machine.id,range,true).then(h=>{if(gen!==viewGen)return;return renderCharts(cards,h,range,machine.quad||{},{keep:true});}).catch(()=>{});}
  // Services/models change while the page is open: rebuild the stack from the latest data
  // (selection kept, no panel animation).
- const old=document.querySelector('#stack-slot');if(old)old.replaceWith(stackGrid(machine));
+ const old=document.querySelector('#hv-stack-slot');if(old&&machine.stack)old.replaceWith(stackGrid(machine));
 }
-function emptyOverview(){
- return emptyState({icon:'◇',title:t('Zatím tu není žádný stroj'),
-  body:t('Přehled ukazuje stroje z konfigurace webu a zařízení přidaná přímo tady.'),
-  steps:[t('Zkopíruj config/site.example.json do local/site.json a vyplň název, síť a stroje.'),t('Restartuj Home Hub.'),t('Nebo přidej zařízení tlačítkem Přidat zařízení. Živá čísla dodá aplikace Thermo, pokud na něm běží.')],
-  agentPrompt:t('Nastav tenhle Home Hub. Přečti docs/plugins.md a config/site.example.json, zeptej se mě na název webu, síť (CIDR) a stroje (název, hostname, IP, role), zapiš local/site.json a ověř ho spuštěním npm test. Žádná hesla ani tokeny do souboru nepatří.'),
-  mcpSnippet:true});
+
+// --- overview ----------------------------------------------------------------------------------
+// A hub without machines: what belongs here and the two ways to fill it (by hand, or through an agent).
+function emptyOverview(add){
+ const name=cache?.telemetry?.agent||'Thermo';
+ return emptyState({icon:'◇',title:t('Vítej v Home Hubu. Přehled je zatím prázdný'),
+  body:t('Přehled ukazuje stroje tvé sítě jako dlaždice: stav, parametry a s telemetrickým agentem i živé CPU, GPU, paměť, příkon a teploty. Každý stroj má stránku s grafy a runtime stackem. Naplnit ho jde dvěma způsoby.'),
+  steps:[canEdit?t('Ručně: tlačítkem Přidat zařízení zadej název, adresu a vyber obrázek. Živá čísla připojíš kdykoli později.'):t('Ručně: zařízení přidává účet s právem zápisu tlačítkem Přidat zařízení.'),
+   t('Přes agenta: v Uživatelé a API založ servisní účet se scopes read a home:write, připoj kódovacího agenta přes MCP (níže) a dej mu zadání.'),
+   t('Živé metriky jsou volitelné: dodává je agent {name}, který běží na každém stroji. Dlaždice bez něj řekne, jak ho nainstalovat.',{name})],
+  agentPrompt:t('Naplň přehled tohoto Home Hubu. Připoj se přes MCP klíčem servisního účtu se scopes read a home:write. Nejdřív zavolej machine_list: uvidíš, co v přehledu je, jaké obrázky a role jsou k dispozici a do jakých sítí musí IP adresy patřit. Zeptej se mě, jaké stroje mám (název, hostname, IP, role: computer, nas, router nebo other, CPU, GPU, RAM), a každý založ nástrojem machine_upsert s vhodným obrázkem. Ke stroji, na kterém běží lokální AI, zveřejni runtime stack nástrojem runtime_publish (vrstvy input, tool, runtime, engine, hardware). Do žádného pole nepiš hesla, tokeny ani klíče. Nakonec zavolej machine_list a shrň, co jsi přidal.'),
+  mcpSnippet:true,
+  actions:[canEdit?{label:t('⊕ Přidat zařízení'),onclick:add,primary:true}:null,canAdmin?{label:t('Uživatelé a API'),href:'#access'}:null]});
 }
+const summary=list=>{const counted=list.filter(m=>m.telemetry?.state!=='not-applicable'),ok=counted.filter(m=>m.telemetry?.state==='ok').length;
+ return `${tp(list.length,'{n} stroj|{n} stroje|{n} strojů')} · ${t('telemetrie běží na {ok} z {all}',{ok,all:counted.length})}`;};
 export function homeView(machineId,me){
- ensureStyles();editing=false;orderNote='';canEdit=me?.canWrite===true;
- viewGen++;disposeCharts();childCards=null;
- const slot=el('div',{id:'home-slot',class:'home-page'});
- let built=false;
+ editing=false;orderNote='';canEdit=me?.canWrite===true;canAdmin=me?.canAdmin===true;
+ viewGen++;disposeCharts();childCards=null;built=false;
+ const slot=el('div',{id:'home-slot',class:'hv-page'});
+ const loading=text=>el('p',{class:'hv-loading',role:'status'},text);
+ const reload=()=>load().then(()=>{built=false;paint();}).catch(()=>{});
+ const add=()=>openAddDevice({meta:cache?.telemetry,onSaved:reload});
  const paint=()=>{
   notifyShell();
-  if(!cache){slot.replaceChildren(el('div',{class:'src'},t('Načítám data domovské stránky…')));return;}
+  if(!cache){slot.replaceChildren(loading(t('Načítám data domovské stránky…')));return;}
   if(!machineId){
    const list=orderedMachines(cache.machines,orderCache.get()?.order);
-   // A hub without machines yet: say what belongs here and how to add it (reference use of ui.js → emptyState).
-   if(!list.length){slot.replaceChildren(orderBar(),emptyOverview());built=false;return;}
-   const grid=slot.querySelector('.home-tiles');
+   // A hub without machines yet: say what belongs here and how to add it.
+   if(!list.length){const head=pageHeader({eyebrow:t('Domov'),title:t('Přehled'),lead:t('Stroje, jejich stav a živé metriky na jednom místě.')});head.append(headActions());
+    slot.replaceChildren(head,emptyOverview(add));built=false;return;}
+   const grid=slot.querySelector('.hv-tiles');
    const ids=list.map(m=>m.id).join(',')+(editing?'|edit':'');
-   if(built&&grid&&grid.dataset.ids===ids){for(const m of list){const n=grid.querySelector(`[data-id="${m.id}"]`);if(n)updateTile(n,m);}return;}
-   const g=el('div',{class:`home-tiles${editing?' reordering':''}`},list.map((m,i)=>editing?reorderTile(m,i,list):(n=>{n.dataset.id=m.id;return n;})(tile(m))));g.dataset.ids=ids;
-   slot.replaceChildren(orderBar(),g);built=true;return;
+   if(built&&grid&&grid.dataset.ids===ids){
+    const lead=slot.querySelector('.ui-lead');if(lead)lead.textContent=summary(list);
+    if(!editing)for(const m of list){const n=grid.querySelector(`[data-id="${m.id}"]`);if(n)updateTile(n,m);}
+    return;}
+   const g=el('div',{class:`hv-tiles${editing?' reordering':''}`},list.map((m,i)=>editing?reorderTile(m,i,list):tile(m)));g.dataset.ids=ids;
+   const head=pageHeader({eyebrow:t('Domov'),title:t('Přehled'),lead:summary(list)});head.append(headActions());
+   slot.replaceChildren(head,...[orderBar()].filter(Boolean),g);built=true;return;
   }
   const machine=cache.machines.find(m=>m.id===machineId);
-  if(!machine){slot.replaceChildren(el('div',{class:'src'},t('Neznámý stroj.')));return;}
-  if(built&&slot.querySelector('.dev-head')){refreshChild(machine);return;}
+  if(!machine){slot.replaceChildren(emptyState({icon:'◌',title:t('Neznámý stroj.'),body:t('Stroj s tímhle id v přehledu není. Mohl být odebrán.'),actions:[{label:t('← přehled'),href:'#overview',primary:true}]}));return;}
+  if(built&&slot.querySelector('.hv-host-head')){refreshChild(slot,machine,paint);return;}
   const hash=(location.hash.split('/')[1]||'').replace(/[^a-z0-9_-]/g,'');
   state.blk=hash||null;
-  renderChild(slot,machine);built=true;
+  renderChild(slot,machine,{repaint:paint});built=true;
  };
  repaint=paint;
- // Reorder mode (Přehled → Upravit pořadí): drag and drop with a mouse, ↑/↓ buttons for keyboard,
+ // Reorder mode: drag and drop with a mouse; ↑/↓ buttons, or the arrow keys on a focused tile, for keyboard,
  // touch and phones. Every move shows at once and is saved one at a time, newest wins; a failed save goes
  // back to the last saved order (home-order.js).
- const rebuild=focus=>{built=false;paint();if(focus)(slot.querySelector(`[data-move="${focus}"]:not([disabled])`)||slot.querySelector(`[data-move^="${focus.split(':')[0]}:"]:not([disabled])`))?.focus();};
+ const rebuild=focus=>{built=false;paint();if(!focus)return;
+  const target=focus.startsWith('tile:')?slot.querySelector(`.hv-tile[data-id="${focus.slice(5)}"]`):slot.querySelector(`[data-move="${focus}"]:not([disabled])`)||slot.querySelector(`[data-move^="${focus.split(':')[0]}:"]:not([disabled])`);
+  target?.focus();};
  const commit=async(order,focus)=>{
   const gen=viewGen,saving=orderSaver.save(order);orderNote='Ukládám…';rebuild(focus);
   const outcome=await saving;
@@ -340,24 +405,32 @@ export function homeView(machineId,me){
   if(gen!==viewGen||!slot.isConnected){if(outcome==='failed')repaint?.();return;}
   if(outcome==='failed'){orderNote='Uložení selhalo, pořadí zůstalo původní.';rebuild(focus);return;}
   orderNote=order.length?'Uloženo pro tvůj účet.':'Zpět na výchozí pořadí.';
-  const note=slot.querySelector('.home-order-note');if(note)note.textContent=t(orderNote);
+  const note=slot.querySelector('.hv-order-note');if(note)note.textContent=t(orderNote);
  };
+ // Top right of the header: Add device and Reorder; in reorder mode the bar below takes over.
+ function headActions(){
+  const saved=orderCache.get(),button=(label,onclick,cls='')=>el('button',{type:'button',class:`ui-button${cls}`,onclick},label);
+  return el('div',{class:'ui-head-actions'},editing?null:[
+   saved?.available&&cache.machines.length>1?button(t('⇅ Upravit pořadí'),()=>{editing=true;orderNote='Přetáhni dlaždici myší, nebo ji posuň šipkami ↑ ↓.';rebuild();slot.querySelector('[data-move]:not([disabled])')?.focus();}):null,
+   canEdit?button(t('⊕ Přidat zařízení'),add,' primary'):null]);
+ }
  function orderBar(){
+  if(!editing)return null;
   const saved=orderCache.get();
-  // ⊕ Přidat zařízení sits next to the order button; a saved device reloads the tiles.
-  const add=canEdit&&!editing?el('button',{type:'button',class:'hh-quiet',onclick:()=>openAddDevice({onSaved:()=>{load().then(()=>{built=false;paint();}).catch(()=>{});}})},t('⊕ Přidat zařízení')):null;
-  if(!saved?.available)return el('div',{class:'home-orderbar'},add);
-  if(!editing)return el('div',{class:'home-orderbar'},add,el('button',{type:'button',class:'hh-quiet',onclick:()=>{editing=true;orderNote='Přetáhni dlaždici myší, nebo ji posuň šipkami ↑ ↓.';rebuild();slot.querySelector('[data-move]:not([disabled])')?.focus();}},t('⇅ Upravit pořadí')));
-  return el('div',{class:'home-orderbar on'},el('span',{class:'home-order-note',role:'status'},t(orderNote)),
-   el('button',{type:'button',class:'hh-quiet',disabled:saved.order==null||saved.order.join()===cache.machines.map(m=>m.id).join()?'':null,onclick:()=>commit([],null)},t('Výchozí pořadí')),
-   el('button',{type:'button',class:'hh-quiet hh-done',onclick:()=>{editing=false;orderNote='';rebuild();}},t('Hotovo')));
+  return el('div',{class:'hv-orderbar'},el('span',{class:'hv-order-note',role:'status'},t(orderNote)),
+   el('button',{type:'button',class:'ui-button',disabled:saved?.order==null||saved.order.join()===cache.machines.map(m=>m.id).join()?'':null,onclick:()=>commit([],null)},t('Výchozí pořadí')),
+   el('button',{type:'button',class:'ui-button primary',onclick:()=>{editing=false;orderNote='';rebuild();}},t('Hotovo')));
  }
  function reorderTile(m,i,list){
   const ids=list.map(x=>x.id),last=list.length-1;
-  const move=(dir,label,to,off)=>el('button',{type:'button',class:'tile-move','data-move':`${m.id}:${dir}`,'aria-label':`${label}: ${m.name}`,title:label,disabled:off?'':null,onclick:()=>commit(moveId(ids,m.id,to),`${m.id}:${dir}`)},dir==='up'?'↑':'↓');
-  const card=tile(m),box=el('div',{class:`${card.className} reorder`,draggable:'true','data-id':m.id,'aria-label':`${i+1}. ${m.name}`});
+  const move=(dir,label,to,off)=>el('button',{type:'button',class:'hv-move','data-move':`${m.id}:${dir}`,'aria-label':`${label}: ${m.name}`,title:label,disabled:off?'':null,onclick:()=>commit(moveId(ids,m.id,to),`${m.id}:${dir}`)},dir==='up'?'↑':'↓');
+  const card=tile(m),box=el('div',{class:`${card.className} reorder`,draggable:'true',tabindex:'0','data-id':m.id,role:'group','aria-label':t('{pos}. {name} — šipky mění pořadí',{pos:i+1,name:m.name})});
   box.append(...card.childNodes);
-  box.prepend(el('div',{class:'tile-order'},el('span',{class:'tile-pos'},`${i+1}.`),move('up',t('Posunout dopředu'),i-1,i===0),move('down',t('Posunout dozadu'),i+1,i===last)));
+  box.prepend(el('div',{class:'hv-order'},el('span',{class:'hv-pos'},`${i+1}.`),move('up',t('Posunout dopředu'),i-1,i===0),move('down',t('Posunout dozadu'),i+1,i===last)));
+  // Arrow keys on the tile itself: left/up = earlier, right/down = later; Home and End jump to the ends.
+  box.addEventListener('keydown',e=>{if(e.target!==box)return;
+   const to={ArrowLeft:i-1,ArrowUp:i-1,ArrowRight:i+1,ArrowDown:i+1,Home:0,End:last}[e.key];if(to===undefined)return;e.preventDefault();
+   if(to<0||to>last||to===i)return;commit(moveId(ids,m.id,to),`tile:${m.id}`);});
   box.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',m.id);e.dataTransfer.effectAllowed='move';box.classList.add('dragging');});
   box.addEventListener('dragend',()=>{box.classList.remove('dragging');slot.querySelectorAll('.drop-before,.drop-after').forEach(n=>n.classList.remove('drop-before','drop-after'));});
   // One column (phone): above/below the middle; a grid: left/right of it.
@@ -365,11 +438,12 @@ export function homeView(machineId,me){
   box.addEventListener('dragover',e=>{e.preventDefault();e.dataTransfer.dropEffect='move';const a=after(e);box.classList.toggle('drop-after',a);box.classList.toggle('drop-before',!a);});
   box.addEventListener('dragleave',()=>box.classList.remove('drop-before','drop-after'));
   box.addEventListener('drop',e=>{e.preventDefault();const id=e.dataTransfer.getData('text/plain');box.classList.remove('drop-before','drop-after');if(!ids.includes(id)||id===m.id)return;
-   const rest=ids.filter(x=>x!==id),at=rest.indexOf(m.id)+(after(e)?1:0);commit(moveId(ids,id,at),null);});
+   const rest=ids.filter(x=>x!==id),at=rest.indexOf(m.id)+(after(e)?1:0);commit(moveId(ids,id,at),`tile:${id}`);});
   return box;
  }
  const orderReady=machineId||orderCache.get()?null:loadOrder();
- if(cache&&!orderReady)paint();else Promise.all([cache||load(),orderReady]).then(()=>{paint();arm();}).catch(()=>{slot.replaceChildren(el('div',{class:'src'},t('Data nejsou dostupná.')));});
+ const failed=()=>slot.replaceChildren(emptyState({icon:'⚠',title:t('Data nejsou dostupná.'),body:t('Home Hub teď přehled nevrátil. Zkus to znovu.'),actions:[{label:t('Zkusit znovu'),onclick:()=>{slot.replaceChildren(loading(t('Načítám data domovské stránky…')));load().then(paint).catch(failed);},primary:true}]}));
+ if(cache&&!orderReady)paint();else{slot.replaceChildren(loading(t('Načítám data domovské stránky…')));Promise.all([cache||load(),orderReady]).then(()=>{paint();arm();}).catch(failed);}
  // Browser refresh follows the hub's Thermo pull interval (15/30/60 s).
  // Fetch right after the hub's next Thermo pull (lastPollAt + interval + 1.5 s), so data shown is
  // at most ~interval old instead of up to two intervals when the two clocks drift apart.

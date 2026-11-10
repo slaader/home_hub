@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 320" role="img" aria-label="Printer">
+<title>Printer</title>
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1c1a29"/><stop offset="1" stop-color="#0e0d15"/></linearGradient>
+<radialGradient id="glow" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#b79cff" stop-opacity=".2"/><stop offset="1" stop-color="#b79cff" stop-opacity="0"/></radialGradient>
+<linearGradient id="body" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34313f"/><stop offset="1" stop-color="#1d1b28"/></linearGradient>
+</defs>
+<rect width="480" height="320" fill="url(#bg)"/>
+<ellipse cx="240" cy="152" rx="220" ry="136" fill="url(#glow)"/>
+<ellipse cx="240" cy="266" rx="140" ry="9" fill="#000" opacity=".4"/>
+<g stroke-linecap="round" stroke-linejoin="round">
+<path d="M176 148V84q0-8 8-8h112q8 0 8 8v64" fill="#262431" stroke="#403d52" stroke-width="2"/>
+<path d="M196 104h88M196 120h88" stroke="#403d52" stroke-width="3"/>
+<rect x="124" y="146" width="232" height="84" rx="14" fill="url(#body)" stroke="#403d52" stroke-width="2"/>
+<rect x="160" y="196" width="160" height="58" rx="6" fill="#0e0d15" stroke="#403d52" stroke-width="2"/>
+<path d="M180 216h120M180 232h84" stroke="#a39fb5" stroke-width="3"/>
+<circle cx="330" cy="170" r="4" fill="#62d6a1"/><path d="M146 170h60" stroke="#b79cff" stroke-width="4"/>
+</g>
+</svg>
