@@ -1,0 +1,19 @@
+services:
+  hub:
+    build: .
+    restart: unless-stopped
+    init: true
+    environment:
+      ORIGIN: "${ORIGIN:?Set ORIGIN to the HTTPS address of your reverse proxy}"
+    ports:
+      - "127.0.0.1:8781:8781"
+    volumes:
+      - hub-data:/app/data
+      - hub-private:/app/private
+      - hub-state:/app/state
+    stop_grace_period: 30s
+
+volumes:
+  hub-data:
+  hub-private:
+  hub-state:

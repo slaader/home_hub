@@ -1,20 +1,39 @@
 # Home Hub
 <!-- home-hub:public-readme -->
 
-One page for a home network: which machines there are and how they are doing, what runs where and what
-depends on what, who may reach it, and a small tracker for your own projects.
+Home Hub is a self-hosted hub for the machines of a home: see how each machine is doing, what it runs,
+what depends on it, and what needs attention. It brings live telemetry, a services catalog, inventory,
+software versions, security checks and local AI runtimes together with a project tracker and review space.
 
-It is one Node process with no third-party dependencies, a plain-JavaScript front end, and an MCP endpoint, so
-your coding agent can read the same data and keep it up to date. A new hub starts empty. You describe your
-home in one file, and an agent fills in the rest.
+It is built so your AI agent can do half the work. Agents read and update the same inventory through the
+HTTP API and MCP endpoint, add machines and their runtime stacks, maintain tickets, and publish work for
+you to review. **Integrations → Machines** shows what is connected on each machine and hands you a prompt
+for your own agent to set up the missing pieces. You decide what access it gets through scoped service accounts.
 
-<!-- Screenshots: put the pictures in docs/images/ and link them here.
-     Suggested: overview (dark), inventory map (light), getting started, command palette, phone. -->
-> Screenshots are coming. Until then, start it: an empty hub shows what goes where.
+One Node process, zero third-party npm dependencies, a vanilla-JavaScript UI, and files you can back up.
+A fresh public edition starts empty, with no household configuration or plugins.
+
+## Screenshots
+
+Examples from a configured hub, with identifying site and network labels replaced. Machine artwork and
+project content are examples, not data bundled with a fresh installation.
+
+**Overview — machine status, live telemetry and services at a glance.**
+
+![Home Hub overview with six machine cards and live telemetry](docs/screenshots/overview.jpg)
+
+**Projects — work, activity and the next release in one place.**
+
+![Project tracker showing three projects and their progress](docs/screenshots/projects.jpg)
+
+**Review — compare 3D variants, play animations and leave decisions for your agent.**
+
+![Side-by-side 3D character review with linked views and animation controls](docs/screenshots/review-3d.jpg)
 
 ## Contents
 
 - [Quick start](#quick-start)
+- [Docker](#docker)
 - [Connect your agent](#connect-your-agent)
 - [What works out of the box](#what-works-out-of-the-box)
 - [Make it yours](#make-it-yours)
@@ -33,15 +52,18 @@ home in one file, and an agent fills in the rest.
 
 ## Quick start
 
-You need Node 22.13 or newer. There is nothing to install.
+You need Node 22.13 or newer (use a current patched Node 22+ release). There is no `npm install` step.
 
 ```sh
-git clone <this repository> home-hub && cd home-hub
+# Copy the clone URL from this repository’s Code button.
+git clone <repository-url> home-hub
+cd home-hub
 node scripts/setup.mjs                          # creates the administrator sign-in in private/
 LOCAL_PREVIEW=1 PORT=8799 node server/index.mjs
 ```
 
-Open http://127.0.0.1:8799 and sign in as `admin`. A new hub opens on **Getting started**, a checklist that
+Open http://127.0.0.1:8799 and sign in with the name you chose (default `admin`). A new hub opens on
+**Getting started**, a checklist that
 ticks itself as you go: connect an agent, add your machines, fill the inventory. Each step shows what to do
 and has a ready prompt to hand to an agent. [docs/getting-started.md](docs/getting-started.md) walks through
 the same steps in more detail.
@@ -51,6 +73,54 @@ owner and reload: no restart is needed.
 
 `LOCAL_PREVIEW=1` serves plain HTTP on this machine only. To reach the hub from the rest of your network, see
 [Running it for real](#running-it-for-real).
+
+## Docker
+
+Build it yourself from this checkout; no registry image, CI or npm install is involved. The
+[Dockerfile](Dockerfile) pins `node:22.23.5-alpine3.24`, includes Git, OpenSSH client tools, rsync and Python
+for optional collectors, and runs the server as the image's `node` user (UID/GID 1000).
+
+```sh
+# Set this to the HTTPS address served by your reverse proxy.
+export ORIGIN=https://hub.example.lan
+docker compose up -d --build
+docker compose exec hub node scripts/setup.mjs
+```
+
+Open your HTTPS address and sign in. Until the setup command creates the owner, the hub shows instructions
+for finishing setup. There is no default password. Compose publishes HTTP on **127.0.0.1:8781** of the Docker
+host: point a TLS reverse proxy there. `ORIGIN` must exactly match the browser's HTTPS origin, including a
+non-default port. Secure sign-in cookies require HTTPS; this Compose setup is for a proxy, not an HTTP preview.
+If the proxy is another container, attach it to the Compose network and use `hub:8781` as its upstream.
+
+The container listens on `0.0.0.0:8781`, uses `HTTP_BEHIND_PROXY=1`, and checks `/healthz` with Node (no curl
+needed). Named volumes keep `/app/data`, `/app/private` and `/app/state`; `STATE_DIR=/app/state` deliberately
+separates application state from collector output. Back up **all three volumes**, with the hub stopped for a
+consistent SQLite copy. `docker compose down` preserves them; `down -v` deletes them.
+
+The image excludes `local/`, git history, credentials and runtime files. To supply a site and plugins, create
+`local/` on the host and add this mount to the `hub` service in a Compose override:
+
+```yaml
+services:
+  hub:
+    volumes:
+      - ./local:/app/local:ro
+```
+
+A read-only overlay supports configuration, images and plugins. To edit the software watch list through the
+API, make that overlay writable by UID 1000; that list lives in `local/software-watch.json`. Bind-mounted
+state directories must also be writable by UID 1000 (named volumes are initialized with the correct owner).
+Never bake your overlay or credentials into a distributable image.
+
+Optional collectors need network and SSH access from the container. A loopback runtime address means the
+container itself; use an address reachable from it. Collectors that need macOS tools should run on a Mac and
+publish their snapshots into the data volume. Rebuild and restart to update:
+
+```sh
+git pull --ff-only
+docker compose up -d --build
+```
 
 ## Connect your agent
 
@@ -168,10 +238,9 @@ own order, by dragging or with the arrow keys on a focused tile.
   its login in Edit device → Telemetry.
 - **Pictures**: ten generic ones are built in (`public/images/generic/*.svg`). Your own tile pictures go in
   `local/images/home/<machine id>.jpg` and win.
-- **Local LLM runtimes**: a machine page gets this section only when a plugin provides `home.runtimes` for
-  that machine ([docs/plugins.md](docs/plugins.md)): one card per runtime with its version, state, models
-  and a few figures. Core reads no runtime itself and the telemetry agent does not report them, so without
-  a provider there is no such section. A telemetry agent with runtime adapters could become a provider later.
+- **Local LLM runtimes**: the hub reads reachable runtime endpoints directly, or a plugin supplies
+  `home.runtimes`: one card per runtime with its version, state, models and reported figures. Configure
+  `runtimes[]` in `site.json` or add an endpoint through the API. The telemetry agent does not report runtimes.
 - **State**: added machines in `state/home/devices.json`, published stacks in `state/home/runtimes.json`.
 
 ### Inventory map, table and services catalog

@@ -1,0 +1,23 @@
+.git
+.git/**
+.gitignore
+.claude
+.codex
+local
+private
+data
+state
+router-private
+deploy
+node_modules
+**/node_modules
+**/.DS_Store
+**/__pycache__
+**/*.pem
+**/*.key
+**/.env
+**/.env.*
+*.log
+home-hub-preview.png
+# A private checkout's README can include deployment-only sections.
+README.md
