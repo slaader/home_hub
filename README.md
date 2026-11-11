@@ -28,7 +28,7 @@ project content are examples, not data bundled with a fresh installation.
 
 **Review — compare 3D variants, play animations and leave decisions for your agent.**
 
-![Side-by-side 3D character review with linked views and animation controls](docs/screenshots/review-3d.jpg)
+![Side-by-side 3D character review with linked views and animation controls](docs/screenshots/review-variants.jpg)
 
 ## Contents
 
@@ -187,17 +187,6 @@ agent submits previews of the work where needed.
 | Agent submits variants | `review_publish` / `POST /api/review/publish`. Upload images and other files first with `scripts/review-push.mjs` or `PUT /api/review/blobs/<sha256>?offset=&size=`. |
 | You decide in the hub | Take a variant, leave comments or choose **None of these — redo**. The page saves through `POST /api/review/feedback`. Deliverables that each need approval use `mode: "approve"`. |
 | Agent reads and continues | `review_list` with `feedbackPending: true` / `GET /api/review?feedback=pending` finds feedback; `review_get` / `GET /api/review/sets/<R-n>` reads it. Call `review_publish` again with `set` and `addresses` (the comment IDs answered) for the next round. |
-
-**Six app-icon directions, submitted by a demo agent to an empty public hub.**
-
-![Review showing six app-icon variants side by side in Example Home](docs/screenshots/review-variants.jpg)
-
-**C is selected; a comment on B asks the agent to try its teal palette on C's shape.**
-
-![Review with variant C selected and saved feedback on variant B waiting for the agent](docs/screenshots/review-feedback.jpg)
-
-These screenshots use neutral demo content. [Review guide](docs/review.md) covers pinned comments,
-comparison modes and publishing another round; [API reference](docs/API.md#review) has the endpoints.
 
 ## What works out of the box
 
