@@ -5,6 +5,7 @@ router-private/
 local/
 *.pem
 *.key
+!tests/fixtures/tls-*.key
 node_modules/
 .DS_Store
 __pycache__/

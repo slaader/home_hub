@@ -14,7 +14,9 @@ export const EXCLUDED_DIRS=Object.freeze(['local','private','data','state','rout
 // Written by the export itself (the private README describes this deployment).
 export const EXCLUDED_FILES=Object.freeze(['README.md','edition.json','.gitignore']);
 const IGNORED_NAMES=/^(\.DS_Store|__pycache__|.*\.pem|.*\.key|home-hub-preview\.png)$/;
-const excluded=(rel,generated=false)=>EXCLUDED_DIRS.some(d=>rel===d||rel.startsWith(d+'/'))||(!generated&&EXCLUDED_FILES.includes(rel))||rel.split('/').some(part=>IGNORED_NAMES.test(part));
+// Throwaway TLS keys the core tests need (tests/fixtures/tls-README.md); every other *.key stays out.
+export const FIXTURE_KEYS=/^tests\/fixtures\/tls-[a-z]+\.key$/;
+const excluded=(rel,generated=false)=>!FIXTURE_KEYS.test(rel)&&(EXCLUDED_DIRS.some(d=>rel===d||rel.startsWith(d+'/'))||(!generated&&EXCLUDED_FILES.includes(rel))||rel.split('/').some(part=>IGNORED_NAMES.test(part)));
 
 // Tracked files when this is a git checkout (untracked scratch files never leave); every file otherwise
 // (an exported tree is not a repository).
