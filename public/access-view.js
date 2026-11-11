@@ -340,9 +340,9 @@ function devicesTab(status){
    el('span',{class:'ax-avatar','aria-hidden':'true'},'▯'),el('div',{class:'ax-row-main'},el('div',{class:'ax-row-title'},el('b',{},d.name)),el('div',{class:'ax-row-sub'},el('code',{},'hh_…'))),
    el('dl',{class:'ax-row-meta'},el('div',{},el('dt',{},t('Přidáno')),el('dd',{},time(d.createdAt))),el('div',{},el('dt',{},t('Naposledy použito')),el('dd',{},d.lastUsedAt?time(d.lastUsedAt,true):t('zatím nepoužito')))),
    el('div',{class:'ax-row-actions'},button(t('Odebrat'),()=>revoke(d),'small danger'))))):
-  emptyState({icon:'▯',title:t('Žádné zařízení nemá přístup'),body:t('Nativní aplikace se přihlásí jménem a heslem a nechá si vystavit vlastní token. Tady ho pak uvidíš a můžeš odebrat.'),
+  emptyState({icon:'key',title:t('Žádná aplikace není přihlášená'),body:t('Nativní aplikace se přihlásí jménem a heslem a nechá si vystavit vlastní token. Tady ho pak uvidíš a můžeš odebrat.'),
    steps:[t('V aplikaci zadej adresu tohoto Home Hubu a přihlas se.'),t('Aplikace si uloží token do klíčenky zařízení; heslo si nepamatuje.'),t('Ztracené zařízení tady odebereš jedním klepnutím.')]}));
- return el('div',{class:'ax-stack'},sectionHead(t('Zařízení'),null),el('p',{class:'ax-note'},...rich(t('Nativní aplikace s dlouhodobým tokenem {token}. Token smí všechno jako Admin kromě správy uživatelů, rolí a klíčů a platí, dokud ho neodebereš.'),{token:el('code',{},'hh_…')})),list.host);
+ return el('div',{class:'ax-stack'},sectionHead(t('Přihlášení aplikací'),null),el('p',{class:'ax-note'},...rich(t('Nativní aplikace s dlouhodobým tokenem {token}. Token smí všechno jako Admin kromě správy uživatelů, rolí a klíčů a platí, dokud ho neodebereš.'),{token:el('code',{},'hh_…')}),' ',t('Stroje (počítače, NAS, server) jsou v Integracích → Stroje.')),list.host);
 }
 
 // ---- audit ------------------------------------------------------------------------------------
@@ -481,7 +481,7 @@ function connectTab(admin){
 let tab='people',openTab=()=>{};
 export function accessView(me){
  const admin=me?.canAdmin===true;
- const tabs=admin?[['people',t('Lidé')],['roles',t('Role a oprávnění')],['accounts',t('Servisní účty')],['keys',t('API klíče')],['devices',t('Zařízení')],['connect',t('Připojení a API')],['audit',t('Audit')]]:[['connect',t('Připojení a API')]];
+ const tabs=admin?[['people',t('Lidé')],['roles',t('Role a oprávnění')],['accounts',t('Servisní účty')],['keys',t('API klíče')],['devices',t('Přihlášení aplikací')],['connect',t('Připojení a API')],['audit',t('Audit')]]:[['connect',t('Připojení a API')]];
  if(!tabs.some(([id])=>id===tab))tab=tabs[0][0];
  const statusLine=el('p',{class:'ax-status',role:'status','aria-live':'polite'});
  const status=(text,error=false)=>{statusLine.textContent=text;statusLine.classList.toggle('error',error);};

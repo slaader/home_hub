@@ -12,6 +12,8 @@ import {check,describe} from '../../scripts/check-knowledge.mjs';
 import {createKnowledgeEditor,editInput,entryInput,deleteInput,bulkInput,entryHash,emptyDoc,LIMITS} from '../../scripts/knowledge-edit.mjs';
 import {toolError} from '../mcp.mjs';
 import {inventoryProvenance} from '../provenance.mjs';
+import {inventoryFacet} from '../machine-facet-sources.mjs';
+import {FACETS_POINT} from '../machine-facets.mjs';
 
 const UNSUPPORTED='This hub forwards inventory edits to another machine, and that writer cannot do this yet.';
 const servicesError=e=>[({invalid:400,conflict:409,busy:429})[e.message]||503,'INVENTORY_UPDATE_FAILED',e.message==='conflict'?'The entry changed. Read it again before updating.':'Cannot update the service inventory.'];
@@ -127,6 +129,8 @@ export default {
   {scope:'inventory:write',text:'With inventory:write: inventory_update writes one whole entry, inventory_bulk_upsert several at once (dryRun first), inventory_delete removes one. Each takes the hash you read as base; omit base only to create.'},
  ],
  assets:['inventory-view.js','inventory-data.js','inventory-entry.js','inventory-table.js','inventory-services.js','inventory-rules.js','inventory-versions.js','inventory.css'],
+ // Integrations → Machines: whether the inventory knows the machine and how much runs on it.
+ provides:{[FACETS_POINT]:state=>async machines=>inventoryFacet(machines,(await Promise.resolve().then(()=>state.read()).catch(()=>null))?.entries)},
  nav:[
   {groupKey:'Inventář',hash:'inventory-map',labelKey:'Mapa inventáře',view:'inventory-view.js#inventoryPage',order:20},
   // The services catalog is a view of the inventory page now; its old address stays routable and leads there.

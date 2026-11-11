@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm,readFile,writeFile,mkdir} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {readStore} from './support/sealed.mjs';
 import {createHomeDevices,parseRuntime,machineHash,secretIn,PICTURES,DEVICE_LIMITS} from '../server/home-devices.mjs';
 import {buildHome as build,telemetryFor,runtimesFor,sparkFor,machineList,homeHistoryQuery,TELEMETRY_ADAPTERS,SPARK_WINDOW_SECONDS,SPARK_STEP_SECONDS} from '../server/home-data.mjs';
 import {TELEMETRY_REPO_URL,TELEMETRY_STALE_SECONDS} from '../server/thermo-client.mjs';
@@ -146,7 +147,10 @@ test('telemetry states: not installed, unreachable, stale and ok are told apart'
  // In the payload: every machine carries its state, and the page learns where the agent lives from one constant.
  const home=buildHome({added:[{id:'box',name:'Box',hostname:'box.example.lan',kind:'other',props:{}}].map(d=>({...d,role:'computer',thermoId:null,picture:null,source:'agent',props:{cpu:'',gpu:'',ramGb:null,diskTotalBytes:null}}))});
  // …and which agents the hub can connect a device to: the list the Add device dialog offers.
- assert.deepEqual(home.telemetry,{agent:'Thermo',repoUrl:TELEMETRY_REPO_URL,staleAfterSeconds:180,adapters:[{id:'thermo',name:'Thermo',repoUrl:TELEMETRY_REPO_URL,connect:'account',defaultPort:49286,summary:'CPU, GPU, paměť, příkon, teploty a disky'}]});
+ assert.deepEqual({...home.telemetry,adapters:home.telemetry.adapters.slice(0,2)},{agent:'Thermo',repoUrl:TELEMETRY_REPO_URL,staleAfterSeconds:180,adapters:[{id:'thermo',name:'Thermo',repoUrl:TELEMETRY_REPO_URL,connect:'account',platform:'macos',defaultPort:49286,summary:'CPU, GPU, paměť, příkon, teploty a disky'},
+  {id:'windows',name:'Windows (SSH)',repoUrl:null,connect:'ssh',platform:'windows',defaultPort:22,minIntervalSeconds:30,summary:'CPU a jádra, GPU, paměť, disky a síť přes SSH a PowerShell, bez agenta; teploty a příkon Windows nehlásí'}]});
+ assert.deepEqual(home.telemetry.adapters.map(a=>[a.id,a.platform,a.connect]),[['thermo','macos','account'],['windows','windows','ssh'],['winrm','windows','endpoint'],['node-exporter','linux','endpoint'],['prometheus','linux','endpoint'],['linux-ssh','linux','ssh']]);
+ assert.equal(home.telemetry.adapters.filter(a=>a.recommended).map(a=>a.id).join(),'node-exporter','Node Exporter is the recommended Linux choice');
  home.telemetry.adapters[0].name='changed';assert.equal(TELEMETRY_ADAPTERS[0].name,'Thermo','a payload never hands out the shared list');
  assert.deepEqual(machineList({site:SITE}).telemetry,buildHome({}).telemetry,'machine_list names the same adapters');
  assert.match(TELEMETRY_REPO_URL,/^https:\/\/github\.com\/OWNER\//,'still the placeholder to be filled');
@@ -335,11 +339,11 @@ test('an existing device is connected to Thermo after its login was checked; key
  const ok=await h.post('/api/home/devices/thermo',{id:'mac-mini-2',thermo},h.admin);assert.equal(ok.status,200);
  const device=await ok.json();assert.deepEqual([device.thermoId,device.kind],['mac-mini-2','thermo']);assert.equal(JSON.stringify(device).includes('correct horse'),false);
  assert.deepEqual(added,['mac-mini-2']);assert.equal(logins.at(-1).host,'mini2.example.lan');assert.equal(logins.at(-1).pin,PIN);
- const secrets=JSON.parse(await readFile(path.join(h.dir,'home','thermo-hosts.json'),'utf8'));assert.equal(secrets.hosts[0].id,'mac-mini-2');
+ const secrets=await readStore(path.join(h.dir,'home','thermo-hosts.json'));assert.equal(secrets.hosts[0].id,'mac-mini-2');
  assert.equal((await readFile(path.join(h.dir,'home','devices.json'),'utf8')).includes('correct horse'),false,'the password stays in the 0600 file');
  // Forgetting the login stops the pull and returns the machine to "not installed".
  const off=await h.post('/api/home/devices/thermo',{id:'mac-mini-2',thermo:null},h.admin);assert.equal(off.status,200);assert.equal((await off.json()).thermoId,null);assert.deepEqual(removed,['mac-mini-2']);
- assert.deepEqual(JSON.parse(await readFile(path.join(h.dir,'home','thermo-hosts.json'),'utf8')).hosts,[]);
+ assert.deepEqual((await readStore(path.join(h.dir,'home','thermo-hosts.json'))).hosts,[]);
  // A machine removed through the API takes a stored login along, and only then is the poller told.
  await h.post('/api/home/devices/thermo',{id:'mac-mini-2',thermo},h.admin);
  const list=await (await fetch(h.origin+'/api/home/machines',{headers:agent.headers})).json();

@@ -20,7 +20,7 @@ test('scope table: admin and token routes are never reachable with a key, legacy
 });
 
 test('store: accounts own keys, scopes apply live, disabling or deleting cuts the keys off',async t=>{
- const dir=await mkdtemp(path.join(os.tmpdir(),'hub-sa-store-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const dir=await mkdtemp(path.join(os.tmpdir(),'hub-sa-store-'));t.after(()=>rm(dir,{recursive:true,force:true,maxRetries:10,retryDelay:25}));
  const s=createAccessStore(dir,credentials);
  const {account}=await s.createAccount({name:'agent-studio',description:'Codex on the Studio',scopes:['inventory:write']});
  assert.deepEqual(account.scopes,['read','inventory:write']);

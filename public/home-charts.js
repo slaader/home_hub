@@ -104,7 +104,7 @@ export async function renderCharts(cards,h,range,now={},{keep=false,echarts:give
   value.replaceChildren(fmt(current,def.unit),Object.assign(document.createElement('small'),{textContent:' '+def.unit}));
   const total=def.liveTotal?.(now)??ceiling;
   const g=def.liveGpu?.(now);
-  sub.textContent=def.key==='mem'&&total!=null&&current!=null?t('volno {free} GB · GPU drží {gpu}{active} · max {max} GB',{free:round(total-current,1),gpu:g!=null?round(g,1)+' GB':'– (Thermo < 97)',active:now.gpuMemAlloc!=null&&now.gpuMem!=null?t(' (aktivně {gb})',{gb:round(now.gpuMem/GB,1)}):'',max:fmt(st.max,'GB')}):t('za období: prům. {avg} · max {max} {unit}',{avg:fmt(st.avg,def.unit),max:fmt(st.max,def.unit),unit:def.unit});
+  sub.textContent=def.key==='mem'&&total!=null&&current!=null&&['windows','node-exporter','prometheus','linux-ssh'].includes(now.telemetryProvider)?now.telemetryProvider!=='windows'?t('volno {free} GB · max {max} GB',{free:round(total-current,1),max:fmt(st.max,'GB')}):t('volno {free} GB · VRAM je měřena zvlášť · max {max} GB',{free:round(total-current,1),max:fmt(st.max,'GB')}):def.key==='mem'&&total!=null&&current!=null?t('volno {free} GB · GPU drží {gpu}{active} · max {max} GB',{free:round(total-current,1),gpu:g!=null?round(g,1)+' GB':'– (Thermo < 97)',active:now.gpuMemAlloc!=null&&now.gpuMem!=null?t(' (aktivně {gb})',{gb:round(now.gpuMem/GB,1)}):'',max:fmt(st.max,'GB')}):t('za období: prům. {avg} · max {max} {unit}',{avg:fmt(st.avg,def.unit),max:fmt(st.max,def.unit),unit:def.unit});
   const existing=echarts.getInstanceByDom(node);
   if(!pts.some(p=>def.pick(p)!=null)){
    // A transient empty reply on refresh must not wipe a chart that is already drawn.

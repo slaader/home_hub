@@ -51,7 +51,7 @@ function settingsOf(raw,where,bad){
  });
  return Object.freeze({schema:Object.freeze(schema),read:raw.read,write:raw.write});
 }
-const KNOWN=['id','title','titleKey','kind','description','toggle','toggleNote','status','test','settings','provides','howTo','page','docs'];
+const KNOWN=['id','title','titleKey','kind','description','toggle','toggleNote','status','test','settings','provides','howTo','page','docs','machines'];
 /** A module's raw `integrations` → a frozen, validated list. bad(message) throws the module error. */
 export function defineIntegrations(raw,moduleId,bad){
  if(raw===undefined)return Object.freeze([]);
@@ -74,9 +74,12 @@ export function defineIntegrations(raw,moduleId,bad){
   if(!fn(x.status))bad(`${where} (${x.id}) needs status(state, hub) => Status`);
   if(x.test!==undefined&&!fn(x.test))bad(`${where}.test must be a function`);
   if(x.provides!==undefined&&(!Array.isArray(x.provides)||x.provides.some(p=>typeof p!=='string'||!p)))bad(`${where}.provides must list extension-point names`);
+  // machines(state, hub) → [machineId | {machine, item?}]: the machines this integration belongs to. Each then shows it on its
+  // page under Integrations → Machines, with the state of its status item `item` (or of the whole integration).
+  if(x.machines!==undefined&&!fn(x.machines))bad(`${where}.machines must be a function (state, hub) => [machine id | {machine, item}]`);
   return Object.freeze({id:x.id,module:moduleId,title:x.title,titleKey:x.titleKey??null,kind:x.kind,description:x.description??null,
    toggle:x.toggle!==false,toggleNote:x.toggleNote??null,status:x.status,test:x.test??null,settings:settingsOf(x.settings,where,bad),
-   provides:Object.freeze([...(x.provides||[])]),howTo:x.howTo??null,page:x.page??null,docs:x.docs??null});
+   provides:Object.freeze([...(x.provides||[])]),howTo:x.howTo??null,page:x.page??null,docs:x.docs??null,machines:x.machines??null});
  }));
 }
 

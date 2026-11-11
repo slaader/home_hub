@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {setTimeout as delay} from 'node:timers/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {defineModule,createRegistry,loadPlugins,pluginsDirectory} from '../server/plugins.mjs';
@@ -93,7 +94,7 @@ test('core: the scope table and the page list match what the core modules regist
  const admin=registry.manifest({role:'admin'}),viewer=registry.manifest({role:'viewer'});
  assert.deepEqual(admin.nav.map(g=>g.labelKey||g.label),['Domov','Lokální AI','Inventář','Bezpečnost','Project Tracker','Správa']);
  assert.deepEqual(viewer.nav.map(g=>g.labelKey||g.label),['Domov','Lokální AI','Inventář','Project Tracker','Správa'],'admin-only groups disappear for other roles');
- assert.deepEqual(admin.nav[2].items.map(i=>i.hash),['inventory-map','versions']);assert.deepEqual(viewer.nav[2].items.map(i=>i.hash),['inventory-map']);
+ assert.deepEqual(admin.nav[2].items.map(i=>i.hash),['inventory-map','versions','git-lfs']);assert.deepEqual(viewer.nav[2].items.map(i=>i.hash),['inventory-map','git-lfs']);
  // #services is still a page (it leads to the Services view of the inventory page), just not a sidebar entry.
  assert.ok(viewer.pages.find(p=>p.hash==='services').view,'the old services address stays routable');
  assert.ok(viewer.pages.find(p=>p.hash==='versions').admin&&!viewer.pages.find(p=>p.hash==='versions').view,'an admin page is listed for routing, without its module');
@@ -117,8 +118,12 @@ test('a loaded plugin: routes, scope checks, write log, MCP tool, manifest, asse
  assert.equal((await get('/api/demo/notes',reader.headers)).status,200);
  const refused=await h.post('/api/demo/notes',{text:'x'},reader.headers);assert.equal(refused.status,403);assert.equal((await refused.json()).error.code,'SCOPE_REQUIRED');
  assert.equal((await h.post('/api/demo/notes',{text:'third'},writer.headers)).status,201);
- const audit=await (await get('/api/admin/audit')).json();
- assert.ok(audit.events.some(e=>e.event==='api-write'&&e.subject==='noter'&&e.detail==='/api/demo/notes · note-3'&&e.status===201),'the write log names what the route set as subject');
+ // Route audit appends finish asynchronously after the HTTP response. Wait for the specific record,
+ // rather than depending on filesystem timing; a missing or wrong record still fails within one second.
+ const wroteNote=e=>e.event==='api-write'&&e.subject==='noter'&&e.detail==='/api/demo/notes · note-3'&&e.status===201;
+ let audit;const deadline=Date.now()+1000;
+ do{audit=await (await get('/api/admin/audit')).json();if(audit.events.some(wroteNote))break;await delay(10);}while(Date.now()<deadline);
+ assert.ok(audit.events.some(wroteNote),'the write log names what the route set as subject');
  assert.ok(audit.events.some(e=>e.event==='api-write'&&e.subject==='reader'&&e.status===403));
  const accounts=await (await get('/api/admin/accounts')).json();assert.equal(accounts.scopes['demo:write'].label,'Demo – zápis');
  // MCP: the tool is listed for a key that holds its scope and runs with the module's state

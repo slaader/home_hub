@@ -4,6 +4,7 @@ import {mkdtemp,rm,readFile,stat} from 'node:fs/promises';
 import {Readable} from 'node:stream';
 import os from 'node:os';
 import path from 'node:path';
+import {readStore} from './support/sealed.mjs';
 import {createHomeDevices,deviceId} from '../server/home-devices.mjs';
 import {buildHome as build,validHomeOrder,homeOrder} from '../server/home-data.mjs';
 import {hub,SITE} from './hub-helper.mjs';
@@ -19,7 +20,7 @@ test('home devices: ids, validation, secrets kept apart, picture, removal',async
  const a=await d.add({name:'Mac Studio 2',hostname:'studio2.example.lan',ip:'10.0.0.30',props:{cpu:'M4 Max',gpu:'40c',ramGb:128},...thermo},'admin');
  assert.equal(a.device.id,'mac-studio-2');assert.equal(a.thermo.pin,PIN);assert.equal(a.thermo.host,'studio2.example.lan');
  assert.equal(JSON.stringify(await d.list()).includes('correct horse'),false,'no password in the tile list');
- const secrets=path.join(dir,'thermo-hosts.json');assert.equal((await stat(secrets)).mode&0o777,0o600);assert.ok((await readFile(secrets,'utf8')).includes('correct horse'));
+ const secrets=path.join(dir,'thermo-hosts.json');assert.equal((await stat(secrets)).mode&0o777,0o600);assert.ok(!(await readFile(secrets,'utf8')).includes('correct horse'),'sealed: no password on disk');assert.equal((await readStore(secrets)).hosts[0].password,'correct horse battery');
  assert.equal((await d.thermoHosts())[0].id,'mac-studio-2');
  // Validation: bad host, short password, missing pin, thermo fields on "other", duplicate hostname, unknown keys.
  for(const bad of [{name:'x',kind:'other',hostname:'bad host'},{name:'x',kind:'other',hostname:'a.b',ip:'300.1.1.1'},{name:'x',hostname:'a.b',...thermo,thermo:{...thermo.thermo,password:'short'}},

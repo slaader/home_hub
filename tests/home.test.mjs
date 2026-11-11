@@ -79,7 +79,7 @@ test('history buckets 30m from seconds and 7d from minutes; 6m reports partial',
  const m6=homeHistory(thermo,'mini','6m',nowSec);
  assert.equal(m6.complete,false);assert.equal(m6.points.length,180);
  assert.equal(homeHistoryQuery({machine:'mini',range:'30m'}).range,'30m');
- assert.deepEqual(homeHistoryQuery({machine:'nas',range:'7d'}),{machine:'nas',range:'7d',points:[],complete:false,source:'žádný zdroj',reason:'Thermo nesahá na NAS/router'});
+ assert.deepEqual(homeHistoryQuery({machine:'nas',range:'7d'}),{machine:'nas',range:'7d',points:[],complete:false,source:'žádný zdroj',reason:'Stroj nemá připojenou telemetrii.'});
 });
 test('invalid input fails closed',()=>{
  assert.throws(()=>homeHistory(thermoStub(),'router','30m'),/invalid/);
@@ -107,7 +107,7 @@ test('home routes require login and serve tiles and history',async t=>{
  assert.equal(hist.machine,'mini');assert.equal(hist.points.length,60);
  assert.equal((await fetch(base+'/api/home/history?machine=mini&range=bogus',{headers:{Cookie:cookie}})).status,400);
  const nas=await (await fetch(base+'/api/home/history?machine=nas&range=7d',{headers:{Cookie:cookie}})).json();
- assert.equal(nas.reason,'Thermo nesahá na NAS/router');
+ assert.equal(nas.reason,'Stroj nemá připojenou telemetrii.');
  await new Promise(r=>server.close(r));
 });
 test('collected machine descriptors replace static tiles and stacks; router falls back to census',()=>{

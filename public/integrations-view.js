@@ -8,6 +8,8 @@ import {authGuard} from './session-cache.js';
 import {t,tp,say,locale} from './i18n.js';
 import {timeZone} from './site.js';
 import {pageHeader,emptyState,errorState,loadingState,statusPill,toast,icon} from './ui.js';
+import {machinesSection,machinePage} from './machines-view.js';
+import {openAddDevice} from './home-add-device.js';
 
 // ---- words -------------------------------------------------------------------------------------
 const KIND={telemetry:'Telemetrie','llm-runtimes':'Lokální LLM runtimy',router:'Router',collector:'Kolektory',upstream:'Kontrola vydání',storage:'Úložiště',bridge:'Mosty na jiné stroje',other:'Ostatní'};
@@ -45,7 +47,7 @@ async function api(url,body){
 
 // ---- one card ----------------------------------------------------------------------------------
 const pill=status=>statusPill(stateLabel(status),stateTone(status?.state));
-const sourceChip=c=>el('span',{class:'ig-chip'},el('b',{},t(SOURCE[c.source]||c.source)),' ',c.name);
+const sourceChip=c=>el('span',{class:'ig-chip'},el('b',{},t(SOURCE[c.source]||c.source)),' ',c.source==='ui'?t(c.name):c.name);
 function items(list){
  if(!list?.length)return null;
  return el('ul',{class:'ig-items','aria-label':t('Části')},list.map(i=>el('li',{class:'ig-item'},
@@ -156,12 +158,17 @@ function plugins(doc){
    el('span',{class:'ig-dim'},p.integrations.length?` · ${p.integrations.map(id=>byId.get(id)?titleOf(byId.get(id)):id).join(', ')}`:` · ${t('bez integrací')}`))))
    :emptyState({compact:true,icon:'puzzle',title:t('Žádné pluginy'),body:t('Tahle instalace je jen jádro. Plugin je složka local/plugins/<id>/ s index.mjs (docs/plugins.md).')}));
 }
-export function integrationsView(){
+// #integrations/machine/<id> → that machine's page; anything else → the list.
+export const machineOfHash=hash=>{const p=String(hash||'').replace(/^#/,'').split('/');if(p[0]!=='integrations'||p[1]!=='machine'||!p[2])return null;try{return decodeURIComponent(p[2]);}catch{return null;}};
+export function integrationsView({me}={}){
+ const machineId=machineOfHash(globalThis.location?.hash);
+ if(machineId)return machineView(machineId);
  const body=el('div',{class:'ig-body'},loadingState(t('Načítám integrace…')));
  const head=pageHeader({eyebrow:t('Správa'),title:t('Integrace'),
   lead:t('Odkud Home Hub bere data, jestli to funguje a kde je to nastavené. Vypnutou integraci hub nečte a stránky místo starých dat řeknou, že je vypnutá. Zapnout ji jde zase bez restartu.'),
   actions:[{label:t('Obnovit'),onclick:()=>draw()}]});
- let doc=null;
+ let doc=null,machines=null;
+ const addMachine=()=>openAddDevice({meta:machines?.telemetry,onSaved:()=>{toast.good(t('Stroj je přidaný.'));draw();}});
  const paint=()=>{
   const rows=doc.integrations;let stats=counts(rows);
   // A card redraws itself after a change (focus stays where it was); only the counts follow.
@@ -169,16 +176,22 @@ export function integrationsView(){
   const groups=doc.kinds.filter(k=>rows.some(r=>r.kind===k)).map(k=>el('section',{class:'ig-group','aria-labelledby':`ig-k-${k}`},
    el('h2',{id:`ig-k-${k}`},icon(KIND_ICON[k]||'puzzle'),kindLabel(k)),
    el('div',{class:'ig-grid'},rows.filter(r=>r.kind===k).map(r=>card(r,{onchange})))));
-  body.replaceChildren(stats,
+  body.replaceChildren(stats,machines?machinesSection(machines,{onAdd:me?.canWrite?addMachine:null}):el('p',{class:'ig-dim'},t('Stroje se nepodařilo načíst.')),
    ...(rows.length?groups:[emptyState({icon:'plug',title:t('Žádné integrace'),body:t('Žádný načtený modul nehlásí integraci.')})]),
    plugins(doc));
  };
  async function draw(){
-  try{doc=await api('/api/admin/integrations');paint();}
+  try{[doc,machines]=await Promise.all([api('/api/admin/integrations'),api('/api/admin/machines').catch(()=>null)]);paint();}
   catch(e){body.replaceChildren(e.status===403?emptyState({icon:'shield',title:t('Jen pro administrátora'),body:t('Integrace spravuje administrátor přihlášený heslem.')})
    :errorState({title:t('Integrace se nepodařilo načíst'),body:e.name==='TimeoutError'?t('Home Hub neodpovídá. Zkus to znovu.'):e.message,retry:draw}));}
  }
  draw();
  return el('div',{class:'ig-page'},head,body);
 }
-export const integrationsPage=()=>integrationsView();
+function machineView(id){
+ const body=el('div',{class:'ig-body'},loadingState(t('Načítám stroj…')));
+ api('/api/admin/machines').then(doc=>body.replaceChildren(machinePage(doc,id)))
+  .catch(e=>body.replaceChildren(errorState({title:t('Stroj se nepodařilo načíst'),body:e.message,retry:()=>{body.replaceWith(machineView(id));}})));
+ return body;
+}
+export const integrationsPage=({me}={})=>integrationsView({me});

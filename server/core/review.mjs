@@ -17,9 +17,10 @@ const REVIEW_MESSAGES={
  conflict:['Záznam se mezitím změnil (nebo už existuje novější kolo). Načti ho znovu a změnu zopakuj.','The record changed in the meantime (or a newer round exists). Read it again and repeat the change.'],
  limit:['Byl dosažen limit (počet záznamů nebo místo pro soubory).','A limit was reached (the number of records or the space for files).'],
  'too-large':['Soubor nebo jeho část je příliš velká.','The file or a part of it is too large.'],
+ forbidden:['Upravit nebo smazat jde jen vlastní připomínku.','Only the author of a comment can edit or delete it.'],
  unavailable:['Review teď nejde načíst ani uložit.','Review cannot be loaded or saved right now.'],
 };
-const reviewError=(e,c)=>[({invalid:400,'missing-blob':400,'digest-mismatch':400,'not-found':404,conflict:409,limit:409,'too-large':413})[e.message]||503,'REVIEW_FAILED',
+const reviewError=(e,c)=>[({invalid:400,'missing-blob':400,'digest-mismatch':400,'not-found':404,forbidden:403,conflict:409,limit:409,'too-large':413})[e.message]||503,'REVIEW_FAILED',
  (REVIEW_MESSAGES[e.message]||REVIEW_MESSAGES.unavailable)[c?.principal?.authKind==='api-key'?1:0]];
 const who=c=>c.principal.username;
 const write=(path,options,run)=>({method:'POST',path,scope:'review:write',error:reviewError,...options,async handler(c){c.subject=null;return run(c);}});
@@ -71,6 +72,6 @@ export default {
   ['GET','/api/review/sets/<R-n>','read','Celá sada: kola, položky, varianty, rozhodnutí a připomínky.'],
   ['PUT','/api/review/blobs/<sha256>?offset=&size=','review:write','Nahrání souboru po částech (nejvýš 8 MiB na požadavek).'],
   ['POST','/api/review/publish','review:write','Nová sada {project, title, items} nebo další kolo {set, items, addresses?}.'],
-  ['POST','/api/review/feedback','review:write','Rozhodnutí k položce {set, round, item, rev, variant, status, note?, comments?}.'],
+  ['POST','/api/review/feedback','review:write','Rozhodnutí k položce {set, round, item, rev, variant, status, note?, comments?, editComments?, deleteComments?}.'],
   ['POST','/api/review/sets','review:write','Archivace nebo přejmenování sady {id, rev, status?, title?}.']]}],
 };

@@ -2,8 +2,11 @@
 //   #review               sets of all projects: open (undecided), done (every item taken), archive
 //   #review/<project>     open sets of one project (the Review button on a project card)
 //   #review/R-<n>         one set: rounds, a tab per kind, one row of variants per item, pins and the decision
-// Variants of an item are compared side by side, one at a time (the default on a phone), or, for images, by
-// dragging a divider across two of them (swipe). A bar on top counts the decisions and jumps to the next open item.
+// Variants of an item are compared side by side, one at a time (the default on a phone), or, for images and clips
+// of one shape, by dragging a divider across two of them (swipe). Clips (mp4, webm) play in sync: one play/pause,
+// scrub bar and speed for all variants, and a pin remembers the time. Audio tracks play the same way under their
+// waveforms, one variant audible at a time. Only one item plays at once, and an item stops when it scrolls out of
+// sight. A bar on top counts the decisions and jumps to the next open item.
 // 3D models (.glb) open in Google <model-viewer> (public/vendor/, loaded only when a set has a model item): orbit,
 // zoom, animations, a pin on the surface remembers the camera pose; cameras of A/B/C can move together.
 // HTML mockups run in a sandboxed frame (opaque origin, no network). A helper the server injects reports hover,
@@ -19,7 +22,7 @@ import {t,tp,locale} from './i18n.js';
 import {pageHeader,emptyState,provenanceBadge} from './ui.js';
 
 // Label lists are functions: t() has to run when the page is drawn, in the language active then.
-const KINDS=()=>({html:t('Mockupy'),image:t('Obrázky a rendery'),model:t('3D modely')});
+const KINDS=()=>({html:t('Mockupy'),image:t('Obrázky a rendery'),video:t('Videa'),audio:t('Audio'),model:t('3D modely')});
 const DECISIONS=()=>({accept:t('Beru'),revise:t('Beru s úpravami'),reject:t('Předělat'),pending:t('Nerozhodnuto')});
 const DECISION_TONE={accept:'ok',revise:'info',reject:'crit',pending:'dim'};
 // Items in "approve" mode: every variant is its own deliverable, approved or sent back with comments.
@@ -108,7 +111,7 @@ const dirty=()=>[...drafts.values()].some(d=>d.drafts.some(x=>x.text.trim()));
 export function reviewView(me,sub){
  const wrap=el('section',{class:'sec tk rv'},el('p',{class:'sec-dim',role:'status'},t('Načítám…')));
  const canWrite=me?.canWrite===true,epoch=sessionEpoch;
- const run=()=>(sub&&SET_ID.test(sub)?setPage(wrap,{canWrite,id:sub,epoch}):listPage(wrap,{canWrite,project:sub&&PROJECT_ID.test(sub)?sub:'',epoch}))
+ const run=()=>(sub&&SET_ID.test(sub)?setPage(wrap,{canWrite,id:sub,epoch,me:me?.username||null}):listPage(wrap,{canWrite,project:sub&&PROJECT_ID.test(sub)?sub:'',epoch}))
   .catch(e=>{if(epoch===sessionEpoch)wrap.replaceChildren(emptyState({icon:'⚠',title:e.status===404?t('Review neexistuje'):t('Review nejde načíst'),body:e.message,
    actions:[e.status===404?null:{label:t('Zkusit znovu'),primary:true,onclick:()=>{wrap.replaceChildren(el('p',{class:'sec-dim',role:'status'},t('Načítám…')));run();}},{label:`← ${t('Všechna review')}`,href:'#review'}]}));});
  run();
@@ -171,18 +174,18 @@ async function listPage(wrap,{canWrite,project,epoch}){
 }
 
 // One set ---------------------------------------------------------------------------------------
-async function setPage(wrap,{canWrite,id,epoch}){
+async function setPage(wrap,{canWrite,id,epoch,me}){
  const fromAll=fromAllList(),[set,meta]=await Promise.all([api('/api/review/sets/'+id),api('/api/tickets?limit=1')]);if(epoch!==sessionEpoch||!wrap.isConnected)return;
  const guard=e=>{if(dirty()){e.preventDefault();e.returnValue='';}};
  addEventListener('beforeunload',guard);onLeave(()=>removeEventListener('beforeunload',guard));
  views.set(set.id,{...(views.get(set.id)||{}),fromAll});
- renderSet(wrap,{canWrite,epoch,meta},set);
+ renderSet(wrap,{canWrite,epoch,meta,me},set);
 }
 function renderSet(wrap,ctx,set){
  const {canWrite,meta}=ctx,project=meta.projects.find(p=>p.id===set.project),view=views.get(set.id)||{};views.set(set.id,view);
  const latest=set.rounds[set.rounds.length-1],round=set.rounds.find(r=>r.n===view.round)||latest,readOnly=!canWrite||round!==latest||set.status!=='open';
  // Default tab: a game opens on its 3D models and renders, anything else on its mockups.
- const order=project?.type==='game'?['model','image','html']:['html','image','model'];
+ const order=project?.type==='game'?['model','video','audio','image','html']:['html','image','video','audio','model'];
  const kinds=[...new Set(round.items.map(i=>i.kind))].sort((a,b)=>order.indexOf(a)-order.indexOf(b));
  const kind=kinds.includes(view.kind)?view.kind:kinds[0],kindNames=KINDS();
  const msg=status(),redraw=()=>renderSet(wrap,ctx,set);
@@ -212,7 +215,7 @@ function renderSet(wrap,ctx,set){
  const summary=summaryBar(round,{actionable:!readOnly,goTo});
  const shown=round.items.filter(i=>i.kind===kind);
  wrap.replaceChildren(...[head,switches,old,notes,summary.node,msg].filter(Boolean),
-  ...shown.map((item,index)=>itemSection({set,round,item,readOnly,latest:round===latest&&set.status==='open',answeredIn,epoch:ctx.epoch,index,count:shown.length,onSaved:summary.draw,
+  ...shown.map((item,index)=>itemSection({set,round,item,readOnly,me:ctx.me,latest:round===latest&&set.status==='open',answeredIn,epoch:ctx.epoch,index,count:shown.length,onSaved:summary.draw,
    // Comments of earlier rounds on this item that no round has answered yet.
    carried:set.rounds.filter(r=>r.n<round.n).flatMap(r=>(r.feedback[item.id]?.comments||[]).filter(c=>!answeredAny.has(c.id)).map(c=>({...c,round:r.n})))})));
 }
@@ -232,11 +235,84 @@ function summaryBar(round,{actionable,goTo}){
  draw();return {node,draw};
 }
 
+// Whether the variants' first pictures (or clips) share one shape (aspect ratio within 1 %), so a divider across
+// two of them lines up. Sizes are read once per file and kept for the page's life; one that fails to load counts as no.
+const shapes=new Map();
+const shapeOf=(sha,video)=>{if(!shapes.has(sha))shapes.set(sha,new Promise(done=>{
+ if(video){const v=document.createElement('video');v.preload='metadata';v.muted=true;
+  v.onloadedmetadata=()=>{done(v.videoWidth&&v.videoHeight?v.videoWidth/v.videoHeight:null);v.removeAttribute('src');v.load();};v.onerror=()=>done(null);v.src=blob(sha);return;}
+ const i=new Image();i.decoding='async';
+ i.onload=()=>done(i.naturalWidth&&i.naturalHeight?i.naturalWidth/i.naturalHeight:null);i.onerror=()=>done(null);i.src=blob(sha);}));return shapes.get(sha);};
+const sameShape=async item=>{const r=await Promise.all(item.variants.map(v=>shapeOf(v.media[0].sha256,item.kind==='video')));
+ return r.every(x=>x!==null&&Math.abs(x/r[0]-1)<=0.01);};
+
+// The clips of one video item play as one: one play/pause, one time, one speed. The first visible clip leads and
+// the others follow it, re-synced when they drift by more than a few frames; hidden clips (another comparison view)
+// stay paused. A clip shorter than the leader loops on its own until the leader comes round. Sound is off, or
+// comes from one chosen variant, so two soundtracks never play over each other. An <audio> element has no box of its
+// own: its waveform (c.host) says whether it is shown. Only one clock plays at a time on the page.
+const FRAME=1/30,clocks=new Set();
+function videoClock({sound:initial=null}={}){
+ const clips=new Set(),listeners=new Set();let playing=false,rate=1,sound=initial,at=0,raf=0;
+ const shown=c=>{const h=c.host||c;return h.isConnected&&h.offsetParent!==null&&c.readyState>0;};
+ const lead=()=>[...clips].find(shown)||null;
+ const len=c=>Number.isFinite(c.duration)?c.duration:0;
+ const emit=()=>{for(const f of listeners)f();};
+ const apply=c=>{c.muted=!sound||c.dataset.variant!==sound;c.playbackRate=rate;};
+ const place=(c,t)=>{if(c.readyState>0)c.currentTime=len(c)?Math.min(t,len(c)):t;};
+ function tick(){raf=0;
+  for(const c of [...clips])if(!(c.host||c).isConnected){c.pause();clips.delete(c);}
+  const l=lead();if(l)at=l.currentTime;
+  for(const c of clips){if(!shown(c)){if(!c.paused)c.pause();continue;}
+   if(c===l)continue;if(at<len(c)&&Math.abs(c.currentTime-at)>0.1)c.currentTime=at;}
+  if(playing){for(const c of clips)if(shown(c)&&c.paused)c.play().catch(()=>{});raf=requestAnimationFrame(tick);}
+  emit();}
+ const kick=()=>{if(!raf)raf=requestAnimationFrame(tick);};
+ const clock={
+  add(c){clips.add(c);apply(c);c.addEventListener('loadedmetadata',()=>{place(c,at);apply(c);if(playing)kick();emit();});return c;},
+  update(c){apply(c);},
+  playing:()=>playing,time:()=>at,rate:()=>rate,sound:()=>sound,
+  duration:()=>Math.max(0,...[...clips].filter(shown).map(len)),
+  play(){for(const other of clocks)if(other!==clock&&other.playing())other.pause();playing=true;for(const c of clips)if(shown(c)){place(c,at);apply(c);c.play().catch(()=>{});}kick();emit();},
+  pause(){playing=false;const l=lead();if(l)at=l.currentTime;for(const c of clips){c.pause();place(c,at);}emit();},
+  toggle(){playing?clock.pause():clock.play();},
+  seek(t){at=Math.max(0,t);for(const c of clips)place(c,at);emit();},
+  step(d){clock.pause();clock.seek(Math.min(clock.duration()||Infinity,Math.max(0,at+d*FRAME)));},
+  setRate(r){rate=r;for(const c of clips)apply(c);emit();},
+  setSound(vid){sound=vid||null;for(const c of clips)apply(c);emit();},
+  // After the comparison view changed: the newly shown clips start where the others were.
+  refresh(){for(const c of clips)place(c,at);if(playing)kick();emit();},
+  stop(){playing=false;for(const c of clips)c.pause();clocks.delete(clock);},
+  on(f){listeners.add(f);}};
+ clocks.add(clock);return clock;
+}
+const fmtTime=s=>`${(Math.floor(s*100)/100).toFixed(2)} s`;
+// Under a video item: play/pause, a frame back and forward, the scrub bar, the time, the speed and the sound.
+function transport(item,clock){
+ let dragging=false;
+ const play=el('button',{type:'button',class:'acc-btn small rv-play',onclick:()=>clock.toggle()});
+ const back=el('button',{type:'button',class:'acc-btn small',title:t('O snímek zpět'),'aria-label':t('O snímek zpět'),onclick:()=>clock.step(-1)},'⏮');
+ const fwd=el('button',{type:'button',class:'acc-btn small',title:t('O snímek dál'),'aria-label':t('O snímek dál'),onclick:()=>clock.step(1)},'⏭');
+ const scrub=el('input',{type:'range',min:'0',max:'1',step:'0.01',value:'0',class:'rv-scrub','aria-label':t('Čas klipu')});
+ scrub.addEventListener('pointerdown',()=>{dragging=true;clock.pause();});addEventListener('pointerup',()=>{dragging=false;},{passive:true});
+ scrub.addEventListener('input',()=>{if(clock.playing())clock.pause();clock.seek(Number(scrub.value));});
+ const time=el('span',{class:'rv-time'});
+ const speed=el('select',{'aria-label':t('Rychlost'),onchange:e=>clock.setRate(Number(e.target.value))},[1,0.5,0.25].map(r=>el('option',{value:String(r)},r===1?'1×':`${r}× ${t('zpomaleně')}`)));
+ const audio=item.kind==='audio';
+ const sound=el('select',{'aria-label':t('Zvuk'),onchange:e=>clock.setSound(e.target.value)},el('option',{value:''},`🔇 ${t('Bez zvuku')}`),item.variants.map(v=>el('option',{value:v.id},`🔈 ${t('Zvuk {label}',{label:v.label})}`)));
+ const draw=()=>{const d=clock.duration();play.textContent=clock.playing()?`⏸ ${t('Pauza')}`:`▶ ${t('Přehrát')}`;
+  sound.value=clock.sound()||'';scrub.max=String(d||1);if(!dragging)scrub.value=String(Math.min(clock.time(),d||1));time.textContent=`${fmtTime(clock.time())} / ${fmtTime(d)}`;};
+ clock.on(draw);draw();
+ return el('div',{class:'rv-transport'},play,audio?null:back,audio?null:fwd,scrub,time,speed,sound);
+}
+
 // Two image variants in one frame with a divider to drag: left of it the first variant, right of it the second.
 // The divider is a range input laid over the pictures, so the mouse, a finger and the arrow keys all move it.
-function swipeStage(item,cmp){
- const pick=id=>item.variants.find(v=>v.id===id)||item.variants[0];
- const top=el('img',{alt:'',draggable:'false',decoding:'async'}),base=el('img',{alt:'',draggable:'false',decoding:'async'});
+function swipeStage(item,cmp,clock){
+ const pick=id=>item.variants.find(v=>v.id===id)||item.variants[0],video=item.kind==='video';
+ const media=()=>video?clock.add(Object.assign(el('video',{playsinline:'',preload:'metadata',disablepictureinpicture:''}),{muted:true,loop:true,onclick:()=>clock.toggle()})):el('img',{alt:'',draggable:'false',decoding:'async'});
+ const top=media(),base=media();
+ const setSrc=(n,v)=>{const src=blob(v.media[0].sha256);if(n.getAttribute('src')!==src)n.setAttribute('src',src);n.dataset.variant=v.id;if(video){if(v.media[0].poster)n.setAttribute('poster',blob(v.media[0].poster.sha256));clock.update(n);}};
  const tagL=el('span',{class:'rv-swipe-tag left'}),tagR=el('span',{class:'rv-swipe-tag right'});
  const range=el('input',{type:'range',min:'0',max:'100',step:'0.5',class:'rv-swipe-range','aria-label':t('Poloha dělicí čáry')});
  const stage=el('div',{class:'rv-swipe-stage'},base,el('div',{class:'rv-swipe-top'},top),tagL,tagR,range,el('span',{class:'rv-swipe-line','aria-hidden':'true'}));
@@ -247,8 +323,8 @@ function swipeStage(item,cmp){
  const controls=el('div',{class:'rv-swipe-controls'});
  function draw(){
   const left=pick(cmp.left),right=pick(cmp.right);
-  top.setAttribute('src',blob(left.media[0].sha256));top.setAttribute('alt',t('Varianta {label}',{label:left.label}));
-  base.setAttribute('src',blob(right.media[0].sha256));base.setAttribute('alt',t('Varianta {label}',{label:right.label}));
+  setSrc(top,left);top.setAttribute(video?'aria-label':'alt',t('Varianta {label}',{label:left.label}));
+  setSrc(base,right);base.setAttribute(video?'aria-label':'alt',t('Varianta {label}',{label:right.label}));
   tagL.textContent=left.label;tagR.textContent=right.label;range.value=String(cmp.pos);setPos(cmp.pos);
   controls.replaceChildren(side('left',t('Vlevo')),el('button',{type:'button',class:'acc-btn small',title:t('Prohodit strany'),'aria-label':t('Prohodit strany'),onclick:()=>{[cmp.left,cmp.right]=[cmp.right,cmp.left];draw();}},'⇄'),side('right',t('Vpravo')),
    el('span',{class:'sec-dim'},t('Táhni čárou, nebo šipkami ← →. Připomínky se připínají v zobrazení Vedle sebe nebo Po jedné.')));
@@ -260,23 +336,32 @@ function swipeStage(item,cmp){
 // Saves itself: a pick saves at once, a comment or the note when its box loses focus. Saves run one at a time
 // (each needs the previous rev); a conflict re-reads the set once and retries. The frame is green once a variant
 // is taken and red when the item went back for rework.
-function itemSection({set,round,item,readOnly,latest,answeredIn,carried,epoch,index,count,onSaved}){
+function itemSection({set,round,item,readOnly,me,latest,answeredIn,carried,epoch,index,count,onSaved}){
  const key=`${set.id}/${round.n}/${item.id}`;
  let decision=round.feedback[item.id]||{rev:0,variant:null,status:'pending',note:'',comments:[],attachments:[]};
  const shots=()=>decision.attachments||[];
- const fresh=()=>({drafts:[],commenting:false,choice:decision.variant,reject:decision.status==='reject',note:decision.note||'',attachments:[...shots()],approvals:{...(decision.approvals||{})},noteOpen:false,focus:null});
+ const fresh=()=>({drafts:[],commenting:false,choice:decision.variant,reject:decision.status==='reject',note:decision.note||'',attachments:[...shots()],approvals:{...(decision.approvals||{})},noteOpen:false,focus:null,edits:{},removes:[],editing:null});
  // approve: each non-reference variant gets its own verdict (approved / changes); choose: one variant is taken.
  const approveMode=item.mode==='approve',decidable=item.variants.filter(v=>!v.reference).map(v=>v.id);
- const state=drafts.get(key)||fresh();if(!readOnly)drafts.set(key,state);state.approvals??={};
+ const state=drafts.get(key)||fresh();if(!readOnly)drafts.set(key,state);state.approvals??={};state.edits??={};state.removes??=[];
+ // Saved comments as they stand with the edits and deletions not yet sent (your own comments of the latest round only).
+ const comments=()=>decision.comments.filter(c=>!state.removes.includes(c.id)).map(c=>Object.hasOwn(state.edits,c.id)?{...c,text:state.edits[c.id]}:c);
+ const mine=c=>!readOnly&&latest&&Boolean(me)&&c.by===me&&!answeredIn.has(c.id);
  const label=vid=>item.variants.find(v=>v.id===vid)?.label||vid.toUpperCase();
  const pickText=(vid,on)=>approveMode?(on?t('✓ Schváleno {label}',{label:label(vid)}):t('✓ Schválit {label}',{label:label(vid)})):on?t('✓ Vybráno {label}',{label:label(vid)}):t('Vybrat {label}',{label:label(vid)});
  // Pins of one variant: drafts (numbered 1…) and saved comments (S1…).
- const pinsFor=vid=>[...state.drafts.map((d,i)=>({...d,n:String(i+1),kind:'draft'})),...decision.comments.map((c,i)=>({...c,n:'S'+(i+1),kind:answeredIn.has(c.id)?'done':'saved'}))].filter(p=>p.variant===vid&&p.anchor);
+ const pinsFor=vid=>[...state.drafts.map((d,i)=>({...d,n:String(i+1),kind:'draft'})),...comments().map((c,i)=>({...c,n:'S'+(i+1),kind:answeredIn.has(c.id)?'done':'saved'}))].filter(p=>p.variant===vid&&p.anchor);
  const viewers=new Map(),picks=new Map(),zooms=new Map();
  // How the variants are compared: side by side, one at a time (tabs; the default on a phone) or, for images, swipe.
- const cmpKey='cmp:'+key,canSwipe=item.kind==='image'&&item.variants.length>1;
- const cmp=views.get(cmpKey)||{mode:narrow()&&item.variants.length>1?'one':'side',one:item.variants[0].id,left:item.variants[0].id,right:(item.variants[1]||item.variants[0]).id,pos:50};views.set(cmpKey,cmp);
- const swipe=canSwipe?swipeStage(item,cmp):null,modeBar=el('div',{class:'rv-modes'});
+ // Swipe is offered only when the pictures have one shape (a contact sheet beside a differently laid-out sheet
+ // would not line up), and is the default for an item the agent published as aligned (the same shot in each).
+ const cmpKey='cmp:'+key,images=['image','video'].includes(item.kind)&&item.variants.length>1,plainMode=()=>narrow()&&item.variants.length>1?'one':'side';
+ // Clips and tracks run on one clock. A track item starts with its first variant audible (a clip starts muted).
+ const clock=['video','audio'].includes(item.kind)?videoClock({sound:item.kind==='audio'?item.variants[0].id:null}):null;if(clock)onLeave(()=>clock.stop());
+ let canSwipe=images&&item.aligned===true;
+ const cmp=views.get(cmpKey)||{mode:canSwipe?'swipe':plainMode(),one:item.variants[0].id,left:item.variants[0].id,right:(item.variants[1]||item.variants[0]).id,pos:50};views.set(cmpKey,cmp);
+ const swipe=images?swipeStage(item,cmp,clock):null,modeBar=el('div',{class:'rv-modes'});
+ if(images)sameShape(item).then(ok=>{if(ok===canSwipe&&(ok||cmp.mode!=='swipe'))return;canSwipe=ok;if(!ok&&cmp.mode==='swipe')cmp.mode=plainMode();applyMode();});
  // 3D: moving one variant's camera moves the others (toggle in the item header), so A/B/C are seen from the same side.
  const syncText=on=>on?`🔗 ${t('Pohledy spolu')}`:t('Pohledy zvlášť');
  const camSync=item.kind==='model'&&item.variants.length>1?(()=>{const on=views.get('cam-sync')!==false;
@@ -302,7 +387,7 @@ function itemSection({set,round,item,readOnly,latest,answeredIn,carried,epoch,in
  // approve items: green = all approved, amber = some sent back with comments.
  const frame=()=>{if(!section)return;const st=decision.rev?decision.status:'pending';
   section.classList.toggle('rv-taken',approveMode?st==='accept':st==='accept'||st==='revise');section.classList.toggle('rv-changes',approveMode&&st==='revise');section.classList.toggle('rv-rework',st==='reject');};
- const setCommenting=on=>{state.commenting=on;if(on&&cmp.mode==='swipe'){cmp.mode='side';applyMode();}for(const v of viewers.values())v.setMode(on);row.classList.toggle('rv-commenting',on);drawPanel();};
+ const setCommenting=on=>{state.commenting=on;if(on)clock?.pause();if(on&&cmp.mode==='swipe'){cmp.mode='side';applyMode();}for(const v of viewers.values())v.setMode(on);row.classList.toggle('rv-commenting',on);drawPanel();};
  // A comment on a variant also picks it when nothing is picked yet.
  const addDraft=(variant,anchor)=>{state.drafts.push({id:++draftSeq,variant,anchor,text:''});state.focus=draftSeq;if(!approveMode&&!state.choice&&!state.reject&&decidable.includes(variant))state.choice=variant;refreshPins();sync();};
  // Esc: drop the comment being written (an empty draft), otherwise leave comment mode.
@@ -320,7 +405,7 @@ function itemSection({set,round,item,readOnly,latest,answeredIn,carried,epoch,in
   if(one)row.dataset.focus=cmp.one;else delete row.dataset.focus;
   for(const c of row.children)c.classList.toggle('on',one&&c.dataset.variant===cmp.one);
   for(const [vid,b] of zooms)b.textContent=one&&vid===cmp.one?`⤡ ${t('Porovnat')}`:`⤢ ${t('Zvětšit')}`;
-  row.hidden=cmp.mode==='swipe';if(swipe){swipe.node.hidden=cmp.mode!=='swipe';if(cmp.mode==='swipe'){swipe.draw();swipeActions();}}
+  row.hidden=cmp.mode==='swipe';if(swipe){swipe.node.hidden=cmp.mode!=='swipe';if(cmp.mode==='swipe'){swipe.draw();swipeActions();}}clock?.refresh();
   if(item.variants.length<2){modeBar.hidden=true;return;}
   const flip=d=>{const ids=item.variants.map(v=>v.id);cmp.one=ids[(ids.indexOf(cmp.one)+d+ids.length)%ids.length];applyMode(true);};
   modeBar.replaceChildren(...[segmented(t('Způsob porovnání'),[['side',t('Vedle sebe')],['one',t('Po jedné')],...(canSwipe?[['swipe',t('Přejíždět')]]:[])],cmp.mode,m=>{cmp.mode=m;applyMode();}),
@@ -329,12 +414,17 @@ function itemSection({set,round,item,readOnly,latest,answeredIn,carried,epoch,in
   if(focusTab)modeBar.querySelector('[role=tab].on')?.focus();
  }
  for(const v of item.variants){
-  const viewer=item.kind==='html'?frameViewer(v,{onPick:a=>addDraft(v.id,a),onEscape:()=>cancel()}):item.kind==='model'?modelViewer(v,{onPick:a=>addDraft(v.id,a),onCamera:cam=>onCamera(v.id,cam)}):imageViewer(v,{onPick:a=>addDraft(v.id,a)});viewers.set(v.id,viewer);
+  const viewer=item.kind==='html'?frameViewer(v,{onPick:a=>addDraft(v.id,a),onEscape:()=>cancel()}):item.kind==='model'?modelViewer(v,{onPick:a=>addDraft(v.id,a),onCamera:cam=>onCamera(v.id,cam)}):item.kind==='video'?videoViewer(v,{onPick:a=>addDraft(v.id,a),clock}):item.kind==='audio'?audioViewer(v,{onPick:a=>addDraft(v.id,a),clock}):imageViewer(v,{onPick:a=>addDraft(v.id,a)});viewers.set(v.id,viewer);
   const zoom=item.variants.length>1?el('button',{type:'button',class:'acc-btn small',title:t('Zobrazit jen tuto variantu přes celou šířku'),onclick:()=>{if(cmp.mode==='one'&&cmp.one===v.id)cmp.mode='side';else{cmp.mode='one';cmp.one=v.id;}applyMode();}},`⤢ ${t('Zvětšit')}`):null;if(zoom)zooms.set(v.id,zoom);
+  // 🔊 on one variant at a time: muting the one you hear hands the sound to the next variant.
+  const listen=clock?(()=>{const ids=item.variants.map(x=>x.id),b=el('button',{type:'button',class:'acc-btn small rv-listen',
+    onclick:()=>clock.setSound(clock.sound()===v.id?(ids.length>1?ids[(ids.indexOf(v.id)+1)%ids.length]:null):v.id)});
+   const draw=()=>{const on=clock.sound()===v.id;b.setAttribute('aria-pressed',String(on));b.textContent=on?`🔊 ${t('Slyšíš {label}',{label:v.label})}`:`🔈 ${t('Poslouchat {label}',{label:v.label})}`;
+    b.title=on?t('Ztlumit — zvuk přejde na další variantu'):t('Pustit zvuk této varianty (ostatní ztichnou)');};clock.on(draw);draw();return b;})():null;
   const pick=readOnly||v.reference?null:el('button',{type:'button',class:'acc-btn small rv-pick','aria-pressed':'false',onclick:()=>choose(v.id)},pickText(v.id,false));if(pick)picks.set(v.id,pick);
   const verdict=(decision.approvals||{})[v.id];
   row.append(el('article',{class:'rv-variant','data-variant':v.id},
-   el('header',{class:'rv-variant-head'},el('b',{class:'rv-letter'},v.label),el('span',{class:'rv-variant-title'},v.title),v.reference?el('span',{class:'sec-pill dim',title:t('Jen pro srovnání — nevybírá se ani neschvaluje, komentovat jde.')},t('reference')):null,zoom),
+   el('header',{class:'rv-variant-head'},el('b',{class:'rv-letter'},v.label),el('span',{class:'rv-variant-title'},v.title),v.reference?el('span',{class:'sec-pill dim',title:t('Jen pro srovnání — nevybírá se ani neschvaluje, komentovat jde.')},t('reference')):null,listen,zoom),
    viewer.node,
    v.description?el('p',{class:'tk-text acc-dim rv-variant-desc'},v.description):null,
    readOnly?(approveMode?(verdict?el('span',{class:`sec-pill ${verdict==='approved'?'ok':'warn'}`},verdict==='approved'?t('schváleno'):t('k úpravě')):null):decision.variant===v.id?el('span',{class:`sec-pill ${DECISION_TONE[decision.status]}`},t('vybráno')):null)
@@ -342,6 +432,8 @@ function itemSection({set,round,item,readOnly,latest,answeredIn,carried,epoch,in
  }
  const panel=el('div',{class:'rv-decide'}),badge=el('span',{class:'rv-item-state'}),saveLine=el('span',{class:'sec-dim rv-save-state',role:'status'});
  const anchorText=a=>!a?t('celá varianta'):a.kind==='surface'?`${t('povrch')} · ${a.node?a.node.split(' / ').pop():a.mesh||'model'}`+(a.material?` · ${a.material}`:'')+(a.animation?` · ${a.animation.name} ${a.animation.time.toFixed(1)} s`:'')+(a.media?` · ${t('model {n}',{n:a.media+1})}`:'')
+  :a.kind==='time'?t('čas {s}',{s:fmtTime(a.t)})+(a.media?` · ${t('stopa {n}',{n:a.media+1})}`:'')
+  :a.kind==='frame'?t('čas {s}',{s:fmtTime(a.t)})+' · '+t('bod {x} % × {y} %',{x:Math.round(a.x*100),y:Math.round(a.y*100)})+(a.media?` · ${t('klip {n}',{n:a.media+1})}`:'')
   :a.kind==='point'?t('bod {x} % × {y} %',{x:Math.round(a.x*100),y:Math.round(a.y*100)})+(a.media?` · ${t('obrázek {n}',{n:a.media+1})}`:''):(a.mockId?`#${a.mockId}`:a.selector.split(' > ').slice(-2).join(' > ')||t('prvek'))+(a.media?` · ${t('stránka {n}',{n:a.media+1})}`:'');
  // Comments with text are ready to save; an empty one stays a draft.
  // A comment is ready with text or a screenshot, and not while its screenshot is still uploading.
@@ -351,11 +443,12 @@ function itemSection({set,round,item,readOnly,latest,answeredIn,carried,epoch,in
  const approvalsNow=()=>{const a={...state.approvals};for(const d of ready())if(decidable.includes(d.variant))a[d.variant]='changes';return a;};
  const statusNow=()=>{if(state.reject)return 'reject';
   if(approveMode){const a=approvalsNow();return decidable.every(id=>a[id]==='approved')?'accept':Object.values(a).includes('changes')?'revise':'pending';}
-  return !state.choice?'pending':ready().some(d=>d.variant===state.choice)||decision.comments.some(c=>c.variant===state.choice)?'revise':'accept';};
+  return !state.choice?'pending':ready().some(d=>d.variant===state.choice)||comments().some(c=>c.variant===state.choice)?'revise':'accept';};
  const sameApprovals=()=>{const a=approvalsNow(),b=decision.approvals||{};return [...new Set([...Object.keys(a),...Object.keys(b)])].every(k=>a[k]===b[k]);};
  const sameShots=()=>state.attachments.map(a=>a.sha256).join()===shots().map(a=>a.sha256).join();
- const changed=()=>ready().length>0||approveMode&&!sameApprovals()||(state.choice||null)!==(decision.variant||null)||statusNow()!==decision.status||state.note.trim()!==(decision.note||'').trim()||!sameShots();
- const hasReason=()=>Boolean(state.note.trim()||state.attachments.length||ready().length||decision.comments.length);
+ const pendingEdits=()=>Object.keys(state.edits).length>0||state.removes.length>0;
+ const changed=()=>ready().length>0||pendingEdits()||approveMode&&!sameApprovals()||(state.choice||null)!==(decision.variant||null)||statusNow()!==decision.status||state.note.trim()!==(decision.note||'').trim()||!sameShots();
+ const hasReason=()=>Boolean(state.note.trim()||state.attachments.length||ready().length||comments().length);
  const focusPin=c=>{if(cmp.mode==='swipe'||cmp.mode==='one'&&cmp.one!==c.variant){cmp.mode='one';cmp.one=c.variant;applyMode();}viewers.get(c.variant)?.focus(c.anchor);};
  const savedText=()=>{const approve=APPROVE_TEXT();if(!decision.rev)return approveMode?approve.pending:t('nerozhodnuto');
   if(approveMode){const a=decision.approvals||{},ok=decidable.filter(id=>a[id]==='approved').length,fix=decidable.filter(id=>a[id]==='changes').length;
@@ -368,12 +461,16 @@ function itemSection({set,round,item,readOnly,latest,answeredIn,carried,epoch,in
   if(epoch!==sessionEpoch||!changed())return;
   if(state.reject&&!hasReason()){setSaveLine(t('Napiš, co předělat (nebo přilož screenshot) — uloží se po opuštění pole.'));return;}
   const sent=ready(),body={set:set.id,round:round.n,item:item.id,rev:decision.rev,variant:approveMode?null:state.choice||null,status:statusNow(),...(approveMode?{approvals:state.reject?{}:approvalsNow()}:{}),note:state.note.trim(),
-   attachments:state.attachments.map(({sha256,type,name})=>({sha256,type,name})),comments:sent.map(d=>({variant:d.variant,anchor:d.anchor,text:d.text.trim(),...(d.attachments?.length?{attachments:d.attachments.map(({sha256,type,name})=>({sha256,type,name}))}:{})}))};
+   attachments:state.attachments.map(({sha256,type,name})=>({sha256,type,name})),comments:sent.map(d=>({variant:d.variant,anchor:d.anchor,text:d.text.trim(),...(d.attachments?.length?{attachments:d.attachments.map(({sha256,type,name})=>({sha256,type,name}))}:{})})),
+   ...(Object.keys(state.edits).length?{editComments:Object.entries(state.edits).map(([id,text])=>({id,text}))}:{}),...(state.removes.length?{deleteComments:[...state.removes]}:{})};
+  const sentEdits={...state.edits},sentRemoves=[...state.removes];
   setSaveLine(t('Ukládám…'));
   try{
    const reply=await api('/api/review/feedback',body);if(epoch!==sessionEpoch)return;
    decision={rev:reply.rev,variant:reply.variant,status:reply.status,...(reply.approvals?{approvals:reply.approvals}:{}),note:reply.note,comments:reply.comments,attachments:reply.attachments||[],updatedAt:reply.updatedAt,updatedBy:reply.updatedBy};round.feedback[item.id]=decision;
-   state.drafts=state.drafts.filter(d=>!sent.includes(d));if(approveMode)state.approvals={...(reply.approvals||{})};
+   state.drafts=state.drafts.filter(d=>!sent.includes(d));
+   for(const [id,text] of Object.entries(sentEdits))if(state.edits[id]===text)delete state.edits[id];state.removes=state.removes.filter(id=>!sentRemoves.includes(id));
+   if(approveMode)state.approvals={...(reply.approvals||{})};
    refreshPins();sync();if(cmp.mode==='one')applyMode();onSaved?.();setSaveLine(t('Uloženo {at} · agent si to přečte přes MCP.',{at:when(decision.updatedAt)}));
   }catch(e){
    if(e.status===409&&retry){
@@ -382,6 +479,8 @@ function itemSection({set,round,item,readOnly,latest,answeredIn,carried,epoch,in
      if(r.n===round.n){decision=r.feedback[item.id]||{rev:0,variant:null,status:'pending',note:'',comments:[],attachments:[]};round.feedback[item.id]=decision;return saveNow(false);}}catch{}
     setSaveLine(t('Agent mezitím publikoval nové kolo. Rozepsané zůstalo — obnov stránku.'),true);return;
    }
+   // A refused edit or deletion is dropped, so the thread shows what is really saved.
+   if(sentRemoves.length||Object.keys(sentEdits).length){state.edits={};state.removes=[];drawPanel();refreshPins();}
    setSaveLine(e.message,true);
   }
  }
@@ -389,16 +488,37 @@ function itemSection({set,round,item,readOnly,latest,answeredIn,carried,epoch,in
  onLeave(()=>{if(!readOnly)save();});
  // One comment as a message of a thread: who, when, which variant and place, the text and its screenshots, and
  // under it the answer: the later round that addressed it, or that it still waits for the agent.
- const message=(c,badge)=>{const reply=answeredIn.get(c.id);return el('li',{class:`rv-msg${reply?' rv-done':''}`},badge,
+ const message=(c,badge,n)=>{const reply=answeredIn.get(c.id),own=n!==undefined&&mine(c),editing=own&&state.editing===c.id;
+  const tools=own&&!editing?el('span',{class:'rv-msg-tools'},
+   el('button',{type:'button',class:'acc-btn small',title:t('Upravit připomínku'),'aria-label':t('Upravit připomínku {n}',{n}),onclick:()=>{state.editing=c.id;state.editText=null;state.focusEdit=true;drawPanel();}},`✎ ${t('Upravit')}`),
+   el('button',{type:'button',class:'acc-btn small rv-delete',title:t('Smazat připomínku'),'aria-label':t('Smazat připomínku {n}',{n}),onclick:()=>{
+    if(!confirm(t('Smazat připomínku {n}?',{n})))return;delete state.edits[c.id];state.removes.push(c.id);if(state.editing===c.id)state.editing=null;refreshPins();sync();save();}},`🗑 ${t('Smazat')}`)):null;
+  return el('li',{class:`rv-msg${reply?' rv-done':''}`},badge,
   el('div',{class:'rv-msg-body'},
-   el('div',{class:'rv-msg-head'},el('span',{class:'tk-avatar','aria-hidden':'true'},initials(c.by)||'?'),el('b',{},c.by||''),el('span',{class:'sec-dim'},when(c.at)),el('span',{class:'tk-label'},label(c.variant)),el('span',{class:'sec-dim'},anchorText(c.anchor))),
-   c.text?linkified(c.text):null,shotList(c.attachments||[]),
+   el('div',{class:'rv-msg-head'},el('span',{class:'tk-avatar','aria-hidden':'true'},initials(c.by)||'?'),el('b',{},c.by||''),el('span',{class:'sec-dim'},when(c.at)),el('span',{class:'tk-label'},label(c.variant)),el('span',{class:'sec-dim'},anchorText(c.anchor)),
+    c.editedAt?el('span',{class:'sec-dim',title:when(c.editedAt)},t('upraveno')):null,tools),
+   editing?editBox(c):c.text?linkified(c.text):null,shotList(c.attachments||[]),
    reply?el('div',{class:'rv-reply'},el('div',{class:'rv-msg-head'},el('span',{class:'tk-avatar','aria-hidden':'true'},initials(reply.publishedBy)||'?'),el('b',{},reply.publishedBy),el('span',{class:'sec-pill ok'},t('zapracováno v kole {n}',{n:reply.n}))),reply.notes?linkified(reply.notes.length>280?reply.notes.slice(0,280)+'…':reply.notes):null)
     :latest?el('span',{class:'sec-pill warn rv-wait'},t('čeká na agenta')):null));};
  function savedList(){
-  if(!decision.comments.length)return null;
-  return el('details',{class:'rv-saved',open:''},el('summary',{},t('Připomínky ({n})',{n:decision.comments.length})+(decision.rev?` · ${decision.updatedBy} ${when(decision.updatedAt)}`:'')),
-   el('ol',{class:'rv-thread'},decision.comments.map((c,i)=>message(c,el('button',{type:'button',class:'rv-pin-badge saved',title:t('Ukázat ve variantě'),'aria-label':t('Ukázat připomínku {n} ve variantě',{n:i+1}),onclick:()=>focusPin(c)},'S'+(i+1))))));
+  const list=comments();if(!list.length)return null;
+  return el('details',{class:'rv-saved',open:''},el('summary',{},t('Připomínky ({n})',{n:list.length})+(decision.rev?` · ${decision.updatedBy} ${when(decision.updatedAt)}`:'')),
+   el('ol',{class:'rv-thread'},list.map((c,i)=>message(c,el('button',{type:'button',class:'rv-pin-badge saved',title:t('Ukázat ve variantě'),'aria-label':t('Ukázat připomínku {n} ve variantě',{n:i+1}),onclick:()=>focusPin(c)},'S'+(i+1)),'S'+(i+1)))));
+ }
+ // Editing a saved comment in place: Save (or Cmd/Ctrl+Enter) sends the new text, Esc or Cancel keeps the old one.
+ function editBox(c){
+  const area=el('textarea',{rows:'2',maxlength:'2000','data-key':'edit-'+c.id,'aria-label':t('Upravit připomínku'),oninput:e=>{state.editText=e.target.value;}});
+  area.value=state.editText??c.text;
+  const close=()=>{state.editing=null;state.editText=null;drawPanel();};
+  const commit=()=>{const text=area.value.trim(),saved=decision.comments.find(x=>x.id===c.id);
+   if(!text&&!c.attachments?.length){setSaveLine(t('Připomínka nesmí být prázdná — smaž ji tlačítkem Smazat.'),true);area.focus();return;}
+   if(saved&&text!==saved.text)state.edits[c.id]=text;else delete state.edits[c.id];close();refreshPins();sync();save();};
+  area.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();close();}else if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();commit();}});
+  if(state.focusEdit){state.focusEdit=false;queueMicrotask(()=>{if(area.isConnected){area.focus();area.setSelectionRange(area.value.length,area.value.length);}});}
+  return el('div',{class:'rv-edit'},area,el('div',{class:'rv-draft-tools'},
+   el('button',{type:'button',class:'acc-btn small primary',onmousedown:e=>e.preventDefault(),onclick:commit},t('Uložit')),
+   el('button',{type:'button',class:'acc-btn small',onmousedown:e=>e.preventDefault(),onclick:close},t('Zrušit')),
+   el('span',{class:'sec-dim'},t('Cmd/Ctrl+Enter uloží, Esc zruší.'))));
  }
  // Comments of earlier rounds that no round answered: they still stand, so they stay in sight.
  const carriedList=()=>carried?.length?el('details',{class:'rv-saved rv-carried'},el('summary',{},t('Nevyřízené z dřívějších kol ({n})',{n:carried.length})),
@@ -465,13 +585,15 @@ function itemSection({set,round,item,readOnly,latest,answeredIn,carried,epoch,in
   redrawing=true;try{panel.replaceChildren(...[
    el('div',{class:'rv-bar'},el('div',{class:'rv-bar-left'},el('span',{class:'rv-bar-title'},t('Rozhodnutí')),all,mode,reject,noteBtn),el('div',{class:'rv-bar-right'},saveLine)),
    hint,
-   state.commenting&&!state.drafts.length?el('p',{class:'sec-dim'},(item.kind==='html'?t('Najeď na prvek mockupu a klikni.'):item.kind==='model'?t('Klikni na povrch modelu (tažením dál otáčíš).'):t('Klikni do obrázku.'))+' '+t('Esc ruší.')):null,
+   state.commenting&&!state.drafts.length?el('p',{class:'sec-dim'},(item.kind==='html'?t('Najeď na prvek mockupu a klikni.'):item.kind==='model'?t('Klikni na povrch modelu (tažením dál otáčíš).'):item.kind==='video'?t('Klikni do videa: připomínka si zapamatuje čas i místo.'):item.kind==='audio'?t('Klikni do průběhu zvuku: připomínka si zapamatuje čas.'):t('Klikni do obrázku.'))+' '+t('Esc ruší.')):null,
    list,note,savedList(),carriedList()].filter(Boolean));}finally{redrawing=false;}
   if(activeKey){const again=panel.querySelector(`[data-key="${activeKey}"]`);if(again){again.focus();try{again.setSelectionRange(...sel);}catch{}}}
  }
  section=el('section',{class:'rv-item',id:'rv-item-'+item.id},
   el('header',{class:'rv-item-head'},el('span',{class:'rv-item-no'},`${index+1}/${count}`),el('h2',{class:'rv-item-title'},item.title),camSync,badge),
-  item.description?el('p',{class:'tk-text acc-dim rv-item-desc'},item.description):null,modeBar,row,swipe?.node,panel);
+  item.description?el('p',{class:'tk-text acc-dim rv-item-desc'},item.description):null,modeBar,row,swipe?.node,clock?transport(item,clock):null,panel);
+ // An item that scrolls out of sight stops playing.
+ if(clock&&typeof IntersectionObserver==='function'){const io=new IntersectionObserver(es=>{if(es.some(e=>!e.isIntersecting)&&clock.playing())clock.pause();});io.observe(section);onLeave(()=>io.disconnect());}
  drawPanel();refreshPins();sync();applyMode();if(state.commenting)setCommenting(true);
  if(!readOnly&&decision.rev&&!changed())setSaveLine(t('Uloženo {at}',{at:when(decision.updatedAt)}));
  return section;
@@ -547,6 +669,65 @@ function imageViewer(variant,{onPick}){
  const strip=mediaStrip(variant,'rv-thumbs',i=>show(i),(m,i)=>el('img',{src:blob(m.sha256),alt:m.caption||m.name||t('Obrázek {n}',{n:i+1}),loading:'lazy'}));
  box.append(img,overlay);node.append(...[box,strip.node,caption].filter(Boolean));show(0);
  return {node,setMode(on){mode=on;box.classList.toggle('rv-commenting',on);},setPins(list){pins=list;draw();},focus(a){if(a&&(a.media||0)!==index)show(a.media||0);box.scrollIntoView({block:'nearest',behavior:'smooth'});}};
+}
+
+// Clip (mp4, webm): played by the item's clock, no own controls; a click plays or pauses, in comment mode it
+// pins the point and the time. Pins show while the clip is within a quarter of a second of their time. ----------
+function videoViewer(variant,{onPick,clock}){
+ let index=0,mode=false,pins=[];
+ const node=el('div',{class:'rv-media'}),box=el('div',{class:'rv-image rv-video'}),overlay=el('div',{class:'rv-overlay'}),caption=el('p',{class:'sec-dim rv-caption'});
+ const video=clock.add(Object.assign(el('video',{playsinline:'',preload:'metadata',disablepictureinpicture:'','data-variant':variant.id}),{muted:true,loop:true}));
+ video.addEventListener('click',()=>clock.toggle());
+ overlay.addEventListener('click',e=>{if(!mode||e.target!==overlay)return;const r=overlay.getBoundingClientRect();if(!r.width||!r.height)return;clock.pause();
+  onPick({kind:'frame',media:index,t:Math.round(video.currentTime*1000)/1000,x:Math.round(Math.max(0,Math.min(1,(e.clientX-r.left)/r.width))*1000)/1000,y:Math.round(Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))*1000)/1000});});
+ const draw=()=>overlay.replaceChildren(...pins.filter(p=>(p.anchor.media||0)===index&&Math.abs((p.anchor.t||0)-video.currentTime)<=0.25).map(p=>{
+  const n=pinNode(p,{onClick:e=>{e.stopPropagation();clock.pause();clock.seek(p.anchor.t||0);}});n.style.left=p.anchor.x*100+'%';n.style.top=p.anchor.y*100+'%';return n;}));
+ video.addEventListener('timeupdate',draw);video.addEventListener('seeked',draw);
+ const show=i=>{index=i;strip.mark(i);const m=variant.media[i];video.src=blob(m.sha256);if(m.poster)video.poster=blob(m.poster.sha256);else video.removeAttribute('poster');
+  video.setAttribute('aria-label',t('Varianta {label}',{label:variant.label})+(m.caption?': '+m.caption:''));caption.textContent=m.caption||'';caption.hidden=!m.caption;draw();};
+ const strip=mediaStrip(variant,'rv-media-tabs',i=>show(i),(m,i)=>m.name||t('Klip {n}',{n:i+1}));
+ box.append(video,overlay);node.append(...[strip.node,box,caption].filter(Boolean));show(0);
+ return {node,setMode(on){mode=on;box.classList.toggle('rv-commenting',on);},setPins(list){pins=list;draw();},
+  focus(a){if(a&&(a.media||0)!==index)show(a.media||0);if(a&&a.kind==='frame'){clock.pause();clock.seek(a.t);}box.scrollIntoView({block:'nearest',behavior:'smooth'});}};
+}
+
+// Audio track (mp3, wav, ogg, flac, m4a, webm): its waveform, decoded here, with a playhead and the pins along the
+// time axis. A click seeks there; in comment mode it pins the comment to that time. The <audio> element is hidden
+// and driven by the item's clock. A track over 64 MiB is not decoded and shows a flat line. --------------------
+const WAVE_MAX=64*1024*1024,WAVE_BUCKETS=2000;
+async function peaksOf(m){
+ if((m.size||0)>WAVE_MAX)return null;const Ctx=globalThis.AudioContext||globalThis.webkitAudioContext;if(!Ctx)return null;
+ const buf=await (await fetch(blob(m.sha256),{credentials:'same-origin'})).arrayBuffer(),ctx=new Ctx();
+ try{const a=await ctx.decodeAudioData(buf),ch=[...Array(a.numberOfChannels).keys()].map(c=>a.getChannelData(c));
+  const step=Math.max(1,Math.floor(a.length/WAVE_BUCKETS)),out=new Float32Array(WAVE_BUCKETS*2);
+  for(let b=0;b<WAVE_BUCKETS;b++){let lo=0,hi=0;const s0=b*step,s1=Math.min(a.length,s0+step);
+   for(const d of ch)for(let i=s0;i<s1;i++){const v=d[i];if(v<lo)lo=v;else if(v>hi)hi=v;}out[b*2]=lo;out[b*2+1]=hi;}
+  return out;}finally{ctx.close?.().catch?.(()=>{});}
+}
+function audioViewer(variant,{onPick,clock}){
+ let index=0,mode=false,pins=[],peaks=null;
+ const node=el('div',{class:'rv-media'}),box=el('div',{class:'rv-wave',role:'img'}),canvas=el('canvas',{class:'rv-wave-canvas'}),head=el('div',{class:'rv-wave-head','aria-hidden':'true'});
+ const overlay=el('div',{class:'rv-overlay'}),caption=el('p',{class:'sec-dim rv-caption'});
+ const audio=el('audio',{preload:'metadata','data-variant':variant.id});audio.loop=true;audio.host=box;clock.add(audio);
+ const dur=()=>Number.isFinite(audio.duration)?audio.duration:0;
+ function paint(){const w=box.clientWidth,h=box.clientHeight;if(!w||!h)return;const dpr=globalThis.devicePixelRatio||1;
+  canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);const g=canvas.getContext('2d');if(!g)return;g.clearRect(0,0,canvas.width,canvas.height);
+  g.fillStyle=getComputedStyle(box).color;const mid=canvas.height/2;if(!peaks){g.fillRect(0,mid-dpr,canvas.width,2*dpr);return;}
+  for(let x=0;x<canvas.width;x++){const i=Math.min(WAVE_BUCKETS-1,Math.floor(x/canvas.width*WAVE_BUCKETS))*2,lo=peaks[i],hi=peaks[i+1];g.fillRect(x,mid-hi*mid*0.95,1,Math.max(dpr,(hi-lo)*mid*0.95));}}
+ const playhead=()=>{head.style.left=(dur()?Math.min(1,audio.currentTime/dur())*100:0)+'%';};
+ const draw=()=>{playhead();overlay.replaceChildren(...(dur()?pins.filter(p=>(p.anchor.media||0)===index):[]).map(p=>{
+  const n=pinNode(p,{onClick:e=>{e.stopPropagation();clock.pause();clock.seek(p.anchor.t||0);}});n.style.left=Math.min(1,(p.anchor.t||0)/dur())*100+'%';n.style.top='26px';return n;}));};
+ box.addEventListener('click',e=>{const r=box.getBoundingClientRect();if(!r.width||!dur())return;const at=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width))*dur();
+  if(mode){clock.pause();clock.seek(at);onPick({kind:'time',media:index,t:Math.round(at*1000)/1000});}else clock.seek(at);});
+ audio.addEventListener('loadedmetadata',draw);audio.addEventListener('timeupdate',playhead);audio.addEventListener('seeked',playhead);clock.on(playhead);
+ const ro=typeof ResizeObserver==='function'?new ResizeObserver(()=>paint()):null;ro?.observe(box);onLeave(()=>ro?.disconnect());
+ const show=i=>{index=i;strip.mark(i);const m=variant.media[i];audio.src=blob(m.sha256);peaks=null;paint();
+  box.setAttribute('aria-label',t('Průběh zvuku, varianta {label}',{label:variant.label})+(m.caption?': '+m.caption:''));caption.textContent=m.caption||'';caption.hidden=!m.caption;draw();
+  peaksOf(m).then(p=>{if(variant.media[index]===m){peaks=p;paint();}},()=>{});};
+ const strip=mediaStrip(variant,'rv-media-tabs',i=>show(i),(m,i)=>m.name||t('Stopa {n}',{n:i+1}));
+ box.append(canvas,head,overlay);node.append(...[strip.node,box,audio,caption].filter(Boolean));show(0);
+ return {node,setMode(on){mode=on;box.classList.toggle('rv-commenting',on);},setPins(list){pins=list;draw();},
+  focus(a){if(a&&(a.media||0)!==index)show(a.media||0);if(a&&a.kind==='time'){clock.pause();clock.seek(a.t);}box.scrollIntoView({block:'nearest',behavior:'smooth'});}};
 }
 
 // 3D model (.glb) in <model-viewer>: orbit and zoom, animations, pins on the surface. ----------------------------

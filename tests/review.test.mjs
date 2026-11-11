@@ -24,6 +24,28 @@ async function stores(t,opts){
 const put=(r,buf)=>r.putChunk(sha(buf),{offset:0,size:buf.length},body(buf));
 const htmlItem=(id='login',variants=['a','b'])=>({id,title:'Login',kind:'html',variants:variants.map(v=>({id:v,title:'Var '+v,media:[{type:'text/html',html:HTML.replace('Go',v)}]}))});
 
+test('review store: the author edits and deletes saved comments of the latest round',async t=>{
+ const {r}=await stores(t);
+ await r.publish({project:'home-hub',title:'Login',items:[htmlItem()]},'claude');
+ const base={set:'R-1',round:1,item:'login'};
+ const d1=await r.feedback({...base,rev:0,variant:'a',status:'revise',comments:[{variant:'a',anchor:null,text:'one'},{variant:'b',anchor:null,text:'two'}]},'alice');
+ const [one,two]=d1.comments;
+ // Only the author, only known ids, never both on one id, never empty text.
+ await assert.rejects(r.feedback({...base,rev:1,variant:'a',status:'revise',editComments:[{id:one.id,text:'x'}]},'bob'),/forbidden/);
+ await assert.rejects(r.feedback({...base,rev:1,variant:'a',status:'revise',deleteComments:[two.id]},'bob'),/forbidden/);
+ await assert.rejects(r.feedback({...base,rev:1,variant:'a',status:'revise',deleteComments:['nope']},'alice'),/invalid/);
+ await assert.rejects(r.feedback({...base,rev:1,variant:'a',status:'revise',editComments:[{id:one.id,text:'x'}],deleteComments:[one.id]},'alice'),/invalid/);
+ await assert.rejects(r.feedback({...base,rev:1,variant:'a',status:'revise',editComments:[{id:one.id,text:'  '}]},'alice'),/invalid/);
+ const d2=await r.feedback({...base,rev:1,variant:'a',status:'revise',editComments:[{id:one.id,text:' one, smaller '}]},'alice');
+ assert.equal(d2.comments.length,2);assert.equal(d2.comments[0].text,'one, smaller');assert.equal(d2.comments[0].id,one.id);assert.ok(d2.comments[0].editedAt);
+ assert.equal(d2.comments[1].editedAt,undefined);
+ const d3=await r.feedback({...base,rev:2,variant:'a',status:'accept',deleteComments:[one.id]},'alice');
+ assert.deepEqual(d3.comments.map(c=>c.id),[two.id]);assert.equal(d3.status,'accept');
+ // A later round makes the old one read-only: its comments can no longer change.
+ await r.publish({set:'R-1',items:[htmlItem()],addresses:[two.id]},'claude');
+ await assert.rejects(r.feedback({...base,rev:3,variant:'a',status:'accept',deleteComments:[two.id]},'alice'),/conflict/);
+});
+
 test('review store: publish, rounds, decisions with rev, anchors and pending feedback',async t=>{
  const {r,tickets}=await stores(t);
  const tk=await tickets.create({project:'home-hub',title:'Login screen'},'a'),dune=await tickets.create({project:'sample-game',title:'Harvester'},'a');
@@ -140,6 +162,11 @@ test('review HTTP: scopes, sandbox headers, unpublished blobs, CSRF and the push
  assert.equal((await h.post('/api/review/feedback',fb,auth(reader))).status,403);
  const saved=await h.post('/api/review/feedback',fb,h.admin);assert.equal(saved.status,200);assert.equal((await saved.json()).comments[0].by,'admin');
  assert.equal((await h.post('/api/review/feedback',fb,h.admin)).status,409);
+ // Only the author edits or deletes a comment: the agent's key is refused with 403, the owner's edit keeps the id.
+ const cid=(await (await fetch(h.origin+'/api/review/sets/R-1',{headers:h.admin})).json()).rounds[0].feedback.login.comments[0].id;
+ const foreign=await h.post('/api/review/feedback',{...fb,rev:1,comments:[],deleteComments:[cid]},auth(agent));assert.equal(foreign.status,403);assert.equal((await foreign.json()).error.message,'Only the author of a comment can edit or delete it.');
+ const edited=await (await h.post('/api/review/feedback',{...fb,rev:1,comments:[],editComments:[{id:cid,text:'much bigger'}]},h.admin)).json();
+ assert.equal(edited.comments[0].id,cid);assert.equal(edited.comments[0].text,'much bigger');assert.ok(edited.comments[0].editedAt);
  assert.equal((await (await fetch(h.origin+'/api/review?feedback=pending',{headers:h.admin})).json()).sets.length,1);
 
  // MCP: list what waits, read the decision with its anchor, publish the next round inline.
@@ -198,6 +225,53 @@ test('review store: done when every item is taken, rework with screenshots and l
  assert.deepEqual(await ids('done'),['R-1']);assert.deepEqual(await ids('active'),[]);
  assert.equal((await r.list({status:'done'})).sets[0].done,true);assert.equal((await r.get('R-1')).done,true);
  assert.equal((await r.feedback({set:'R-1',round:1,item:'two',rev:2,variant:'b',status:'revise',attachments:[]},'x')).attachments.length,0);
+});
+
+test('review store: aligned marks an image item whose variants are one shot (opened in the swipe view)',async t=>{
+ const {r}=await stores(t);await put(r,PNG);
+ const img=(id,extra={})=>({id,title:'Unit',kind:'image',...extra,variants:['a','b'].map(v=>({id:v,media:[{sha256:sha(PNG),type:'image/png'}]}))});
+ await r.publish({project:'sample-game',title:'Before/after',items:[img('shot',{aligned:true}),img('sheet'),img('off',{aligned:false})]},'claude');
+ const it=(await r.get('R-1')).rounds[0].items;
+ assert.equal(it[0].aligned,true);assert.equal('aligned'in it[1],false);assert.equal('aligned'in it[2],false,'false is not stored');
+ await assert.rejects(r.publish({project:'sample-game',title:'x',items:[{...htmlItem(),aligned:true}]},'c'),/invalid/,'only image and video items');
+ await assert.rejects(r.publish({project:'sample-game',title:'x',items:[img('s',{aligned:'yes'})]},'c'),/invalid/);
+});
+
+test('review store: video items take mp4 and webm, a poster, aligned, and comments pinned to a time',async t=>{
+ const {r}=await stores(t);
+ const MP4=Buffer.concat([Buffer.from([0,0,0,0x18]),Buffer.from('ftypisom'),Buffer.alloc(12)]),WEBM=Buffer.concat([Buffer.from([0x1a,0x45,0xdf,0xa3]),Buffer.alloc(16)]);
+ for(const b of [MP4,WEBM,PNG])await put(r,b);
+ const clip=(id,extra={})=>({id,title:'Explosion',kind:'video',...extra,variants:[{id:'a',label:'Before',media:[{sha256:sha(MP4),type:'video/mp4',poster:{sha256:sha(PNG),type:'image/png'}}]},{id:'b',label:'After',media:[{sha256:sha(WEBM),type:'video/webm'}]}]});
+ const set=await r.publish({project:'sample-game',title:'Rocket fix',items:[clip('boom',{aligned:true})]},'claude');
+ assert.deepEqual(set.round.kinds,['video']);assert.equal(set.cover.sha256,sha(PNG),'the poster is the card cover');
+ const it=(await r.get('R-1')).rounds[0].items[0];assert.equal(it.kind,'video');assert.equal(it.aligned,true);assert.equal(it.variants[0].media[0].poster.sha256,sha(PNG));
+ // The declared type must match the file: a PNG is not a clip, an mp4 is not a webm.
+ await assert.rejects(r.publish({project:'sample-game',title:'x',items:[{id:'v',title:'v',kind:'video',variants:[{id:'a',media:[{sha256:sha(PNG),type:'video/mp4'}]}]}]},'c'),/invalid/);
+ await assert.rejects(r.publish({project:'sample-game',title:'x',items:[{id:'v',title:'v',kind:'video',variants:[{id:'a',media:[{sha256:sha(MP4),type:'video/webm'}]}]}]},'c'),/invalid/);
+ await assert.rejects(r.publish({project:'sample-game',title:'x',items:[{id:'v',title:'v',kind:'image',variants:[{id:'a',media:[{sha256:sha(MP4),type:'video/mp4'}]}]}]},'c'),/invalid/,'a clip is not an image');
+ // A comment on a clip: the time and the point; a point anchor alone is not enough.
+ const d=await r.feedback({set:'R-1',round:1,item:'boom',rev:0,variant:'b',status:'revise',comments:[{variant:'b',anchor:{kind:'frame',t:0.4567,x:0.5,y:0.25},text:'fireball too small'}]},'alice');
+ assert.deepEqual(d.comments[0].anchor,{kind:'frame',media:0,t:0.457,x:0.5,y:0.25});
+ await assert.rejects(r.feedback({set:'R-1',round:1,item:'boom',rev:d.rev,variant:'b',status:'revise',comments:[{variant:'b',anchor:{kind:'point',x:0.5,y:0.5},text:'x'}]},'alice'),/invalid/);
+ await assert.rejects(r.feedback({set:'R-1',round:1,item:'boom',rev:d.rev,variant:'b',status:'revise',comments:[{variant:'b',anchor:{kind:'frame',t:-1,x:0.5,y:0.5},text:'x'}]},'alice'),/invalid/);
+});
+
+test('review store: audio items take mp3, wav, ogg, flac and m4a, and comments pinned to a moment',async t=>{
+ const {r}=await stores(t);
+ const MP3=Buffer.concat([Buffer.from('ID3'),Buffer.alloc(13)]),RAW_MP3=Buffer.concat([Buffer.from([0xff,0xfb,0x90,0x64]),Buffer.alloc(12)]);
+ const WAV=Buffer.concat([Buffer.from('RIFF'),Buffer.alloc(4),Buffer.from('WAVE'),Buffer.alloc(8)]),OGG=Buffer.concat([Buffer.from('OggS'),Buffer.alloc(12)]);
+ const FLAC=Buffer.concat([Buffer.from('fLaC'),Buffer.alloc(12)]),M4A=Buffer.concat([Buffer.from([0,0,0,0x18]),Buffer.from('ftypM4A '),Buffer.alloc(8)]);
+ const files=[[MP3,'audio/mpeg'],[RAW_MP3,'audio/mpeg'],[WAV,'audio/wav'],[OGG,'audio/ogg'],[FLAC,'audio/flac'],[M4A,'audio/mp4']];
+ for(const [b] of files)await put(r,b);await put(r,PNG);
+ const items=files.map(([b,type],i)=>({id:'t'+i,title:'Track',kind:'audio',variants:[{id:'a',media:[{sha256:sha(b),type}]},{id:'b',media:[{sha256:sha(b),type}]}]}));
+ const set=await r.publish({project:'sample-game',title:'Music',items},'claude');assert.deepEqual(set.round.kinds,['audio']);
+ // The declared type must match the file; a picture is not a track; audio is never aligned (nothing to swipe).
+ await assert.rejects(r.publish({project:'sample-game',title:'x',items:[{id:'a',title:'a',kind:'audio',variants:[{id:'a',media:[{sha256:sha(PNG),type:'audio/mpeg'}]}]}]},'c'),/invalid/);
+ await assert.rejects(r.publish({project:'sample-game',title:'x',items:[{id:'a',title:'a',kind:'audio',variants:[{id:'a',media:[{sha256:sha(WAV),type:'audio/ogg'}]}]}]},'c'),/invalid/);
+ await assert.rejects(r.publish({project:'sample-game',title:'x',items:[{...items[0],aligned:true}]},'c'),/invalid/);
+ const d=await r.feedback({set:'R-1',round:1,item:'t0',rev:0,variant:'b',status:'revise',comments:[{variant:'b',anchor:{kind:'time',t:12.3456},text:'drop comes too late'}]},'alice');
+ assert.deepEqual(d.comments[0].anchor,{kind:'time',media:0,t:12.346});
+ await assert.rejects(r.feedback({set:'R-1',round:1,item:'t0',rev:d.rev,variant:'b',status:'revise',comments:[{variant:'b',anchor:{kind:'frame',t:1,x:0,y:0},text:'x'}]},'alice'),/invalid/);
 });
 
 test('review store: approve items judge each deliverable; reference variants are never taken',async t=>{

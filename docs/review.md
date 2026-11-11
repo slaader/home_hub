@@ -6,7 +6,7 @@ decision per item ("A, but with these changes"). The agent reads that decision t
 next round. It sits between paper.design (a canvas that is real HTML) and Claude artifacts (self-contained
 pages), but it is attached to a project instead of a chat.
 
-Status: phases 1 and 2 are implemented; phase 3 is planned.
+Status: phases 1, 2 and 3 are implemented.
 
 ## Phases
 
@@ -14,7 +14,7 @@ Status: phases 1 and 2 are implemented; phase 3 is planned.
 |---|---|
 | 1 | Review sets per project and tickets, HTML mockups and images, element and point pins, one saved decision per item, MCP read and publish, `scripts/review-push.mjs`, project type |
 | 2 | 3D: `.glb` with Google `<model-viewer>` vendored in `public/vendor/` (accepted 2026-11-08), surface pins with the camera pose, synchronised cameras across variants, animations |
-| 3 | Audio and video with time-anchored comments |
+| 3 | Video and audio (2026-11-11): clips and tracks played in sync across variants, one variant audible at a time, swipe for aligned clips, comments pinned to a time (and, in a clip, a place) |
 
 ## Where things live
 
@@ -31,12 +31,12 @@ Status: phases 1 and 2 are implemented; phase 3 is planned.
 ```
 set R-<n>  {project, title, description, tickets[], status open|archived, rev, rounds[]}
   round <n> {notes, addresses[comment ids], publishedAt, publishedBy, items[], feedback{itemId → decision}}
-    item    {id, title, description, kind html|image|model, mode choose|approve, variants[]}
+    item    {id, title, description, kind html|image|model|video|audio, mode choose|approve, aligned?, variants[]}
       variant {id a..f, label, title, description, reference?, media[]}
         media {sha256, type, size, name, caption, viewport?{width,height}, poster?{sha256,type,size}}
   decision {rev, variant|null, status pending|accept|revise|reject, approvals?{variantId → approved|changes}, note, comments[], attachments[], updatedAt, updatedBy}
     attachment {sha256, type image/*, size, name}
-    comment {id, variant, anchor, text, attachments?[], by, at}   (text may be empty when it has a screenshot)
+    comment {id, variant, anchor, text, attachments?[], by, at, editedAt?}   (text may be empty when it has a screenshot)
 ```
 
 - **Two kinds of item.** `mode:"choose"` (the default) shows alternatives and the owner takes one. `mode:"approve"`
@@ -44,6 +44,10 @@ set R-<n>  {project, title, description, tickets[], status open|archived, rev, r
   or comments that send it back. The decision then has no `variant`; `approvals` maps each variant to `approved` or
   `changes`, and the status follows: `accept` when all are approved, `revise` when any has changes, `pending`
   otherwise (`reject` = redo the whole item, as before). Use approve whenever the variants are not alternatives.
+- `aligned:true` (image and video items) says every variant is the same shot: the same camera, framing and pixel
+  size (and, for clips, the same timing), such as one unit rendered before and after a fix. The page opens such an item in *Swipe*. A contact sheet or grid
+  is never aligned, even of the same subject, because its cells differ between variants: to make a before/after
+  swipeable, publish one aligned item per shot rather than one sheet per variant.
 - `reference:true` marks a variant shown only for comparison, such as what is in production now. It can be commented
   on, but never taken or approved. In a choose item, leave "what we have now" as a normal variant if keeping it is
   a valid answer.
@@ -51,11 +55,16 @@ set R-<n>  {project, title, description, tickets[], status open|archived, rev, r
   the kinds that are present.
 - `anchor` for HTML is `{kind:'element', mockId?, selector, x, y, snippet}`. The coordinates are document
   pixels in the mockup's fixed viewport, and `snippet` is the start of the element's `outerHTML`, so the agent
-  knows which element was meant. For images it is `{kind:'point', x, y}` with fractions in 0..1. For 3D models
+  knows which element was meant. For images it is `{kind:'point', x, y}` with fractions in 0..1. For clips it is `{kind:'frame', t, x, y}`: the
+  time in seconds and the point as fractions. For audio it is `{kind:'time', t}`. For 3D models
   it is `{kind:'surface', …}` (see below). It may also be `null`, a comment on the whole variant.
 - A decision is saved in one request, guarded by `rev`: the chosen variant, the status and the new comments.
   `accept` means take it as it is. `revise` means take it, plus the comments. `reject` means none of these;
   make new ones (it needs a note or a comment). `pending` saves comments without deciding.
+- A saved comment of the latest round can be edited or deleted by the person who wrote it, in the same request
+  (`editComments`, `deleteComments`). An edit keeps the comment's id and stamps `editedAt`. In the thread your own
+  comments carry ✎ Edit and 🗑 Delete; deleting the only comment on the chosen variant turns `revise` back into
+  `accept`. Once a later round exists the old round, and its comments, are read-only.
 - The page saves on its own: picking a variant saves it, a comment saves when you leave its text box. "None of
   these — redo" opens the note box for what to redo; it takes links in the text and screenshots (paste or
   pick a file, uploaded as blobs, at most 10 per item and 20 MiB each), and the reject is saved once the box has
@@ -77,8 +86,9 @@ time zone (site.json → `timeZone`, else the browser's).
   MCP connection snippet. An empty tab of a hub that has sets only says why that tab is empty.
 - **Comparing.** Each item with several variants has a switch: *Side by side* (the grid), *One at a time*
   (one variant at full width with A / B / C tabs; ← → move between them; the default on a phone) and, for
-  image items, *Swipe*: two variants in one frame with a divider to drag (the mouse, a finger or the arrow
-  keys move it; pick which two with the selects). Pins are placed in the first two views.
+  image and video items whose pictures have one shape (aspect ratio within 1 %), *Swipe*: two variants in one frame with a
+  divider to drag (the mouse, a finger or the arrow keys move it; pick which two with the selects). Swipe is the
+  default for an `aligned` item; pictures of different shapes never get it. Pins are placed in the first two views.
 - **Deciding.** A bar under the header counts the round's decisions (taken, taken with changes, redo,
   undecided) and jumps to the next undecided item, in another kind tab if need be. Each item shows its saved
   state as a badge and a coloured frame, and one line says what to do while it is still undecided.
@@ -88,6 +98,44 @@ time zone (site.json → `timeZone`, else the browser's).
   rounds that no round has answered stay visible under the item as "Open from earlier rounds".
 - **3D.** Under each model: *Default view* (back to the framing the model loads with) and *Rotate* (a slow
   turntable), next to the animation picker.
+
+## Video (phase 3)
+
+An item of kind `video` has variants that are clips: `video/mp4` (H.264, the one every browser plays) or
+`video/webm`. The upload check is the file's magic bytes (`ftyp` box for mp4, the EBML header for webm); a clip is
+at most 256 MiB like any blob, and is served with range requests so the browser can seek. A clip may carry
+`poster: {sha256, type}` like a model: the set's card cover and the still shown before it plays.
+
+Use a clip for anything that moves (an effect, an animation, a sequence), not a sheet of frames: a sheet freezes a
+few moments, a clip shows the timing. Keep the variants the same length and frame rate, with the same camera, and
+mark the item `aligned` when they are the same shot; a few seconds is enough, slow motion is done by the page.
+
+- **Playing in sync.** Under the item one bar drives every clip (🔈 on a variant's header picks whose sound you hear): ▶/⏸, one frame back and forward (1/30 s), a
+  scrub bar, the time, the speed (1×, 0.5×, 0.25×) and the sound (off, or the soundtrack of one variant, so two
+  never play over each other). The first visible clip leads and the others follow it; a shorter clip loops on its
+  own. A click on a clip plays or pauses. Clips loop and start muted.
+- **Swipe** works as for images, with the two clips playing in step under the divider.
+- **Pins.** In comment mode a click pauses the clips and pins the comment to that time and point
+  (`{kind:'frame', t, x, y}`). A pin is drawn while the clip is within a quarter of a second of its time; a click on
+  the comment in the thread seeks every clip there.
+- The page policy needs nothing new for this: `media-src` falls back to `default-src 'self'`.
+
+## Audio (phase 3)
+
+An item of kind `audio` has variants that are tracks: `audio/mpeg` (mp3), `audio/wav`, `audio/ogg` (Vorbis or Opus),
+`audio/flac`, `audio/mp4` (m4a) or `audio/webm`, checked by their magic bytes. Keep the variants the same length and
+loudness, so a switch between them compares the music, not the volume. Audio items are never `aligned`.
+
+- **Waveforms.** Each variant shows its waveform (decoded in the browser; a track over 64 MiB shows a flat line),
+  a playhead and its pins. A click on a waveform seeks there.
+- **One audible at a time.** All tracks play in sync on one clock, like clips, and exactly one variant is heard:
+  the first at the start. 🔈 *Listen to B* on a variant switches the sound to it at the same moment; 🔊 on the
+  variant you hear mutes it and hands the sound to the next one. The sound select in the bar does the same, and
+  can also turn the sound off.
+- **Pins.** In comment mode a click on the waveform pauses and pins the comment to that time (`{kind:'time', t}`).
+
+Both video and audio items stop playing when they scroll out of sight, and only one item plays at a time: starting
+one pauses the other.
 
 ## HTML mockups are sandboxed
 
@@ -178,7 +226,7 @@ Then a manifest for the push script:
 ## HTTP API
 
 Reads need any sign-in. Writes need write permission; API keys need the `review:write` scope. Error codes:
-`400/404/409/413 REVIEW_FAILED`.
+`400/403/404/409/413 REVIEW_FAILED`.
 
 - `GET /api/review?project=&ticket=&status=open|active|done|archived|all` → `{sets:[summary]}`. The default
   status is `open` (not archived); `active` is open and not done, `done` is open and done.
@@ -195,8 +243,10 @@ Reads need any sign-in. Writes need write permission; API keys need the `review:
 - `POST /api/review/publish` `{project, set?, title?, description?, tickets?, notes?, addresses?, items}` →
   `201` new set, or `200` new round of `set`. Media reference uploaded blobs by `sha256`, or carry a small
   HTML mockup inline (`{type:'text/html', html}`). The body may be up to 64 kB.
-- `POST /api/review/feedback` `{set, round, item, rev, variant, status, note?, comments?, attachments?}` → the
+- `POST /api/review/feedback` `{set, round, item, rev, variant, status, note?, comments?, attachments?, editComments?, deleteComments?}` → the
   decision. `attachments` replaces the list: `[{sha256, type, name?}]`, images uploaded first with `PUT`.
+  `editComments` `[{id, text}]` replaces the text of saved comments, `deleteComments` `[id]` removes them; both only
+  for the caller's own comments (`403` otherwise), an unknown id or one id in both lists is `400`.
   `rev` is the decision's rev (0 before the first save). Body up to 64 kB.
 - `POST /api/review/sets` `{id, rev, status?, title?}` → changes or archives a set.
 
@@ -216,8 +266,8 @@ HOME_HUB_URL=https://… HOME_HUB_TOKEN=hhk_… node scripts/review-push.mjs pat
 
 The token is a service-account key with the `review:write` scope (Users and API → Service accounts), and the
 `project` in the manifest must exist in the Project Tracker. `review.json` uses the same shape as `review_publish`, but media name local files (`"file":
-"mockups/login-a.html"`, relative to the manifest). A `.glb` model may name its poster the same way
-(`"poster": "unit-a.png"`). The script hashes the files, skips blobs the hub already
+"mockups/login-a.html"`, relative to the manifest). Tracks are `.mp3`, `.wav`, `.ogg`, `.opus`, `.flac` or
+`.m4a`. A `.glb` model or a clip (`.mp4`, `.m4v`, `.webm`) may name its poster the same way (`"poster": "unit-a.png"`). The script hashes the files, skips blobs the hub already
 has, uploads the rest in chunks, publishes, and prints the set id and its URL. It has no dependencies.
 
 ## Project type

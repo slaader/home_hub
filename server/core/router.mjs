@@ -36,6 +36,8 @@ export default {
      machine:machine?{id:machine.id,name:machine.name,ip:machine.ip||null}:null});}},
  ],
  integrations:[{id:ROUTER_INTEGRATION,title:'Adaptér routeru',kind:'router',
+  // Integrations → Machines: the router's page shows the adapter.
+  machines:(state,hub)=>hub.site.machines.filter(m=>m.role==='router').map(m=>m.id),
   description:'Sčítání klientů v síti a stav routeru. Vestavěný adaptér UniFi čte soubor, který zapisuje sběr routeru; jiný router připojí plugin. Vypnutý: hub soubor ani adaptér nečte. Naplánovaný sběr (cron, launchd) to nezastaví.',
   howTo:'V local/site.json nastav router.adapter („unifi“) a host a spouštěj python3 scripts/collect-router-unifi.py každou minutu.',docs:'docs/plugins.md → The router adapter',
   status:routerStatus}],

@@ -59,10 +59,18 @@ A machine:
 | `name`, `hostname`, `ip` | What the tile shows |
 | `role` | `computer`, `nas`, `router` or `other`. A `router` tile reads the router adapter's census; a `nas` tile is online when a plugin's service probes answer |
 | `picture` | A path under `/images/` (yours go in `local/images/`) |
-| `thermoId` | The host id in the Thermo hosts file. Set it and the tile shows live CPU, GPU, power, temperature and memory from the Thermo app. Thermo is optional: without it the tile is static |
+| `thermoId` | The host id in the Thermo hosts file. Set it and the tile shows live CPU, GPU, power, temperature and memory from the Thermo app. Thermo is optional: without it the tile is static, or the owner connects an agent-less source on the tile (below) |
+| `platform` | Optional: `macos`, `windows`, `linux` or `other`. Limits the agent-less sources offered on the tile to that system's; without it every one is offered |
 | `hardware` | Static facts: `cpu`, `gpu`, `ramGb`, `diskTotalBytes`, `pools`, `wifi` |
 | `ssh` | `{alias, probe, keys}`: how the collectors reach it. `alias` is an ssh config alias, or `local` for the machine the collector runs on. `probe` is `mac` or `nas` for `scripts/collect-systems.mjs`. `keys:false` leaves it out of `scripts/collect-security.mjs` |
 | `stack` | The runtime grid drawn on the machine page: `{layers, cols, engines, blocks}` |
+
+A machine without `thermoId` that is not the router can be read without an agent (Windows over SSH or WinRM, Linux
+over Node Exporter, Prometheus or SSH): its page has **Telemetry settings** for an account with write access signed
+in with a password. Only the connection is stored, in the hub's state (`state/home/site-telemetry.json` and the
+private connection files); this file is never written and the machine stays read-only everywhere else
+(`docs/API.md` → Agent-less telemetry). Its name, hostname, ip, hardware and picture can be overridden on its tile
+(**Edit**, stored in `state/home/site-overrides.json`); collectors and plugins keep reading the values of this file.
 
 Pictures: any image under `local/images/` is served at `/images/<same path>`. The overview looks for
 `/images/home/<machine id>.jpg`. The software watch list for the versions page is `local/software-watch.json`;
@@ -118,7 +126,8 @@ export default {
   mcpInstructions: ['Notes: notes_list returns every note.',
                     {scope: 'notes:write', text: 'With notes:write: POST /api/notes adds one.'}],
 
-  // Background readers, started by the server after it listens.
+  // Background readers, started by the server after it listens. stop() is awaited when the server gets SIGTERM or
+  // SIGINT (at most SHUTDOWN_GRACE_MS, default 15 s, for all modules together): finish or abandon work there.
   pollers: [{id: 'refresh', start: (state, hub) => {}, stop: state => {}}],
 
   // Files under public/, each served at /plugins/notes/<path>. Nothing else in the directory is reachable.
@@ -230,6 +239,8 @@ fine).
 | `runtimes.requests` | `{id, read({from, to, limit}) → Promise<items[]>}` — request history of local model runtimes. An item: `{machine, runtime, model, at, path, inputTokens, outputTokens, promptTps, generationTps, durationMs, client, clientMachine?, clientAddress?, metricId?}`; `metricId` is the runtime's own record id, when it has one. `path` is the URL path or a kind (`chat`, `embeddings`, `images`, `audio`); `model` is the name the client asked for (a gateway alias is fine); `client` is who sent it when the provider can tell, else empty ("Unattributed"); `clientMachine` is a machine id, only when the provider knows it; `clientAddress` is the address the request came from (a site machine's `ip` names that machine, loopback names none). Core provides it too, from the history it keeps of the llama-swaps it reads (below). Core de-duplicates items two providers both report: by `machine`, `runtime`, `metricId` and `at` when `metricId` is given (the copy that names a client is kept), else by the whole item | The LLM & Diffusion page: requests, tokens and tok/s over time, the clients table and the traffic in the wiring diagram. Without a provider the page shows live state only |
 | `inventory.writer` | `{put(change, by), edit(input)}` or `null` — where inventory edits go instead of the local file. Optional: `remove(change)` and `bulk(change, {by, user})`; without them delete and bulk upsert answer `501` | Inventory map and services catalog |
 | `router.adapter` | `{id, title, read(context)}` — another router's census and health. `read` resolves to an observation `{status, observedAt, model, firmware, routerMac, devices[], hardware[]}` or `null`; core validates and bounds it (`server/router-data.mjs`). Optional `staleAfterSeconds` | `GET /api/router`, the router tile and page |
+| `git-lfs.providers` | `[provider]` — more kinds of git host for the Git LFS page (GitLab, a host with its own LFS store). The shape and the rules are in `docs/git-lfs.md` → Providers; a provider that is not valid, or reuses a built-in id, is left out and logged. Only a provider whose `capabilities.deleteObjects` (and `listObjects`) is true is ever asked to delete | The Git LFS page (`#git-lfs`, core module `git-lfs`) |
+| `machines.facets` | `(machines) => report \| [report]` (a promise is fine) — what this module knows about each machine. `machines` are the overview's machines (`GET /api/home` → `machines`). A report: `{id, title, icon?, order?, page?, howTo?, off?, machines: {[machineId]: entry}, fallback?: entry}`; an entry: `{state, summary?, summaryT?, details?: [{label, value, valueT?}], href?}`. `state` is `ok`, `warn`, `stale`, `error`, `off`, `not-configured` or `not-applicable`. A machine the report does not name gets `fallback` (default: `not-configured` with `howTo`); `off: true` shows the whole facet as turned off. `only: true` shows the facet only on the machines it names. `how: {by, text}` says who does the work (`hub`: Home Hub alone; `source`: Home Hub reads something that must run on the machine; `collector`: a scheduled script on the hub's machine; `agent`: an agent writes it over MCP; `integration`) and how, in one sentence. `prompt` is a Czech source template for the person's own coding agent (`{id}`, `{name}`, `{hostname}` are filled per machine; `promptParams` adds more, a list being translated text); the page offers it where the part is not set up or needs attention, so give an English translation in `strings`. `href` must be a `#hash` (default `#<page>`); `title`, `label` and a plain `summary` go through `strings`. Read-only: never open a connection here, read what your module already holds. Core provides `telemetry`, `backups`, `versions`, `protection`, `ssh-keys`, `inventory`, `runtimes` and `git-lfs` (`server/machine-facet-sources.mjs`); the first report of an id wins | Integrations → Machines (`#integrations`, `#integrations/machine/<id>`, `GET /api/admin/machines`; `server/machine-facets.mjs`) |
 
 The LLM & Diffusion page (core module `models`, `server/models-data.mjs`) reads `home.runtimes` too, and draws its wiring
 from optional fields the machine pages ignore. All are optional; without them the page infers what it can (a runtime
@@ -305,6 +316,9 @@ integrations: [{
   toggleNote: undefined,
   provides: ['home.snapshots'],// optional: providers of this module that answer nothing while it is off
   howTo: '…', page: 'overview', docs: 'docs/plugins.md → …',   // optional: shown on a not-configured card
+  machines: (state, hub) => [{machine: 'nas', item: 'nas'}],   // optional: the machines it belongs to; each machine's page
+                               // under Integrations → Machines then shows it, in the state of status item `item` (or of the
+                               // whole integration), with howTo turned into a prompt for the person's agent
   status: async (state, hub, {enabled}) => Status,              // required, cheap: no network call when !enabled
   test: async (state, hub) => Status,                           // optional: a real check, run by "Test now"
   settings: {schema: [{key, label, type: 'text' | 'number' | 'boolean' | 'select', secret?, options?, min?, max?, help?}],

@@ -11,7 +11,6 @@ export default {
  'Hledání teď nejde. Zkus to znovu.':'Search is unavailable right now. Try again.',
  'Nalezeno: {n}':'Found: {n}',
  'Nic nenalezeno.':'Nothing found.',
- 'Dům, jak právě dýchá.':'The house, as it breathes right now.',
  'Stroje, služby a lokální AI na jednom místě.':'Machines, services and local AI in one place.',
  'Přihlášení selhalo.':'Sign-in failed.',
  'Home Hub není dosažitelný. Zkus to znovu.':'Home Hub is not reachable. Try again.',

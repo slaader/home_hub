@@ -40,6 +40,8 @@ export default {
  'vypnuto':'off',
  'žádný zdroj':'no source',
  'Thermo nesahá na NAS/router':'Thermo does not reach the NAS/router',
+ 'Stroj nemá připojenou telemetrii.':'This machine has no telemetry connected.',
+ 'Přehled → stroj z konfigurace webu → Telemetrie':'Overview → machine from the site configuration → Telemetry',
 
  // systems-data.mjs: versions, check labels / values / details, categories
  'Nejnovější verzi se nepodařilo zjistit.':'The latest version could not be determined.',

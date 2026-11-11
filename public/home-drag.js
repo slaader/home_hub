@@ -52,6 +52,9 @@ export function flip(nodes,change){
 }
 
 const tileOf=target=>target?.closest?.('.hv-tile')||null;
+// A tile is the grid child (class hv-tile, data-id); its link (hv-tile-link) is what has the focus. A button on a tile
+// (its Edit action, hv-tile-edit) is a button: pressing it never lifts the tile.
+const tileKeyed=(target,grid)=>{const tile=target?.classList?.contains('hv-tile-link')?target.parentNode:target;return tile?.classList?.contains('hv-tile')&&tile.parentNode===grid?tile:null;};
 const idOf=node=>node.getAttribute('data-id');
 // The element that scrolls the page under the grid.
 function scrollerOf(node){
@@ -127,6 +130,7 @@ export function tileDrag({grid,enabled=()=>true,onDrop=()=>{},onEnd=()=>{},clock
  on(grid,'pointerdown',e=>{
   if(e.isPrimary===false||(e.pointerType==='mouse'&&e.button!==0))return;
   if(held)release(false);// a pointer whose end never arrived (released outside the window)
+  if(e.target?.closest?.('.hv-tile-edit'))return;
   const tile=enabled()?tileOf(e.target):null;if(!tile||tile.parentNode!==grid)return;
   held={tile,id:idOf(tile),pointer:e.pointerId,touch:e.pointerType==='touch',x0:e.clientX,y0:e.clientY,x:e.clientX,y:e.clientY,active:false,timer:null,target:null,frame:0,speed:0};
   if(held.touch)held.timer=timers.setTimeout(lift,HOLD_MS);
@@ -154,7 +158,7 @@ export function tileDrag({grid,enabled=()=>true,onDrop=()=>{},onEnd=()=>{},clock
  on(grid,'click',e=>{if(clock()<quietUntil){quietUntil=0;e.preventDefault();e.stopPropagation();}},{capture:true});
  on(grid,'keydown',e=>{
   if(held||!enabled()||e.altKey||e.ctrlKey||e.metaKey||e.shiftKey)return;
-  const tile=e.target;if(!tile?.classList?.contains('hv-tile')||tile.parentNode!==grid)return;
+  const tile=tileKeyed(e.target,grid);if(!tile)return;
   const ids=order(),to=keyTarget(e.key,ids.indexOf(idOf(tile)),ids.length);
   if(to===null){if(['ArrowLeft','ArrowUp','ArrowRight','ArrowDown'].includes(e.key))e.preventDefault();return;}// at an end: stay, do not scroll away
   e.preventDefault();

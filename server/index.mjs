@@ -33,6 +33,8 @@ import routerModule from './core/router.mjs';
 import integrationsModule from './core/integrations.mjs';
 import runtimesModule from './core/runtimes.mjs';
 import modelsModule from './core/models.mjs';
+import backupsModule from './core/backups.mjs';
+import gitLfsModule from './core/git-lfs.mjs';
 
 const root=repoRoot;
 // The running commit, shown in the UI footer. Read once: a deploy restarts the server.
@@ -43,7 +45,7 @@ export const MODEL_VIEWER_STYLE_HASH=(()=>{try{const m=/<style>([\s\S]*?)<\/styl
 export const PAGE_CSP=`default-src 'self'; script-src 'self'; style-src 'self'${MODEL_VIEWER_STYLE_HASH?' '+MODEL_VIEWER_STYLE_HASH:''}; img-src 'self' blob:; connect-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`;
 
 // Core modules, in set-up order (a later one may use the state of an earlier one).
-export const CORE_MODULES=Object.freeze([sessionModule,shellModule,accessModule,homeModule,runtimesModule,inventoryModule,trackerModule,reviewModule,securityModule,routerModule,integrationsModule,modelsModule].map(m=>defineModule(m,{core:true})));
+export const CORE_MODULES=Object.freeze([sessionModule,shellModule,accessModule,homeModule,runtimesModule,inventoryModule,trackerModule,reviewModule,securityModule,routerModule,integrationsModule,modelsModule,backupsModule,gitLfsModule].map(m=>defineModule(m,{core:true})));
 // Plugins found in the overlay directory when the process started.
 export const STARTUP_PLUGINS=Object.freeze(await loadPlugins());
 // Core + plugins as one registry; scopes of every module join the scope table (server/scopes.mjs).
@@ -218,4 +220,24 @@ if(process.argv[1]===fileURLToPath(import.meta.url)){
   const server=(preview||process.env.HTTP_BEHIND_PROXY==='1')?http.createServer(handler):https.createServer({key:await readFile(process.env.TLS_KEY||path.join(root,'private/server.key')),cert:await readFile(process.env.TLS_CERT||path.join(root,'private/server.crt')),minVersion:'TLSv1.2'},handler);
   server.requestTimeout=10000;server.headersTimeout=10000;
   server.listen(port,process.env.BIND_HOST||(preview?'127.0.0.1':'0.0.0.0'),()=>console.info(`Home Hub (${readEdition()} edition, ${startupRegistry.modules.filter(m=>!m.core).length} plugin(s)) listening on ${port}`));
+  installShutdown({server,handler});
+}
+
+// SIGTERM and SIGINT (a deploy's `kill`, Ctrl-C): stop taking requests, let every module stop (its pollers'
+// stop(): a running backup ends as "interrupted" with its children stopped and its record written), then exit.
+// A module that does not finish within graceMs does not hold the process: it exits anyway. A second signal
+// exits at once.
+export function installShutdown({server,handler,graceMs=Number(process.env.SHUTDOWN_GRACE_MS)||15000,exit=code=>process.exit(code),proc=process}){
+  let stopping=false;
+  const stop=async signal=>{
+    if(stopping)return exit(1);
+    stopping=true;
+    console.info(`${signal}: stopping Home Hub…`);
+    const force=setTimeout(()=>{console.error(`Shutdown took longer than ${graceMs} ms; exiting.`);exit(1);},graceMs);force.unref?.();
+    try{server?.close();server?.closeIdleConnections?.();}catch{}
+    try{await handler.stop();}catch(e){console.error('Shutdown:',e?.message||e);}
+    clearTimeout(force);exit(0);
+  };
+  for(const signal of ['SIGTERM','SIGINT'])proc.on(signal,()=>{stop(signal);});
+  return stop;
 }

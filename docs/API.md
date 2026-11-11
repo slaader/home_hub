@@ -104,6 +104,9 @@ modules (`docs/plugins.md` → Integrations). The UI is Administration → Integ
 key reaches these routes; MCP has only the read-only tool `integrations_status` (scope `read`:
 `{integrations:[{id, kind, state, summary}]}`).
 
+- `GET /api/admin/machines` → `{schemaVersion:1, generatedAt, telemetry, facets:[{id, title, icon, page, howTo, off}], machines:[…]}`: Integrations → Machines. Every machine of the overview once, with what each module knows about it (extension point `machines.facets`, `docs/plugins.md`).
+  A machine: `{id, name, hostname, ip, kind, role, platform, source: site|added, online, lastSeen, state: ok|warn|error|not-configured, counts:{ok, attention, notConfigured, off}, facets:[{id, title, icon, how?:{by, text}, state, summary?, summaryT?, details?:[{label, value, valueT?}], href, prompt?, promptT?}]}`. `how.by` is `hub`, `source`, `collector`, `agent` or `integration`; `prompt` (a ready prompt for the person's own agent, the machine filled in) comes only where the part is not set up or needs attention. An integration that declares `machines` shows as a facet `int-<id>` on those machines only.
+  A facet's `state` is `ok`, `warn`, `stale`, `error`, `off`, `not-configured` or `not-applicable`; `href` is the page where that part is set up. `telemetry` is what the add-machine dialog needs (as in `GET /api/home`). Read-only.
 - `GET /api/admin/integrations` → `{schemaVersion:1, generatedAt, kinds[], integrations:[…], plugins:[{id, title, integrations:[id]}], pluginsDirectory}`.
   An integration: `{id, module, moduleTitle, core, title, titleKey?, kind, description, howTo, page, docs, toggle, toggleNote?, enabled, disabledBy?, disabledAt?, test, settings, status}`.
   `status` = `{state, summary, summaryT?, lastSuccessAt, lastError, configuredBy:[{source, name}], items:[{id, label, state, summary, summaryT?, lastSuccessAt, lastError?}]}`;
@@ -122,6 +125,8 @@ file means every integration is on. While one is off its data routes answer **`2
 | Integration | Off means |
 |---|---|
 | `home.thermo` | No Thermo session; `GET /api/home` tiles carry no telemetry; `GET /api/home/history` → `{points:[], source:"vypnuto", disabled}` |
+| `home.windows` | No SSH connection to any Windows device; their tiles carry no telemetry; their `GET /api/home/history` → `{points:[], source:"vypnuto", disabled}` |
+| `home.winrm`, `home.node-exporter`, `home.prometheus`, `home.linux-ssh` | The same for the devices read by that provider: no request to WinRM, a Node Exporter or Prometheus, no Linux SSH connection |
 | `router.adapter` | `GET /api/router` → `state: "disabled"`, no census; the file and the adapter are not read |
 | `security.systems` | `GET /api/systems` → `{disabled, machines:[], collector:{state:"disabled"}}`; `snapshot.json` is not read |
 | `security.upstream` | `GET /api/systems` answers without the newest releases and with `upstreamDisabled`; `upstream.json` is not read |
@@ -291,14 +296,15 @@ and `pages` marks it `admin: true`. The data routes behind a page check the scop
 
 ## Home: the overview
 
-- `GET /api/home` → `{"poll","schemaVersion":1,"generatedAt","machines":[…],"telemetry","router"}`. One entry per machine from the site configuration (site.json → `machines`) and per added machine: identity (`id`, `name`, `hostname`, `ip`, `kind`: `thermo`, `nas`, `router` or `other`), `props` (static hardware), `online` (`online`, `stale`, `offline`, `unknown`), `lastSeen`, `quad` (CPU, GPU, power, temperature and memory averaged over the poll interval, from Thermo), `volumes`, `services` and `stack`.
-  - Every machine also carries `role` (`computer`, `nas`, `router`, `other`), `source` (`site` = the site configuration, `ui` = added on the overview, `agent` = written through the machine API), `readOnly`, `picture` (a path), `image` (its own picture or `null`), `telemetry`, `runtimes` and `spark`. Added machines have `added:true`, `hash`, `pictureId`, `createdAt`/`createdBy` and `updatedAt`/`updatedBy`.
-  - `telemetry` = `{"state","thermoId","lastSampleAt","ageSeconds","reason"}`. `state` is `not-installed` (the machine names no telemetry host), `not-applicable` (a router), `ok` (newest reading at most 3 minutes old), `stale` (readings exist, the newest is older) or `unreachable` (a host is named and nothing was ever read). `reason` for the last two: `no-login` (the hub has no login for that host), `denied`, `down`, `no-data`, `waiting`. A failed read never means the machine is off; `online` keeps its earlier meaning for existing clients.
-  - Top-level `telemetry` = `{"agent":"Thermo","repoUrl","staleAfterSeconds":180,"adapters":[…]}`: the optional telemetry agent and where to get it (one constant, `TELEMETRY_REPO_URL` in `server/thermo-client.mjs`, still a placeholder until its repository is published). `adapters` lists the agents this hub can connect a device to, each `{"id","name","repoUrl","connect":"account","defaultPort","summary"}` (`summary` is a source-language sentence). The Telemetry step of Add device offers exactly these; today there is one, `thermo`.
+- `GET /api/home` → `{"poll","schemaVersion":1,"generatedAt","machines":[…],"telemetry","router"}`. One entry per machine from the site configuration (site.json → `machines`) and per added machine: identity (`id`, `name`, `hostname`, `ip`, `kind`: `thermo`, `nas`, `router` or `other`), `props` (static hardware), `online` (`online`, `stale`, `offline`, `unknown`), `lastSeen`, `quad` (CPU, GPU, power, temperature and memory averaged over the poll interval, from Thermo or from Windows telemetry), `volumes`, `services` and `stack`. `kind: "thermo"` means "has a telemetry feed", whichever provider (`telemetry.provider`) delivers it; a field a provider does not measure is `null`, never `0`.
+  - Every machine also carries `platform` (`macos`, `windows`, `linux`, `other` or `null`; the operating system, apart from `role`), `native` (below; `null` unless the machine is read through Windows telemetry), `role` (`computer`, `nas`, `router`, `other`), `source` (`site` = the site configuration, `ui` = added on the overview, `agent` = written through the machine API), `readOnly`, `picture` (a path), `image` (its own picture or `null`), `telemetry`, `runtimes` and `spark`. Added machines have `added:true`, `hash`, `pictureId`, `createdAt`/`createdBy` and `updatedAt`/`updatedBy`.
+  - `telemetry` = `{"state","thermoId","lastSampleAt","ageSeconds","reason"}`; a machine read through Windows telemetry also has `"provider":"windows"`, `"hostId"` (its own id), `"target"` (the label of the connection it is read through: `user@host` with `:port` when not 22 for an app-managed one, the SSH alias for an older one), `"connection"` (`{"mode":"managed","host","port","user","keyFingerprint","hostKeyFingerprint"}` or `{"mode":"alias","target"}`; public facts only, never a key or a path; `machine_list` carries neither `target` nor `connection`), `"detail"` (the collector's last error code while not `ok`, else `null`) and `"hint"` (that code's source-language sentence: what to do), and its `thermoId` is `null`. `state` is `not-installed` (the machine names no telemetry host), `not-applicable` (a router), `ok` (newest reading at most 3 minutes old), `stale` (readings exist, the newest is older) or `unreachable` (a host is named and nothing was ever read). `reason` for the last two: `no-login` (the hub has no login for that host), `denied`, `down`, `no-data`, `waiting`. A failed read never means the machine is off; `online` keeps its earlier meaning for existing clients.
+  - Top-level `telemetry` = `{"agent":"Thermo","repoUrl","staleAfterSeconds":180,"adapters":[…]}`: the optional telemetry agent and where to get it (one constant, `TELEMETRY_REPO_URL` in `server/thermo-client.mjs`, still a placeholder until its repository is published). `adapters` lists what this hub can connect a device to, each `{"id","name","repoUrl","connect","defaultPort","summary"}` (`summary` is a source-language sentence). The Telemetry step of Add device offers exactly these: `thermo` (`connect:"account"`, the agent) and `windows` (`connect:"ssh"`, no agent, `repoUrl:null`, also `"platform":"windows"` and `"minIntervalSeconds":30`; see [Windows telemetry](#windows-telemetry-ssh--powershell)). Also `winrm` (`connect:"endpoint"`, platform `windows`), `node-exporter` (`connect:"endpoint"`, platform `linux`, `"recommended":true`), `prometheus` (`connect:"endpoint"`, platform `linux`) and `linux-ssh` (`connect:"ssh"`, platform `linux`); `thermo` has `"platform":"macos"`. The dialog offers the adapters of the chosen platform (all of them when none is said). See [Agent-less telemetry](#agent-less-telemetry-winrm-node-exporter-prometheus-linux-ssh).
+  - `native` (Windows telemetry over SSH or WinRM; Linux sources: see Agent-less telemetry) = `{"provider":"windows","observedAt","os":{"caption","version","uptimeSeconds"},"cpu":{"name","logical","cores":[%…]},"disk":{"readBps","writeBps"},"net":{"rxBps","txBps"},"gpus":[{"id","name","util","engine","memUsed","memTotal"}],"gpuCounters","span","sensors":"unsupported"}`: per-core load, disk and network rates and each GPU, averaged over the last poll interval (`span` seconds; `null` rates after the first poll, a failure or a gap). `gpus[].name` and `memTotal` are set only when one GPU and one display adapter can be paired.
   - `spark` = `{"series":"cpu"|"gpu","end","stepSeconds":10,"windowSeconds":600,"values":[…60]}` on a machine with telemetry readings in the window, else `null`: the tile's small chart. `values` are percentages per 10 s step, the last one ending at `end` (unix seconds); `null` is a step without a reading and is drawn as a gap. `series` is `gpu` for a machine that has `runtimes`, else `cpu`.
   - `stack.source` is `published` (with `publishedAt`, `publishedBy`, `hash`, `layerKeys`) when an agent published it, `collected` for a collected descriptor, absent for the site configuration. `runtimes` is `null` unless a `home.runtimes` provider reports local LLM runtimes for the machine (docs/plugins.md); the machine page then has no such section. Otherwise it is `{"source","observedAt","runtimes":[{"id","name","kind","status","url","version","source"?,"models":[{"id","state","sizeGb","contextTokens","ttlRemainingSeconds"}],"stats":[{"label","value"}]}]}`; when more than one provider contributed (the hub's own direct reads, see [LLM runtime endpoints](#llm-runtime-endpoints), and a plugin), also `"sources":[…]`, and each runtime appears once (docs/plugins.md → `home.runtimes` from more than one provider). A stack block whose service is reported live gets its `port` and `desc` rewritten as source-language sentences (`":8081 · živě"`); `portT` and `descT` carry the same as translatable parts, like the collector texts below.
-- `GET /api/home/history?machine=<id>&range=30m|7d|30d|6m` → chart buckets for a machine that reports through Thermo; other machines answer with `points: []` and a `reason`.
-- `POST /api/home/refresh` `{}` → the same document after an immediate Thermo pull (rate limited). `POST /api/home/settings` `{"intervalSeconds":15|30|60}` changes the pull interval (scope `home:settings`).
+- `GET /api/home/history?machine=<id>&range=30m|7d|30d|6m` → chart buckets for a machine that reports through Thermo or Windows telemetry; other machines answer with `points: []` and a `reason`. A Windows reading is the average over its poll interval and fills the 30 s buckets (and the tile's 10 s spark steps) it covers, at most 120 s back; a gap stays a gap.
+- `POST /api/home/refresh` `{}` → the same document after an immediate Thermo pull (rate limited) and a Windows poll (at most one every 10 s). `POST /api/home/settings` `{"intervalSeconds":15|30|60}` changes the pull interval (scope `home:settings`); Windows polls follow it but never run more often than every 30 s.
 - `GET /api/ui/manifest` → what the web shell draws itself from; see [The UI manifest](#the-ui-manifest).
 ### Overview tile order (web UI, password sign-in only)
 
@@ -312,17 +318,22 @@ Machines that are not in the site configuration: added on the overview, or writt
 (`local/site.json`) are listed too but stay read-only (`403 MACHINE_READ_ONLY`). All of them live in
 `state/home/devices.json` (schema 1; fields added later are optional, so a file from an older hub loads unchanged).
 
-A machine: `{"id","name","hostname","ip","role","hardware":{"cpu","gpu","ramGb","diskTotalBytes"},"thermoId","picture"}`.
+A machine: `{"id","name","hostname","ip","role","hardware":{"cpu","gpu","ramGb","diskTotalBytes"},"thermoId","picture","platform"}`.
 `id` is `[a-z][a-z0-9_-]{1,31}` and never changes; `role` is `computer` (default), `nas`, `router` or `other`; `ip` must
 be a host address inside the site's `lanCidrs` when those are set; `thermoId` names the telemetry host the machine
 reports through (`null` = not installed); `picture` is one of the built-in ids `desktop`, `laptop`, `mini`, `tower`,
 `server`, `nas`, `router`, `board`, `printer`, `generic` (served at `/images/generic/<id>.svg`), or `null` for the
-role's default. Values that look like a secret (keys, tokens, `password=…`, credentials in a URL) are refused.
+role's default; `platform` is `macos`, `windows`, `linux`, `other` or `null` (not said). An upsert that omits `platform`
+keeps the machine's; `null` clears it. A machine without a platform hashes exactly as before the field existed, so a
+`hash` read from an older hub still matches. While Windows telemetry is connected (web UI only), `platform` must stay
+`windows` and `thermoId` must stay `null` (`400 MACHINE_INVALID`). Values that look like a secret (keys, tokens, `password=…`, credentials in a URL) are refused.
 
-- `GET /api/home/machines[?stack=1]` (`read`) → `{"machines":[…],"pictures":[{"id","url"}],"roles","runtimeLayers","lanCidrs","limits":{"machines":20},"telemetry"}`.
+- `GET /api/home/machines[?stack=1]` (`read`) → `{"machines":[…],"pictures":[{"id","url"}],"roles","platforms","runtimeLayers","lanCidrs","limits":{"machines":20},"telemetry"}`.
   Each machine has the fields above plus `source`, `readOnly`, `hash` (`null` for site machines), `customPicture`,
   `telemetry` and `runtime` = `{"source":"published"|"collected"|"site"|null,"publishedAt","publishedBy","hash"}`
-  (with `stack=1` also `stack`, in the form `POST /api/home/runtime` takes).
+  (with `stack=1` also `stack`, in the form `POST /api/home/runtime` takes). A site machine lists its effective `name`,
+  `hostname`, `ip`, `hardware` and `picture` (the owner's override applied, below) and `siteOverride`
+  (`{"fields":["name","hardware.ramGb",…],"updatedAt","updatedBy"}`, or `null`); it stays `readOnly` here.
 - `POST /api/home/machines` `{"machine":{…},"base"?}` → `201` created or `200` → `{"ok","id","hash","created","changed","by","machine"}`.
   The whole record is replaced. Like inventory entries: omit `base` to create, pass the `hash` you read to change. Without
   `base`, a machine that already holds exactly these fields is left alone (`changed:false`), so a repeated create is harmless;
@@ -343,10 +354,38 @@ role's default. Values that look like a secret (keys, tokens, `password=…`, cr
   `runtime_publish` (`home:write`). Same arguments and rules as the routes above. `home:write` is never given to keys
   created before scopes existed. Every call of a write tool is in the write log with the machine id.
 
+### Editing a machine of the site configuration (web UI, password sign-in with write access only)
+
+Every tile on the overview, a site machine's included, has an **Edit** button for a writer. For a machine from
+`site.json` it changes **display metadata only**, stored as the owner's override over the site's values in
+`state/home/site-overrides.json` (0600, no secrets):
+`{"schema":1,"overrides":[{"id","fields":{"name"?,"hostname"?,"ip"?,"hardware"?:{"cpu"?,"gpu"?,"ramGb"?,"diskTotalBytes"?},"picture"?},"image"?,"imageAt"?,"updatedAt","updatedBy"}]}`.
+`site.json` is never written; `id`, `role`, `platform`, `thermoId`, `ssh`, `stack`, the telemetry binding, the service
+probes, Thermo and the router adapter keep reading the site's values (a changed hostname or ip is shown, not probed).
+
+- `GET /api/home` → every site machine carries `siteOverride` (`{"fields":[names],"hash","image","updatedAt","updatedBy"}`;
+  `hash` is the `base` an edit sends, also when nothing is overridden) and `siteDefaults` (`{"name","hostname","ip","hardware","picture","image"}`,
+  the site's own values). The tile shows the override's values; a collected descriptor never wins over it.
+- `POST /api/home/devices/site` `{"id","base","machine":{"name"?,"hostname"?,"ip"?,"hardware"?,"picture"?}}` →
+  `{"id","override","hash","changed"}`. The whole override is replaced: an absent field, or one sent with the site's own
+  value, goes back to the site's (not stored). Rules as for an added machine (name 1–60, a host name or IPv4, an ip inside
+  `lanCidrs`, cpu ≤ 60, gpu ≤ 40, positive numbers or `null`, a built-in picture id; secret-looking values are
+  `422 MACHINE_SECRET`). `role`, `platform`, `thermoId`, `id`, `ssh`, `stack` are refused by name (`400 MACHINE_INVALID`).
+  A stale or missing `base` is `409 MACHINE_CONFLICT` / `400`; another machine's hostname `409 MACHINE_DUPLICATE`;
+  an id that is not a site machine (an added device included) `404 MACHINE_NOT_FOUND`.
+- `POST /api/home/devices/site/reset` `{"id","base"}` → back to the site's defaults: the override and the uploaded picture go.
+  An override whose machine left `site.json` is kept on disk, ignored, and cleared only here.
+- Own picture: `PUT /api/home/devices/<id>/image` and `POST /api/home/devices/image/remove` `{"id"}` work for a site
+  machine too (its override's `image`); it is served at `GET /api/home/devices/<id>/image` (not under `/images/home/`,
+  where the site's own picture is a static file).
+- API keys, native device tokens and accounts signed in otherwise are refused (`403`); `machine_upsert` /
+  `machine_remove` keep refusing site machines (`MACHINE_READ_ONLY`). A Thermo Mac and the router are editable the same
+  way; their editor says who reads their telemetry, which this edit never changes.
+
 ### Devices on the overview: pictures and Thermo logins (web UI, write access, never API keys)
 
 What needs a person: uploading a picture and giving the hub a Thermo login. A device's Thermo login is kept in
-`state/home/thermo-hosts.json` (mode 0600, same shape as `private/thermo-hosts.json`) and its uploaded picture in
+`state/home/thermo-hosts.json` (mode 0600, sealed with the hub's key: docs/storage.md → Secrets at rest; opened, the same shape as `private/thermo-hosts.json`) and its uploaded picture in
 `state/home/images/<id>.jpg`. Added machines appear in `GET /api/home` with `added:true` and `kind` derived from
 `thermoId` and `role` (`thermo`, `nas`, `router`, `other`); their ids join `known` in the tile order.
 
@@ -362,7 +401,233 @@ What needs a person: uploading a picture and giving the hub a Thermo login. A de
   that is already on the overview (for example one an agent created). The login is tried once with the pinned certificate
   first; then the device is its own telemetry host (`thermoId` = its id). `{"id","thermo":null}` forgets the login.
 - `POST /api/home/devices/image/remove` `{"id"}` → the device, back on its built-in picture.
-- `POST /api/home/devices/remove` `{"id"}` → `{"removed"}`; the tile, its Thermo login and picture go, the metric history stays.
+- `POST /api/home/devices/remove` `{"id"}` → `{"removed"}`; the tile, its Thermo login or Windows connection (with the hub's key
+  and known_hosts for it) and picture go, the metric history stays. `machine_remove` does the same.
+- `POST /api/home/devices` also takes `"kind":"windows"` (and optional `"platform":"windows"`) with
+  `"windows":{"draft","host","port","user"}`: an app-managed connection whose set-up draft (below, made for a new device) passed
+  its test with exactly this host, port and user; otherwise nothing is saved (`409 WINDOWS_SETUP_FAILED`, `reason` `needs-test`,
+  `stale`, …). The older `"windows":{"target"}` (an alias) is still accepted: the SSH connection is tried once first; a failure is
+  `422 WINDOWS_SSH_FAILED` and nothing is saved.
+- `POST /api/home/devices/windows/check` `{"target"}` (older alias connections) → `{"ok":true,"target","resolved":{"hostname","user","port"}|null,"tookMs","os":{"caption","version"},"cpu":{"name","logical"},"memTotal","volumes":[{"mount","name","fs","total"}],"gpus":[name],"gpuCounters","vramUsed","sensors":"unsupported"}`.
+  Runs the collector once and stores nothing. `400` for an invalid target (never tried), `422 WINDOWS_SSH_FAILED` with
+  `reason` (`host-key-unknown`, `host-key-changed`, `denied`, `unresolved`, `refused`, `timeout`, `unreachable`, `ssh-config`,
+  `ssh`, `no-ssh`, `no-keyscan`, `no-host-key`, `key-missing`, `key-permissions`, `no-powershell`, `powershell`, `bad-output`,
+  `no-counters`, `too-large`, `spawn`, `busy`, `unavailable`) and a
+  `message` saying what to do. At most two tests run at a time (`busy` otherwise).
+- `POST /api/home/devices/windows` `{"id","windows":{"draft","host","port","user"}}` → the device: connects a device that is
+  already on the overview (added as a plain tile, or by an agent) to Windows telemetry, or changes its connection, with a draft
+  made for this device that passed its test. `{"id","windows":{"target"}}` does the same with an older alias (tested first).
+  The device keeps its id, picture, creation and history and gets `platform:"windows"`; the connection it replaces is
+  forgotten, with the hub's key and known_hosts for it. Refused (`400`) while it reports through Thermo or has another platform.
+  `{"id","windows":null}` disconnects (and deletes the hub's key for it; the public key stays in authorized_keys on Windows
+  until someone removes it there).
+
+#### App-managed SSH: set-up drafts
+
+The Add/Edit device dialog builds a connection on the server, one step at a time, in a **draft**
+(`server/windows-ssh.mjs`). Every route below is for a person signed in with a password and write access only (`403` for API
+keys, native device tokens and read-only accounts), and a draft is visible only to the person who made it. A draft lives in memory, for at most 30 minutes after its last step; at most 3 per person (the oldest gives way) and
+16 in all. Each reply carries `draft` = `{"id","device","host","port","user","key":{"type","bits","fingerprint","publicKey","source","reused"}|null,"hostKeys":[{"type","fingerprint"}]|null,"trusted":{"type","fingerprint","reused"}|null,"tested":{"at"}|null,"expiresAt"}`
+— never a private key, never a path. Refusals are `WINDOWS_SETUP_FAILED` with a `reason` and a sentence (`draft-missing` 404;
+`busy`, `needs-key`, `needs-scan`, `needs-trust`, `needs-test`, `stale`, `trust-mismatch`, `limit` 409; `key-format`,
+`key-encrypted`, `key-public`, `key-putty`, `key-unsupported`, `key-weak`, `key-mismatch` 422; `store`, `store-path` 503), or,
+for a step that connects, `422 WINDOWS_SSH_FAILED` as above.
+
+- `GET /api/home/devices/windows/tools` → `{"ok","ssh":{"ok","version"},"keyscan":{"ok"}}`: whether the hub's server has the
+  OpenSSH client tools (it runs `ssh -V` and `ssh-keyscan` without arguments; nothing connects). Cached for a minute.
+- `POST /api/home/devices/windows/draft` `{"id"?}` → `201 {"draft"}`. With the id of a device read through an app-managed
+  connection, its host, port, user, key and verified host key are taken over (`reused:true`), so changing only the user needs
+  only a new test.
+- `POST …/draft/key` `{"draft","generate":true}` makes a new key (RSA 3072, Node's built-in crypto); `{"draft","privateKey"}`
+  imports one (at most 16 KiB of text: OpenSSH, PKCS#1, SEC1 or unencrypted PKCS#8; RSA ≥ 2048 bits, ECDSA P-256/384/521 or
+  Ed25519). Encrypted keys are refused (`key-encrypted`), never prompted for. The key gets the comment `home-hub`; the draft's
+  previous key goes; the test must run again.
+- `POST …/draft/scan` `{"draft","host","port"}` → `draft.hostKeys`: what `ssh-keyscan` gets from host:port (it sends no user,
+  key or password). Another host or port than before drops the scan, the trust and the test.
+- `POST …/draft/trust` `{"draft","fingerprint"}`: the person compared this fingerprint (one of the last scan) with what Windows
+  shows and confirms it. Only this key is stored for the connection.
+- `POST …/draft/test` `{"draft","host","port","user"}` → `{"draft","result"}`; `result` is what `/check` returns, plus
+  `"connection":{"host","port","user","keyFingerprint","hostKeyFingerprint"}`. Another user than before drops the earlier test.
+  Saving needs a test of exactly what the draft now holds, at most 15 minutes old.
+- `POST …/draft/discard` `{"draft"}` → `{"discarded":true}`; the dialog sends it when it closes without saving. The draft's
+  key and known_hosts go at once (a draft that expires loses them too).
+
+At most two SSH steps (tests, host-key fetches, key generation) run at once (`busy` otherwise).
+
+### Windows telemetry (SSH + PowerShell)
+
+Integration `home.windows`, core module `home`, `server/windows-telemetry.mjs` (the collector) and `server/windows-ssh.mjs`
+(the hub's key store, host-key discovery, set-up drafts). No agent on Windows: the hub logs in with key-only SSH and runs one
+fixed, read-only PowerShell script (`-EncodedCommand`) that reads CIM classes. Nothing is installed or changed on the target.
+The hub may run on Linux, macOS or Windows, and the browser's system does not matter.
+
+**Prerequisite on the hub's server**: the OpenSSH client tools, `ssh` and `ssh-keyscan` (Windows: the optional feature
+OpenSSH Client; Linux: `openssh-client` or `openssh`; macOS has them). Nothing else: no `~/.ssh/config`, no agent, no key
+files made by hand. Missing tools are reported (`/tools`, `no-ssh`, `no-keyscan`).
+
+**Set-up** (the Add/Edit device dialog, under Telemetry → Windows): host (by default the machine's address), SSH port (22) and
+Windows user; *Create a new key* (or import one); copy the PowerShell step it shows and run it on Windows as administrator;
+*Fetch the host key*, compare the fingerprint with what the PowerShell fingerprint snippet prints on Windows and confirm it;
+*Test connection*; save. The only Windows-side steps are, as copyable PowerShell (`public/windows-setup.js`):
+
+- installing OpenSSH Server, only when it is not there (`Add-WindowsCapability … OpenSSH.Server`, the service set to start
+  automatically; the installation adds the firewall rule for port 22; another port must already be set up on Windows);
+- authorizing the hub's public key for that one account: the account's SID is resolved (so localized group names do not
+  matter); a standard account gets the key in `<profile>\.ssh\authorized_keys` (ACL: the account, SYSTEM, Administrators); an
+  administrator in `%ProgramData%\ssh\administrators_authorized_keys` (ACL: Administrators, SYSTEM) — but the snippet stops
+  for an administrator unless `$AllowAdministrator = $true` is set, because that file is shared by every administrator of the
+  PC. The key line starts with `restrict` (no forwarding, no terminal). It never creates an account, changes a group, sshd's
+  configuration, the firewall or UAC. Someone who already runs sshd only needs this step;
+- optionally, adding a standard account to Performance Monitor Users (`S-1-5-32-558`) when the test says counters are missing
+  (the membership allows reading performance counters, nothing else).
+
+- **App-managed connection** (stored in `state/home/windows-hosts.json`, 0600): `{"mode":"managed","host","port","user",
+  "keyId","connId","keyType","keyFingerprint","publicKey","keySource","hostKey":{"type","key","fingerprint"},"configuredAt",
+  "configuredBy"}`; host is a host name or IPv4 address, user `name`, `DOMAIN\name` or `name@domain` (letters of any script,
+  digits, space, `.`, `_`, `-`; no quotes, `%`, `$`), port 1–65535. Never in `devices.json`; agents cannot set it.
+- **The key store**, `state/home/ssh/` (POSIX: directories 0700, files 0600, owned by the hub's account, checked after every
+  write; Windows: an explicit ACL with only the hub's own account and SYSTEM, no inheritance): `keys/<keyId>` (the private
+  key), `known_hosts/<connId>` (the one verified host key, under the alias `hh-…`), `empty` (an empty file). Files nobody refers
+  to (an unfinished draft, a removed device) are deleted at start and every few minutes. **Backups of the state directory
+  contain these private keys**: keep them as private as the hub's other secrets. A key is never returned by an API, written to
+  `devices.json`, logged, put in an error, MCP reply or export.
+- **ssh** (managed): spawned without a shell, with ssh's whole configuration replaced and nothing of the account it runs as:
+  `ssh -F <empty> -T -i <key> -l <user> -p <port> -o BatchMode=yes -o StrictHostKeyChecking=yes -o CheckHostIP=no
+  -o UpdateHostKeys=no -o IdentitiesOnly=yes -o IdentityAgent=none -o PreferredAuthentications=publickey -o PasswordAuthentication=no
+  -o ProxyCommand=none -o ControlMaster=no -o ForwardAgent=no -o ClearAllForwardings=yes … -o UserKnownHostsFile="<known_hosts>"
+  -o GlobalKnownHostsFile="<empty>" -o HostKeyAlias=hh-… -- <host> <fixed command>`; the environment loses `SSH_AUTH_SOCK`,
+  `SSH_ASKPASS` and `DISPLAY`. An unknown or changed host key is always refused (`host-key-unknown`, `host-key-changed`); the
+  way back is to fetch and verify the host key again in the dialog. Changing host or port drops the trust and the test;
+  changing the user or the key drops the test.
+- **Older alias connections** (`{"id","target"}` in the same file) keep working unchanged: ssh with the account's own
+  `~/.ssh/config`, keys and `known_hosts`, as `ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes … -- <target> <fixed command>`.
+  The dialog offers to convert one (the alias and `~/.ssh` stay as they are). Target rule: an alias or `user@host`; letters,
+  digits, `.`, `-`, `_`, each part starting with a letter or digit (a user may start with `_`); no spaces, `%` tokens, ports or
+  shell characters.
+- Every run: stdin closed, killed after 25 s, stdout ≤ 1 MiB, stderr ≤ 16 KiB and only classified, never logged or returned.
+- **Readings**: CPU (total and per logical processor), disk and network come from raw counters
+  (`Win32_PerfRawData_*`): a reading is the difference between two polls, the true average over that interval (`span`),
+  stamped when it was read. The first poll after a start, a failure or a gap over 300 s gives memory and volumes only.
+  GPU: running time per engine (all processes on it), divided by the elapsed time and capped at 100 %; a GPU is as busy
+  as its busiest engine, the machine's `gpu` is its busiest GPU. Memory is RAM (`memUsed`, `memTotal`, `swapUsed` from the
+  page file); VRAM is in `native.gpus`. Volumes are the fixed drives. Temperatures, fans and power are not read
+  (`null`, `sensors:"unsupported"`). Values are parsed locale-independently (invariant culture, counters as decimal strings).
+- **Polling**: one SSH connection per device per interval, never more often than every 30 s, at most four devices at a time,
+  never two polls of one device at once. Minute rows go to `<state>/windows/minutes-<id>-YYYY-MM.jsonl` (0600) and are
+  read back at start, like Thermo's; 8 days are kept in memory. A device that is removed or re-targeted (any change of host,
+  port, user, key or host key) is dropped at once; an answer still in flight for it is discarded.
+- **Status** (`GET /api/admin/integrations`): one item per connected device: `ok`, `stale` or `error` with `lastError`
+  (the codes above) and the sentence for it.
+
+### Agent-less telemetry: WinRM, Node Exporter, Prometheus, Linux SSH
+
+Four more providers beside Thermo (the agent) and Windows over SSH, in core module `home`. One table names them
+(`server/telemetry-providers.mjs`): `telemetryProvider` of a device, its `platform`, its integration, its error sentences.
+
+| Provider | Reads | Module | Integration | History |
+|---|---|---|---|---|
+| `winrm` — Windows (WinRM) | fixed WQL `Enumerate`/`Pull` of the WMI classes the SSH script reads, `POST /wsman`, HTTPS only | `server/winrm-telemetry.mjs` | `home.winrm` | `<state>/windows/` |
+| `node-exporter` — Linux (Node Exporter) | `GET /metrics` of Prometheus Node Exporter (default port 9100), text format 0.0.4 | `server/linux-telemetry.mjs`, `server/prom-text.mjs` | `home.node-exporter` | `<state>/linux/` |
+| `prometheus` — Linux (Prometheus) | `GET /api/v1/query` of an existing Prometheus (default 9090) for ONE node_exporter target (job + instance) | `server/prometheus-telemetry.mjs` | `home.prometheus` | `<state>/linux/` |
+| `linux-ssh` — Linux (SSH) | one fixed POSIX `sh` script over the hub's own SSH key (reads `/proc`, `/sys/class/hwmon`, `df -P -k`) | `server/linux-telemetry.mjs` (+ `server/windows-ssh.mjs` drafts with `os:"linux"`) | `home.linux-ssh` | `<state>/linux/` |
+
+- **Transport** (`server/endpoint-http.mjs`, Node's `net`/`tls`/`http` only, no dependency): host and port are validated
+  values, the path is a constant, never a URL from the browser. HTTPS is verified **before** the request is written:
+  `tls:{mode:"ca"}` (Node's CA store plus `NODE_EXTRA_CA_CERTS`, with hostname verification) or `tls:{mode:"pin",pin}`
+  (SHA-256 of the leaf certificate a person approved; the host name is not checked in this mode). No insecure mode, no
+  redirects (3xx is an error), no compression, a size cap (1 MiB per WinRM reply, 8 MiB for `/metrics` and Prometheus
+  replies), a deadline. Credentials (Basic; for Prometheus also a bearer token) only over verified HTTPS; plain HTTP is
+  allowed only without credentials (a Node Exporter or Prometheus on the LAN).
+- **WinRM**: Basic authentication with a **local** Windows account is the only scheme; Kerberos, NTLM/Negotiate, CredSSP,
+  certificates and PowerShell remoting are not supported. Basic is off in WinRM by default; the dialog's PowerShell
+  step (`public/telemetry-setup.js`) enables it for the WinRM service only, adds an HTTPS listener with a self-signed
+  certificate only when there is none, and one firewall rule for the hub's address; it keeps existing listeners and
+  settings and never sets `AllowUnencrypted`, `TrustedHosts`, UAC or runs `quickconfig`. A standard account needs Remote
+  Management Users, Performance Monitor Users and Remote Enable on `root/cimv2` (`wmimgmt.msc`). Replies are read by a
+  strict XML reader (`server/safe-xml.mjs`: no DTD, no entities beyond the five predefined, no CDATA, bounded). The
+  data becomes the very object the SSH PowerShell script prints, so readings, history and `native` mean the same.
+  Differences: display adapters come from `Win32_VideoController` (memory ≥ 4 GB unknown: `null`).
+- **Linux mapping** (Node Exporter, Prometheus and SSH alike): CPU per logical CPU and total = 1 − Δ(idle+iowait)/Δ(all
+  modes but guest); memory = MemTotal − MemAvailable (the ZFS ARC counts as used), swap used; disk rates summed over whole
+  physical disks (`sd*`, `vd*`, `xvd*`, `hd*`, `nvme*n*`, `mmcblk*`; no partitions, `dm-*`, `md*`, loop, zram); network
+  rates summed over interfaces that are not loopback, bridges, veth, container, tunnel or VPN; volumes = local block
+  filesystems, one per device and **one per ZFS pool** (its least nested mounted dataset, labelled with the pool), never
+  summed into a hardware disk size; `cpuTemp` from hwmon (`coretemp`, `k10temp`, `zenpower`, `cpu_thermal`), `gpuTemp` from
+  `amdgpu`/`radeon`/`nouveau` hwmon when reported; GPU utilisation and power are `null`. A rate needs two snapshots of
+  one boot at most 300 s apart; a counter that went backwards gives `null`, never an average across the reset.
+  `native` = `{"provider","observedAt","os":{"caption","version","arch","uptimeSeconds"},"cpu":{"name","logical","cores"},
+  "load":[1,5,15]|null,"disk","net","gpus":[],"gpuCounters":false,"span","temps":[{"chip","label","c"}],"sensors":"reported"|"none"}`.
+- **Prometheus**: only three fixed discovery queries (`node_uname_info`, `up`, `timestamp(up)`) and one snapshot selector
+  `{__name__=~"up|<the node_exporter metrics above>",job="<job>",instance="<instance>"}[120s]`; job and instance are
+  only values Prometheus listed at discovery, embedded as escaped string literals. Never `/metrics` of Prometheus, never an
+  admin, lifecycle, reload or write route, never PromQL from the browser. Discovery lists each `(job, instance)` with a
+  `node_uname_info` series (Prometheus' own target has none); a pair with more than one is `ambiguous` and not
+  selectable. The snapshot is the target's newest scrape: its `up` sample must be 1 (`target-down`) and inside the
+  two-minute window (`stale`); every other series contributes only its sample of exactly that scrape; the reading is
+  stamped with the scrape time. A poll that finds the same scrape as before records nothing (no fabricated freshness).
+- **Set-up drafts** (`server/endpoint-setup.mjs`; password sign-in with write access only, `403` for API keys and native
+  tokens). A draft belongs to its person, is bound to one device (or a new one) and one provider, lives in memory only
+  (30 min idle), and holds the password or token one-way: a view says only `password:{set,reused}`.
+  - `GET /api/home/devices/hub-address` → `{"address"}`: the hub's own IPv4 address inside the site's networks
+    (`lanCidrs`), or `null` when it has none there. The set-up guides put it into their firewall lines.
+  - `POST /api/home/devices/endpoint/draft` `{"provider":"winrm"|"node-exporter"|"prometheus","id"?}` → `201 {"draft"}`;
+    with a device id, its stored connection of that provider is reused (host, port, scheme, user, trust, secret).
+  - `POST …/draft/probe` `{"draft","host","port"}` → the certificate (`fingerprint` hex, `subject`, `issuer`, `altNames`,
+    `validFrom`, `validTo`, `selfSigned`, `caVerified`, `hostnameOk`): a TLS handshake only, nothing sent.
+  - `POST …/draft/trust` `{"draft","mode":"ca"|"pin","fingerprint"?}`: `ca` only when the probe verified chain and name
+    (`ca-unverified`), `pin` only with the probed fingerprint (`trust-mismatch`).
+  - `POST …/draft/discover` (Prometheus) `{"draft","host","port","scheme","auth":"none"|"basic"|"bearer","user"?,"password"?}`
+    → `{"draft","targets":[{"job","instance","nodename","release","up","lastSampleAt","eligible","reason"}]}`; no target at
+    all is `422 TELEMETRY_FAILED reason:"no-targets"` with the guide sentence.
+  - `POST …/draft/test` `{"draft","host","port","scheme"?,"user"?,"password"?,"auth"?,"job"?,"instance"?}` → `{"draft","result"}`
+    (the facts the source reports); job+instance must be an eligible discovered target (`needs-targets`, `target-unknown`).
+  - `POST …/draft/discard` `{"draft"}`.
+  - Refusals: `TELEMETRY_SETUP_FAILED` with `reason` (`draft-missing`, `busy`, `needs-probe`, `needs-trust`, `needs-test`,
+    `needs-password`, `needs-targets`, `target-unknown`, `stale`, `trust-mismatch`, `ca-unverified`, `plain-credentials`,
+    `limit`); failures at the machine: `422 TELEMETRY_FAILED` with `provider`, `reason` and the sentence (never the
+    remote text).
+  - Linux SSH: the SSH draft routes under `/api/home/devices/ssh/…` (`tools`, `draft` with `{"os":"linux","id"?}`, `draft/key`,
+    `draft/scan`, `draft/trust`, `draft/test`, `draft/discard`); the user is a POSIX name (`^[A-Za-z_][A-Za-z0-9._-]{0,31}$`).
+- **Saving**: `POST /api/home/devices` with `"kind":"winrm"|"node-exporter"|"prometheus"|"linux-ssh"` and
+  `"telemetry":{"provider","draft","host","port","scheme"?,"user"?,"auth"?,"job"?,"instance"?}` (no password: it is in the draft);
+  `POST /api/home/devices/telemetry` `{"id","telemetry":{…}}` connects an existing device or **switches** it from another
+  agent-less provider (Windows SSH included): its id, picture and history stay; the old connection's poller entry, key
+  files and stored secret go. `{"id","telemetry":null}` disconnects whichever agent-less provider reads it. Both take only
+  a draft made for that device whose test (at most 15 min old) matches what is sent (`stale`, `needs-test`). Thermo must be
+  disconnected first. `platform` becomes the provider's (`windows` or `linux`) and `machine_upsert` cannot change it
+  while connected.
+- **A machine of the site configuration** (`source:"site"`) is connected the same way, on its own tile (page → Telemetry
+  settings), with the same drafts, tests, trust, permissions, switching and disconnecting: pass its id as `id` to the draft
+  routes (`…/endpoint/draft`, `…/ssh/draft` with `os:"linux"`, `…/windows/draft`) and to `POST /api/home/devices/telemetry`
+  or `POST /api/home/devices/windows` (Windows over SSH: a managed connection only, never an SSH alias). Its identity
+  stays in `site.json` and is never written; `machine_upsert` / `machine_remove` still refuse it (`MACHINE_READ_ONLY`),
+  nothing is added to `devices.json`, and it cannot be removed (its display metadata is the owner's override: below,
+  "Editing a machine of the site configuration"). What the hub stores is a
+  **binding** in `state/home/site-telemetry.json` (`{"schema":1,"bindings":[{"id","provider","platform","configuredAt","configuredBy"}]}`,
+  0600, no secrets); the connection itself (key ids, passwords, trust) is in `windows-hosts.json` /
+  `telemetry-hosts.json` under the same id, as for an added device. Which site machines can take one, and the rule
+  that keeps two feeds from reading one machine:
+  - **Thermo wins where the site says so.** A site machine with `thermoId` is read through Thermo (`site.json` +
+    `private/thermo-hosts.json`) and refuses a binding (`400`, detail names `thermoId`); the router is reported by the
+    router adapter and refuses one too. `POST /api/home/devices/thermo` does not apply to site machines (`404`).
+  - The site's `platform` (`machines[].platform`, optional: `macos`, `windows`, `linux`, `other`), when set, limits the
+    providers to that system's; without it every agent-less provider is offered and the binding records the platform
+    its provider reads. Disconnecting returns the tile to what the site configuration says; it never falls back to
+    another stored or default connection.
+  - Only ids that are site machines now count. A binding whose machine left `site.json` (or got a `thermoId`, or another
+    platform) is neither polled nor shown anywhere; its connection stays on disk, so an edit of `site.json` never
+    deletes a key, until `POST /api/home/devices/telemetry {"id","telemetry":null}` clears it. Pollers, restarts and the
+    SSH key sweep include the effective bindings, so a connection survives a restart.
+  - Reading side: the site tile keeps `source:"site"`, `readOnly:true`, `hash:null`, its name, role, picture, hardware
+    and (a NAS) its probed services, and gains `kind:"thermo"` (has a telemetry feed), `platform`, `telemetry.provider`,
+    gauges, history, volumes and `native`. Every site machine carries `telemetryEditable` (it can take a binding) and
+    `telemetryBinding` (`{"provider","platform","configuredAt"}` or `null`); `machine_list` lists the `platform` and
+    `telemetry.provider` but never the connection.
+- **Reading side**: `GET /api/home` tiles carry `telemetry.provider`, `target` and `connection` (public facts:
+  `{"mode","host","port","scheme","tls":{"mode","fingerprint"?},"auth","user"?,"job"?,"instance"?}`; never a password or
+  token; `machine_list` carries neither). Polls: never more often than 30 s, at most four devices at a time per provider.
+- **Not supported** (said so, never faked): Windows Exporter, GPU utilisation and power on Linux, IPv6 addresses,
+  Kerberos/NTLM for WinRM, a custom CA bundle per connection (use pin mode or `NODE_EXTRA_CA_CERTS`).
 
 ### LLM runtime endpoints
 
@@ -455,16 +720,16 @@ Projects carry `type`: `app`, `game`, `other` or `null` (`POST /api/tickets/proj
 
 ### Review
 
-Variants agents propose for a project (HTML mockups, images, 3D models as `.glb`), decided in `#review`. The full contract is in
+Variants agents propose for a project (HTML mockups, images, 3D models as `.glb`, clips as `.mp4`/`.webm`, audio tracks), decided in `#review`. The full contract is in
 [review.md](review.md). Writes need `review:write` for API keys.
 
 - `GET /api/review?project=&ticket=&status=open|active|done|archived|all&feedback=pending` → `{sets:[summary], provenance}`.
 - `GET /api/review/sets/<R-n>` → the full set with all rounds, decisions, comments and `provenance`. Publishing a round counts as the record (`unit: rounds`), a decision or comment as a change ([Provenance](#provenance)).
 - `HEAD|GET /api/review/blobs/<sha256>` → a published file (range requests); `GET /api/review/frame/<sha256>` → a sandboxed HTML mockup.
 - `PUT /api/review/blobs/<sha256>?offset=&size=` (`application/octet-stream`, ≤ 8 MiB per chunk) → `{received,size,complete}`; `409` with `received` on a wrong offset.
-- `POST /api/review/publish` (≤ 64 kB) → `201` new set or `200` next round; `POST /api/review/feedback` (≤ 64 kB) `{set, round, item, rev, variant, status, note?, comments?, attachments?}`; `POST /api/review/sets` `{id, rev, status?, title?}`.
+- `POST /api/review/publish` (≤ 64 kB) → `201` new set or `200` next round; `POST /api/review/feedback` (≤ 64 kB) `{set, round, item, rev, variant, status, note?, comments?, attachments?, editComments?:[{id, text}], deleteComments?:[id]}` (edit or delete your own saved comments; someone else's → `403`); `POST /api/review/sets` `{id, rev, status?, title?}`.
 - MCP: `review_list`, `review_get` (`read`); `review_publish` (`review:write`). Upload files with `scripts/review-push.mjs`.
-- The page compares variants side by side, one at a time or (images) by swiping a divider, counts the round's
+- The page compares variants side by side, one at a time or (images and clips of one shape) by swiping a divider (the default for an `aligned` item); clips and tracks play in sync with one variant audible, counts the round's
   decisions and shows comments as threads with the round that answered them. With no set on the hub it explains
   the two ways to publish and offers a prompt for a coding agent. Details: [review.md](review.md#the-page-review).
 
@@ -650,6 +915,175 @@ providers and the machines' stacks (`docs/plugins.md` → extension points). Sco
   runtime, the runtime's record id and time), and the copy that names a client is kept. A client is named from the
   User-Agent of llama-swap's access log (`site.json → runtimeClients` for a household's own names).
 - Errors: `400 INVALID_QUERY` for another range or parameter, `503 MODELS_UNAVAILABLE`.
+
+## Backup jobs (UI: #backup-jobs)
+
+Core module `backup-jobs` (`server/core/backups.mjs`, `server/backup-config.mjs`, `server/backup-runner.mjs`),
+integration `backup-jobs.runner` (kind `storage`, can be switched off). The hub is the orchestrator: it connects to a
+**target** (any SSH host with a POSIX shell and rsync: a NAS, a server) and to the **sources**, and makes one snapshot
+per run. Only tools already on both sides are used (`ssh`, `ssh-keygen`, `ssh-keyscan`, `rsync` on the hub; `sh`,
+`mkdir`, `mv`, `rm`, `ln`, `df`, `rsync` on the target). Nothing is installed anywhere. `/api/backups…` is not used:
+a household plugin may serve its own backups there.
+
+**Who may do what.** Reading (jobs, runs, snapshots, logs) is `read`. Running, cancelling, deleting a snapshot and
+re-reading the snapshot list need `backup-jobs:manage` (a person whose role holds it, or an API key with it; old
+read/write keys never get it). Creating, editing, testing, confirming host keys and deleting a job need an
+**administrator with a password sign-in** (`403 ADMIN_REQUIRED` otherwise, API keys included): a job decides what the
+hub reads and where it sends it.
+
+**Keys and host keys.** Creating a job generates a dedicated ed25519 key pair with `ssh-keygen` in
+`private/backup-jobs/<id>/` (directory 0700, private key 0600; `BACKUP_KEYS_DIR` moves it). The private key is never
+read, logged or returned; the API returns the public key and an `authorized_keys` line,
+`restrict[,from="<hub address>"] ssh-ed25519 … home-hub-backup-<id>` (`from` only when the hub has an address inside
+`lanCidrs`). Host keys are **trust on first use**: `test` scans the host (`ssh-keyscan`) and returns the fingerprints
+(`SHA256:…`, as `ssh-keygen -l` prints them); a person compares one with the machine and sends it to `trust`, which
+scans again and pins only a key with exactly that fingerprint. From then on every connection uses the job's own
+`ssh_config` (`IdentitiesOnly`, no agent, `UserKnownHostsFile` holding only the pinned keys,
+`StrictHostKeyChecking yes`, `BatchMode`, no forwarding or multiplexing, `~/.ssh/config` not read). A changed host key
+is refused (`host-key-changed`); changing a part's host or port drops its pin. Pins and deletions are in the access
+audit (`backup-job-created`, `backup-host-key-pinned`, `backup-snapshot-deleted`, `backup-job-deleted`).
+
+**Snapshot layout** in the target's destination directory:
+
+```
+<dest>/2026-11-11T023000Z/<source name>/…   one directory per successful run (UTC start time)
+<dest>/latest -> 2026-11-11T023000Z          the snapshot of the last successful run
+<dest>/.in-progress-<stamp>/                 the run being written; renamed on success, removed by the next run
+<dest>/.home-hub-backup-job                  the owner marker: the id of the job that writes here
+```
+
+**One destination, one job.** Saving a target that equals, contains or lies inside another job's (same host and
+port) is refused (`409 BACKUP_DEST_SHARED`). What validation cannot see (an IP and a name for one machine, a symlink)
+the owner marker catches: the first run writes the job id into `.home-hub-backup-job`, and every later prepare,
+rename, prune and delete-snapshot refuses a destination whose marker names another job (`dest-owned`); the
+connection test reports it too.
+
+Each source is pushed with `rsync -a --delete --numeric-ids --stats --timeout=600 --link-dest=<dest>/<previous>/<name>`,
+so unchanged files are hard links into the previous snapshot: every snapshot is a full, browsable tree that costs only
+what changed. A source on another SSH host is first mirrored into `state/backup-jobs/<id>/staging/<name>/` on the hub
+(incremental `rsync` pull; `BACKUP_STAGING_DIR` moves it), then pushed like a local one: rsync cannot copy between two
+remote hosts, and the job's key is never handed to another machine. After a good run the staging copy of a source that
+is no longer in the job is removed (the hub does not check its own free space before staging: the size of a remote
+source is not known without a full rsync dry run).
+
+**What a local source never carries.** A local source may not be, or lie inside, the key directory, the backup state
+(`state/backup-jobs/`) or the staging directory (`400 BACKUP_SOURCE_PROTECTED` when saved, `source-protected` when a
+symlink moved in between). When a source contains any of them, or the hub's `private/`, they are excluded
+(`--exclude=/<relative path>/`, with `* ? [ ] \` escaped). Paths are compared after `realpath`, and without regard to
+case on macOS and Windows. `~` and `~/…` are the home of the user the hub runs as.
+
+**Seal, then retention.** After the copies, one remote step renames `.in-progress-<stamp>` to `<stamp>` (refused if a
+directory of that name already exists: `stamp-exists`) and points `latest` at it; that step decides whether the run
+succeeded. Retention is a separate step after it: a snapshot stays when it is among the newest `keepLast` or younger
+than `keepDays` (at least one must be set; a hand-edited file with neither prunes nothing). This run's snapshot and the
+newest are never deleted. Every step that may delete (leftovers, retention, delete-snapshot) runs under the job's
+deadline, not the 60 s of a short ssh command.
+
+**Warnings** (`result: "warning"`, `warnings: [codes]`, `warningMessages`): the snapshot is kept and nothing is pruned.
+`partial`: rsync exit 23/24 (unreadable or vanished files; decided by the exit status alone, before any stderr is read).
+`source-empty`: a source sent nothing but its own directory. `newer-snapshot`: the target holds a snapshot named
+later than this run (a clock that went back). `prune-failed`: the snapshot is good, deleting old ones failed. SSH
+errors are read from stderr only when the exit status is ssh's own (255) or rsync's connection errors (12, 30, 35).
+
+**Runs.** One run per job at a time: in memory, and a lock file `state/backup-jobs/<id>/run.lock` (`{pid, runId,
+startedAt, timeoutMinutes, child}`) that a second hub process on the same state respects. A lock is taken over when its
+process is gone, or when it is older than the job's deadline plus 10 minutes whoever holds it (a reused PID cannot keep
+it). Each process has a deadline (short ssh commands 60 s, the rest `timeoutMinutes`, 5–2880, default 360), runs in a
+process group of its own and is cancelled with SIGTERM, then SIGKILL, to the whole group. A run is recorded as
+`running` when it starts and its log is written to disk as it goes (`GET …/log`, ≤ 256 KiB; the last 200 runs are
+kept). Test, trust, refresh, edit and delete answer `409 BACKUP_BUSY` while the job runs. A `runs.json` that cannot be
+read is never overwritten (`500 BACKUP_HISTORY_UNREADABLE`; the views show the job with `historyUnreadable: true`).
+
+**Stopping the hub.** On SIGTERM or SIGINT the server stops taking requests and calls every module's `stop()` (at most
+`SHUTDOWN_GRACE_MS`, default 15 s, then it exits anyway; a second signal exits at once). A running backup ends as
+`interrupted`: its rsync and ssh are stopped and its record and log are written. After a crash or `kill -9`, the next
+start marks a run left `running` as `interrupted`, removes the stale lock and stops the rsync or ssh that lock names
+(only when that pid still runs one of the backup tools); the next run removes the unfinished snapshot.
+
+**Schedule.** `daily` or `weekly` (`days` 1 = Monday … 7) at `time` HH:MM in the site time zone, or `manual`. A time
+a DST change skips runs an hour later; a repeated time runs once. One in-process timer wakes at the soonest next run
+(at most an hour ahead, then it looks again) and re-arms after every change; a slot that comes due while a re-arm is
+in flight still fires, and concurrent re-arms leave one timer. **Missed runs:** when the hub starts and a job's newest
+scheduled slot is later than both its last attempt and its last change, the job runs **once** (trigger `catch-up`) a
+minute after the start, however many slots were missed. While the integration is off nothing is started or caught up.
+
+| Method | Path | Who | What |
+|---|---|---|---|
+| GET | `/api/backup-jobs` | read | `{jobs, suggestions, timeZone, canManage, disabled?}`; `suggestions` are the site's machines for the wizard |
+| GET | `/api/backup-jobs/detail?id=` | read | `{job, publicKey, authorizedKeys: {line, plain, address}, runs, snapshots}` |
+| GET | `/api/backup-jobs/log?id=&run=` | read | One run's log as `text/plain` |
+| POST | `/api/backup-jobs/create` | admin | `{name}` → 201 with the detail; a draft job with its own key |
+| POST | `/api/backup-jobs/update` | admin | `{id, base, name?, target?, sources?, excludes?, schedule?, retention?, timeoutMinutes?, enabled?}`; `base` is the job's `hash` (409 `BACKUP_CONFLICT` when stale) |
+| POST | `/api/backup-jobs/test` | admin | `{id, part: "target" \| "source", index?}` → `{result: {state: trust \| changed \| ok \| problem, hostKeys?, pinned?, checks: [{id, ok, value?}], error?, message?}}` |
+| POST | `/api/backup-jobs/trust` | admin | `{id, part, index?, fingerprint}` pins the host key |
+| POST | `/api/backup-jobs/delete` | admin | `{id, base}`; deletes the job, its key and history. Snapshots on the target stay |
+| POST | `/api/backup-jobs/run` | `backup-jobs:manage` | `{id}` → 202 `{started: {runId, snapshot, startedAt}}` |
+| POST | `/api/backup-jobs/cancel` | `backup-jobs:manage` | `{id}` |
+| POST | `/api/backup-jobs/delete-snapshot` | `backup-jobs:manage` | `{id, snapshot}`; `latest` moves to the newest one left |
+| POST | `/api/backup-jobs/refresh` | `backup-jobs:manage` | `{id}`: read the snapshot list and free space from the target again |
+
+A job: `{id, name, enabled, target: {host, port, user, path, hostKey: {type, fingerprint, pinnedAt, pinnedBy}},
+sources: [{name, kind: "local", path} | {name, kind: "ssh", host, port, user, path, hostKey}], excludes, schedule:
+{mode, time, days}, retention: {keepLast, keepDays}, timeoutMinutes, hash, missing}` (`missing`: codes `target`,
+`target-key`, `sources`, `source-key:<name>`) plus, in lists, `state` (`draft`,
+`off`, `ready`, `running`, `ok`, `warning`, `failed`, `cancelled`, `interrupted`), `running`, `nextRunAt`, `lastRun`, `lastSuccessAt`,
+`sizeBytes` (logical size of the newest good snapshot), `snapshots`, `space`. A run: `{id, trigger: manual | schedule |
+catch-up, by, startedAt, finishedAt, durationMs, result: running | ok | warning | failed | cancelled | interrupted,
+error?, message?, warnings?, warningMessages?, snapshot, present, deletedAt, stats: {files, filesTransferred, totalBytes,
+transferredBytes, sentBytes}, pruned}`. Validation: hosts are names or IPv4 addresses,
+users `[A-Za-z_][A-Za-z0-9._-]*`, remote paths absolute without spaces, quotes or shell characters; local paths
+absolute or `~/…`; no `.`/`..` segments; nothing that looks like a secret (in paths and exclude patterns only
+unmistakable credentials count: a hash-named directory is fine). `jobs.json` is read with the same validators: a part
+written by hand that fails them is dropped, so the job reads as incomplete. Errors are `BACKUP_<REASON>` with a
+sentence in `message` (`server/backup-runner.mjs → BACKUP_ERRORS`); a validation error also has `field`
+(`target.path`, `sources[1].host`, …) and the English `details`. While the integration is off, reads carry `disabled` and
+`test`, `trust`, `run`, `delete-snapshot` and `refresh` answer `409 INTEGRATION_DISABLED`.
+
+MCP: `backup_jobs_list` (scope `read`) returns every job as in `GET /api/backup-jobs`.
+
+**On the target, once per job** (the wizard shows the same): a user with a real shell (not `nologin`), the destination
+directory owned by it, the `authorized_keys` line in `~<user>/.ssh/authorized_keys` (`.ssh` 0700, file 0600), SSH on,
+rsync present. That user's login shell must accept POSIX `sh -c '…'` quoting (sh, bash, zsh, dash, ksh; fish works;
+csh and tcsh do not). A source on another machine needs the same public key for the user the job names there. The key
+gives a shell on each of those machines (restricted by `restrict`, and by `from="…"` when given). On the target an
+`rrsync` forced command is not possible, because the hub runs `mkdir`, `mv`, `rm`, `ln`, `cat` and `df` in the
+destination; on a source that only has to be read, `command="rrsync -ro <path>"` before the key narrows it to read-only
+rsync (the wizard's connection test then reports `no-shell`; the runs work).
+
+## Git LFS (UI: #git-lfs)
+
+LFS objects of repositories on connected git hosts (GitHub, GitHub Enterprise, Gitea, Forgejo, or a plugin's
+provider). The rules, the hosts' real capabilities and the token permissions are in `docs/git-lfs.md`. Reading needs
+`read`. Managing connections and deleting needs `git-lfs:write`, a core scope that old write keys do not get. While
+the integration `git-lfs.hosts` is off, every GET answers `200 {"disabled":{…}}` with empty lists and every POST
+answers `409 INTEGRATION_DISABLED`.
+
+- `GET /api/git-lfs` → `{"schemaVersion":1,"enabled","graceHours","refreshMinutes","maxDelete","git":{ok,version},"providers":[…],"connections":[…]}`.
+  - `providers[]` = `{id, title, kind: builtin|plugin, capabilities:{listRepos, checkObjects, listObjects, deleteObjects, tokenScopes}, fixedBaseUrl, token:{permissions[], note, url, urlTemplate}}`. `urlTemplate` holds `{web}` for the host's address.
+  - `connections[]` = `{id, provider, providerTitle, name, baseUrl, web, plainHttp, repoMode: all|owner|selected, owner, repos, login, scopes, tokenSet, createdAt, createdBy, updatedAt, updatedBy, capabilities, placement: {service:{id,name,machine,machineName}, storage:{…}|null}|null (where the inventory says the host and its LFS object store run; server/git-lfs-placement.mjs), scan:{running, startedAt, finishedAt, error, truncated, repos:[{fullName, state: ok|error, error, scannedAt, complete, incomplete: no-refs|no-default-branch|null, storedCheck: listed|ok|partial|failed|skipped, defaultBranch, refs, objects, bytes, url}]}}`. The token itself is never in an answer; `tokenSet` says whether one is stored.
+- `GET /api/git-lfs/objects?connection=&repo=&q=&ext=&status=all|current|branch|history|orphaned&minSize=&maxSize=&sort=size|path|repo|status|commit|lastSeen|oid&dir=asc|desc&offset=&limit=` (`commit` = the date of `lastCommit`; `limit` 1–200, default 50; sizes in bytes; `ext=-` = no extension) → `{"total","offset","limit","totals","filtered","extensions":[{ext,count}],"items":[…]}`.
+  - `totals` (for the chosen connection or repository) and `filtered` (after every filter) = `{count, bytes, reclaimableCount, reclaimableBytes, byStatus:{current|branch|history|orphaned:{count, bytes}}}`.
+  - An item = `{oid, size, status, stored: true|false|null, paths[], pathCount, currentPaths[], refs[] (tips that contain it), refCount, via[] (refs its commits were reached from), firstCommit:{sha,at}, lastCommit, commits, remembered, firstSeenAt, lastSeenAt, lastReferencedAt, unreferencedSince, createdAt, connection, connectionName, provider, repo, repoUrl, extension, reclaimable, canDelete, deleteBlocked, manual?}`. `deleteBlocked` is `current`, `history`, `unverified`, `storage-unknown`, `grace`, `unsupported` or `null`. `manual` = `{text, url}`: how to remove a reclaimable object by hand on a host that cannot delete.
+  - `400 INVALID_INPUT` for an unknown parameter or value.
+- `POST /api/git-lfs/refresh` (`read`; an API key needs `git-lfs:write`) `{connection?, repo?}` → `202 {"started":[ids],"skipped":[{connection, reason: running|throttled}]}`. At most one scan per connection every 30 s.
+- `POST /api/git-lfs/test` (`git-lfs:write`) `{provider, baseUrl?, token}` or `{provider, baseUrl?, connection}` (the stored token, same provider and host only) → `{"ok":true,"web","api","plainHttp","user":{login,name},"scopes":[…]|null,"scopesNote","warnings":[…],"capabilities","git"}`.
+- `POST /api/git-lfs/repos` (`git-lfs:write`) `{provider, baseUrl?, token | connection, owner?}` → `{"repos":[{fullName, owner, private, archived, defaultBranch}],"total","truncated"}` (at most 1000).
+- `POST /api/git-lfs/connections` (`git-lfs:write`) `{id?, provider, name, baseUrl?, token?, repoMode, owner?, repos?}` → `201` (new) or `200 {"connection":{…}}`. The token is checked against the host before anything is stored. Leaving out `token` keeps the stored one, but only while provider and host stay the same (`400 GIT_LFS_TOKEN_REQUIRED` otherwise). Up to 200 repositories. Saving starts a scan.
+- `POST /api/git-lfs/connections/remove` (`git-lfs:write`) `{id}` → `{"removed":id}`. Removes the token, the catalog and the mirrors; the host is not touched.
+- `POST /api/git-lfs/delete/preview` (`git-lfs:write`) `{connection, repo, oids:[…]}` or `{connection?, repo?, filter:{q?, ext?, minSize?, maxSize?}}` (orphaned objects only) → `{"groups":[{connection, connectionName, provider, repo, revision, scannedAt, canDelete, manual?, eligible:[{oid, size, paths, lastCommit, unreferencedSince, createdAt}], refused:[{oid, size, status, reason, message}], bytes}],"eligibleCount","eligibleBytes","graceHours"}`. `reason` also covers `not-found` and `in-use-elsewhere`.
+- `POST /api/git-lfs/delete` (`git-lfs:write`) `{connection, repo, oids:[1–500], revision, requestId}` → `{"requestId","deleted":[{oid,size}],"refused":[{oid,reason,message}],"failed":[{oid,error}],"bytes","stopped?","stoppedMessage?","refsChangedDuring?"}`, after a fresh scan of the repository.
+  - Before every 25 deletions the host's refs are read again. `stopped` is `refs-changed` or `refs-unverified` when that check stops the rest, and `audit-failed` when an audit line could not be written. Objects not reached are in `refused` with the same reason.
+  - `refsChangedDuring: true` means the refs changed after the last check, when nothing was left to stop.
+
+  Errors:
+  - `409 GIT_LFS_UNSUPPORTED`: the host cannot delete. This is every built-in provider.
+  - `409 GIT_LFS_CONFLICT`: the revision is not the preview's, or the refs or the stored list changed.
+  - `503 GIT_LFS_UNVERIFIED`: the fresh scan failed or was incomplete. Nothing is deleted.
+  - `409 GIT_LFS_BUSY`: a scan or another deletion is running.
+
+  The same `requestId` again returns the first answer (`repeated: true`).
+- `GET /api/git-lfs/audit` (`git-lfs:write`) → `{"items":[…]}`, the last 50 audit lines, newest first: `{at, requestId, actor, connection, provider, host, repo, oid, size, revision, result: started|deleted|failed, error?}`.
+- Host failures answer `502 GIT_LFS_HOST` with `error.host` = `auth`, `forbidden`, `not-found`, `network`, `timeout`, `rate-limited`, `redirect`, `host-error`, `bad-response`, `too-large` or `too-many`. git failures are recorded per repository (`scan.repos[].error`). A missing git binary is `503 GIT_LFS_GIT_MISSING`.
 
 ## Other read-only routes
 

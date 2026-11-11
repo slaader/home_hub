@@ -13,7 +13,7 @@ import path from 'node:path';
 import {TICKET_ID} from './tickets-store.mjs';
 import {openDb} from './db.mjs';
 
-export const REVIEW_KINDS=Object.freeze(['html','image','model']);
+export const REVIEW_KINDS=Object.freeze(['html','image','model','video','audio']);
 export const DECISIONS=Object.freeze(['pending','accept','revise','reject']);
 // choose: the variants are alternatives, the owner takes one. approve: every variant is its own deliverable
 // (follow-ups, clips, sheets), approved or sent back with comments one by one. A reference variant (e.g. what
@@ -23,10 +23,18 @@ export const APPROVALS=Object.freeze(['approved','changes']);
 export const REVIEW_ID=/^R-[1-9][0-9]{0,5}$/;
 export const SHA=/^[a-f0-9]{64}$/;
 const IMAGE_TYPES=['image/png','image/jpeg','image/webp','image/gif'];
-const TYPES=Object.freeze({html:['text/html'],image:IMAGE_TYPES,model:['model/gltf-binary']});
+const VIDEO_TYPES=['video/mp4','video/webm'],AUDIO_TYPES=['audio/mpeg','audio/wav','audio/ogg','audio/flac','audio/mp4','audio/webm'];
+const TYPES=Object.freeze({html:['text/html'],image:IMAGE_TYPES,model:['model/gltf-binary'],video:VIDEO_TYPES,audio:AUDIO_TYPES});
 const MAGIC={'image/png':b=>b.subarray(0,8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a])),'image/jpeg':b=>b[0]===0xff&&b[1]===0xd8&&b[2]===0xff,
  'image/webp':b=>b.subarray(0,4).toString('latin1')==='RIFF'&&b.subarray(8,12).toString('latin1')==='WEBP','image/gif':b=>/^GIF8[79]a$/.test(b.subarray(0,6).toString('latin1')),
  'text/html':b=>!b.includes(0),
+ // MP4 (ISO BMFF): a box of type "ftyp" first. WebM (Matroska): the EBML magic 1A 45 DF A3.
+ 'video/mp4':b=>b.length>=12&&b.subarray(4,8).toString('latin1')==='ftyp','video/webm':b=>b.length>=4&&b.readUInt32BE(0)===0x1a45dfa3,
+ // Audio: MP3 (an ID3 tag or an MPEG frame sync), WAV (RIFF…WAVE), Ogg (Vorbis, Opus), FLAC, M4A (ftyp) and WebM.
+ 'audio/mpeg':b=>b.subarray(0,3).toString('latin1')==='ID3'||b.length>=2&&b[0]===0xff&&(b[1]&0xe0)===0xe0,
+ 'audio/wav':b=>b.subarray(0,4).toString('latin1')==='RIFF'&&b.subarray(8,12).toString('latin1')==='WAVE',
+ 'audio/ogg':b=>b.subarray(0,4).toString('latin1')==='OggS','audio/flac':b=>b.subarray(0,4).toString('latin1')==='fLaC',
+ 'audio/mp4':b=>b.length>=12&&b.subarray(4,8).toString('latin1')==='ftyp','audio/webm':b=>b.length>=4&&b.readUInt32BE(0)===0x1a45dfa3,
  // GLB: magic "glTF", container version 2, then the total length, which must be the file's size (checked in publish).
  'model/gltf-binary':b=>b.length>=12&&b.subarray(0,4).toString('latin1')==='glTF'&&b.readUInt32LE(4)===2};
 export const LIMITS=Object.freeze({sets:2000,rounds:100,items:30,variants:6,media:20,comments:200,commentsPerSave:50,tickets:20,addresses:500,attachments:10,
@@ -157,7 +165,7 @@ export function createReviewStore(root,{tickets,db=openDb(path.join(root,'hub.db
   if(!Array.isArray(input)||input.length<1||input.length>LIMITS.items)fail('invalid');
   const inline=[],checks=[],ids=new Set();
   const items=input.map(it=>{
-   if(!onlyKeys(it,['id','title','description','kind','mode','variants'])||typeof it.id!=='string'||!ITEM.test(it.id)||ids.has(it.id))fail('invalid');ids.add(it.id);
+   if(!onlyKeys(it,['id','title','description','kind','mode','aligned','variants'])||typeof it.id!=='string'||!ITEM.test(it.id)||ids.has(it.id))fail('invalid');ids.add(it.id);
    const kind=REVIEW_KINDS.includes(it.kind)?it.kind:fail('invalid'),mode=it.mode===undefined?'choose':ITEM_MODES.includes(it.mode)?it.mode:fail('invalid');
    if(!Array.isArray(it.variants)||it.variants.length<1||it.variants.length>LIMITS.variants)fail('invalid');const vids=new Set();
    const variants=it.variants.map(v=>{
@@ -169,9 +177,9 @@ export function createReviewStore(root,{tickets,db=openDb(path.join(root,'hub.db
      if('html'in m){if('sha256'in m||m.type!=='text/html'||typeof m.html!=='string'||!m.html.trim())fail('invalid');const buf=Buffer.from(m.html,'utf8');if(buf.length>LIMITS.inlineHtml)fail('too-large');sha=sha256(buf);inline.push({sha,buf});}
      else{if(typeof m.sha256!=='string'||!SHA.test(m.sha256))fail('invalid');sha=m.sha256;}
      checks.push({sha,type:m.type});
-     // A 3D model may carry a rendered still (png/jpeg/webp) as its poster: the card cover and the placeholder while it loads.
+     // A 3D model or a clip may carry a still (png/jpeg/webp) as its poster: the card cover and the placeholder while it loads.
      let poster=null;
-     if('poster'in m){if(kind!=='model'||!plain(m.poster)||!onlyKeys(m.poster,['sha256','type'])||typeof m.poster.sha256!=='string'||!SHA.test(m.poster.sha256)||!['image/png','image/jpeg','image/webp'].includes(m.poster.type))fail('invalid');
+     if('poster'in m){if(!['model','video'].includes(kind)||!plain(m.poster)||!onlyKeys(m.poster,['sha256','type'])||typeof m.poster.sha256!=='string'||!SHA.test(m.poster.sha256)||!['image/png','image/jpeg','image/webp'].includes(m.poster.type))fail('invalid');
       poster={sha256:m.poster.sha256,type:m.poster.type};checks.push({sha:poster.sha256,type:poster.type});}
      let viewport=null;
      if('viewport'in m){if(kind!=='html'||!onlyKeys(m.viewport,['width','height']))fail('invalid');viewport={width:int(m.viewport.width,200,3840),height:int(m.viewport.height,200,4000)};}
@@ -180,7 +188,10 @@ export function createReviewStore(root,{tickets,db=openDb(path.join(root,'hub.db
     return {id:v.id,label:'label'in v?text(v.label,40):v.id.toUpperCase(),title:opt(v,'title',160),description:opt(v,'description',4000),...(v.reference?{reference:true}:{}),media};
    });
    if(variants.every(v=>v.reference))fail('invalid');
-   return {id:it.id,title:text(it.title,160),description:opt(it,'description',4000),kind,mode,variants};
+   // aligned: every variant of an image or video item is the same shot (same camera, framing and pixel size; for
+   // clips also the same timing), so the page opens it in the swipe view. A contact sheet or grid never should be.
+   if('aligned'in it&&(typeof it.aligned!=='boolean'||it.aligned&&!['image','video'].includes(kind)))fail('invalid');
+   return {id:it.id,title:text(it.title,160),description:opt(it,'description',4000),kind,mode,...(it.aligned?{aligned:true}:{}),variants};
   });
   return {items,inline,checks};
  }
@@ -200,6 +211,16 @@ export function createReviewStore(root,{tickets,db=openDb(path.join(root,'hub.db
    return {kind:'surface',media:int(a.media??0,0,variant.media.length-1),position:vec(a.position),normal:vec(a.normal),
     camera:{theta:num(c.theta,-1e4,1e4,5),phi:num(c.phi,-1e4,1e4,5),radius:num(c.radius,0,1e6,5),target:vec(c.target),fov:num(c.fov,0,180)},
     node:opt(a,'node',300),mesh:opt(a,'mesh',200),material:opt(a,'material',200),surface,animation:anim};
+  }
+  if(kind==='video'){
+   // A place in one frame of the clip: the time in seconds and the point as fractions of the picture.
+   if(!onlyKeys(a,['kind','media','t','x','y'])||a.kind!=='frame')fail('invalid');
+   return {kind:'frame',media:int(a.media??0,0,variant.media.length-1),t:num(a.t,0,86400),x:num(a.x,0,1),y:num(a.y,0,1)};
+  }
+  if(kind==='audio'){
+   // A moment of the track, in seconds.
+   if(!onlyKeys(a,['kind','media','t'])||a.kind!=='time')fail('invalid');
+   return {kind:'time',media:int(a.media??0,0,variant.media.length-1),t:num(a.t,0,86400)};
   }
   if(!onlyKeys(a,['kind','media','x','y'])||a.kind!=='point')fail('invalid');
   return {kind:'point',media:int(a.media??0,0,variant.media.length-1),x:num(a.x,0,1),y:num(a.y,0,1)};
@@ -273,9 +294,14 @@ export function createReviewStore(root,{tickets,db=openDb(path.join(root,'hub.db
   });
  }
  async function feedback(input,by){
-  if(!onlyKeys(input,['set','round','item','rev','variant','status','note','comments','attachments','approvals'])||!Number.isSafeInteger(input.rev)||input.rev<0)fail('invalid');
+  if(!onlyKeys(input,['set','round','item','rev','variant','status','note','comments','attachments','approvals','editComments','deleteComments'])||!Number.isSafeInteger(input.rev)||input.rev<0)fail('invalid');
   const status=DECISIONS.includes(input.status)?input.status:fail('invalid'),note='note'in input?text(input.note,4000,{empty:true}):undefined;
   const comments='comments'in input?(Array.isArray(input.comments)&&input.comments.length<=LIMITS.commentsPerSave?input.comments:fail('invalid')):[];
+  // Saved comments of this round changed by their author: new text ({id, text}) or removed (ids).
+  const list=k=>k in input?(Array.isArray(input[k])&&input[k].length<=LIMITS.commentsPerSave?input[k]:fail('invalid')):[];
+  const edits=list('editComments').map(e=>onlyKeys(e,['id','text'])&&typeof e.id==='string'?{id:e.id,text:e.text}:fail('invalid'));
+  const removes=list('deleteComments').map(id=>typeof id==='string'?id:fail('invalid'));
+  if(new Set([...edits.map(e=>e.id),...removes]).size!==edits.length+removes.length)fail('invalid');
   // Screenshots, uploaded first as blobs like media: on the item's note (the whole list each time) and on new comments.
   const shots=async list=>{
    if(!Array.isArray(list)||list.length>LIMITS.attachments)fail('invalid');const seen=new Set(),out=[];
@@ -311,8 +337,12 @@ export function createReviewStore(root,{tickets,db=openDb(path.join(root,'hub.db
     return {id:randomUUID(),variant:v.id,anchor:anchorOf(c.anchor,item.kind,v),text:body,...(files.length?{attachments:files}:{}),by,at:now};
    });
    if(old.comments.length+added.length>LIMITS.comments)fail('limit');
+   const own=id=>{const c=old.comments.find(x=>x.id===id)||fail('invalid');return c.by===by?c:fail('forbidden');};
+   for(const id of removes)own(id);
+   const changedText=new Map(edits.map(e=>{const c=own(e.id);return [e.id,c.attachments?.length?text(e.text??'',2000,{empty:true}):text(e.text,2000)];}));
+   const kept=old.comments.filter(c=>!removes.includes(c.id)).map(c=>changedText.has(c.id)&&changedText.get(c.id)!==c.text?{...c,text:changedText.get(c.id),editedAt:now}:c);
    const finalStatus=approvals&&status!=='reject'?(decidable.every(v=>approvals[v.id]==='approved')?'accept':Object.values(approvals).includes('changes')?'revise':'pending'):status;
-   const d={rev:old.rev+1,variant,status:finalStatus,...(approvals?{approvals}:{}),note:note??old.note,comments:[...old.comments,...added],attachments:attachments??old.attachments??[],updatedAt:now,updatedBy:by};
+   const d={rev:old.rev+1,variant,status:finalStatus,...(approvals?{approvals}:{}),note:note??old.note,comments:[...kept,...added],attachments:attachments??old.attachments??[],updatedAt:now,updatedBy:by};
    if(status==='reject'&&!d.note&&!d.comments.length&&!d.attachments.length)fail('invalid');
    for(const a of [...(attachments||[]),...commentShots.flat()]){const known=Object.hasOwn(data.blobs,a.sha256)?data.blobs[a.sha256]:null;if(known&&known.type!==a.type)fail('invalid');data.blobs[a.sha256]={type:a.type,size:a.size};}
    r.feedback[item.id]=d;s.updatedAt=now;return {set:s.id,round:r.n,item:item.id,...d};

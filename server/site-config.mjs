@@ -7,11 +7,15 @@
 // start-up error, never a silent fallback. Plugins keep their own settings under "plugins".<id>.
 import {readFileSync,existsSync} from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import {repoRoot} from './edition.mjs';
 
 const MACHINE_ID=/^[a-z][a-z0-9_-]{1,31}$/;
 export const MACHINE_ROLES=Object.freeze(['computer','nas','router','other']);
 export const SSH_PROBES=Object.freeze(['mac','nas']);
+// The operating system of a machine, apart from its role (the same list as server/home-devices.mjs → PLATFORMS).
+// Optional: a machine without it is "not said", as before platforms existed.
+export const SITE_PLATFORMS=Object.freeze(['macos','windows','linux','other']);
 export const LANGUAGES=Object.freeze(['en','cs']);
 const fail=message=>{throw new Error(`site config: ${message}`);};
 const plain=v=>v&&typeof v==='object'&&!Array.isArray(v);
@@ -78,12 +82,13 @@ export function runtimeEndpoint(raw,{lanCidrs=[],where='runtime'}={}){
 
 // --- validation ------------------------------------------------------------------------------
 function machine(raw,i){
- const where=`machines[${i}]`;keys(raw,['id','name','hostname','ip','role','picture','thermoId','hardware','ssh','stack'],where);
+ const where=`machines[${i}]`;keys(raw,['id','name','hostname','ip','role','picture','thermoId','hardware','ssh','stack','platform'],where);
  if(typeof raw.id!=='string'||!MACHINE_ID.test(raw.id))fail(`${where}.id must match ${MACHINE_ID}`);
  const role=raw.role??'computer';if(!MACHINE_ROLES.includes(role))fail(`${where}.role must be one of ${MACHINE_ROLES.join(', ')}`);
  const ip=raw.ip??'';if(ip!==''&&ipv4(ip)===null)fail(`${where}.ip must be an IPv4 address`);
  const picture=raw.picture??null;if(picture!==null&&!/^\/(images|plugins)\/[A-Za-z0-9._/-]{1,120}$/.test(picture))fail(`${where}.picture must be a path under /images/ or /plugins/`);
  const thermoId=raw.thermoId??null;if(thermoId!==null&&(typeof thermoId!=='string'||!MACHINE_ID.test(thermoId)))fail(`${where}.thermoId must be a machine-style id`);
+ const platform=raw.platform??null;if(platform!==null&&!SITE_PLATFORMS.includes(platform))fail(`${where}.platform must be one of ${SITE_PLATFORMS.join(', ')}, or null`);
  let hardware={};if(raw.hardware!==undefined){keys(raw.hardware,['cpu','gpu','ramGb','diskTotalBytes','pools','wifi'],`${where}.hardware`);
   for(const [k,v] of Object.entries(raw.hardware)){if(['cpu','gpu','wifi'].includes(k))str(v,80,`${where}.hardware.${k}`);else if(v!==null&&(typeof v!=='number'||!Number.isFinite(v)||v<0))fail(`${where}.hardware.${k} must be a number or null`);}
   hardware={...raw.hardware};}
@@ -93,7 +98,7 @@ function machine(raw,i){
   if(raw.ssh.keys!==undefined&&typeof raw.ssh.keys!=='boolean')fail(`${where}.ssh.keys must be true or false`);
   ssh={alias:raw.ssh.alias,probe,keys:raw.ssh.keys!==false};}
  let stack=null;if(raw.stack!==undefined&&raw.stack!==null){if(!plain(raw.stack)||!Array.isArray(raw.stack.layers)||!Array.isArray(raw.stack.cols)||!Array.isArray(raw.stack.blocks))fail(`${where}.stack needs layers, cols and blocks`);stack=raw.stack;}
- return {id:raw.id,name:str(raw.name??raw.id,60,`${where}.name`,{empty:false}),hostname:str(raw.hostname??'',253,`${where}.hostname`),ip,role,picture,thermoId,hardware,ssh,stack};
+ return {id:raw.id,name:str(raw.name??raw.id,60,`${where}.name`,{empty:false}),hostname:str(raw.hostname??'',253,`${where}.hostname`),ip,role,picture,thermoId,platform,hardware,ssh,stack};
 }
 export function validateSite(raw={}){
  keys(raw,['$comment','siteName','lanCidrs','timeZone','defaultLanguage','publicOrigin','machines','inventory','tracker','security','router','runtimes','runtimeClients','strings','plugins'],'the file');
@@ -183,4 +188,11 @@ export function softwareWatchPath(env=process.env,root=repoRoot){
  if(env.SOFTWARE_WATCH_FILE)return path.resolve(env.SOFTWARE_WATCH_FILE);
  const own=path.join(root,'local','software-watch.json');
  return existsSync(own)?own:path.join(root,'config','software-watch.json');
+}
+
+// The hub's own IPv4 address inside the site's networks (lanCidrs), or null when it has none there: what another
+// machine sees the hub connect from (backups' from="…", the telemetry guides' firewall rules).
+export function hubAddress(lanCidrs=[],interfaces=os.networkInterfaces()){
+ for(const list of Object.values(interfaces||{}))for(const a of list||[])if(a&&!a.internal&&(a.family==='IPv4'||a.family===4)&&lanCidrs.length&&inCidrs(a.address,lanCidrs))return a.address;
+ return null;
 }

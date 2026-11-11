@@ -11,12 +11,13 @@ import {onSessionReset,sessionCache,authGuard,pageAllowed} from './session-cache
 import {createOrderSaver} from './home-order.js';
 import {tileDrag} from './home-drag.js';
 import {t,tp,locale,say} from './i18n.js';
-import {openAddDevice,openEditDevice,removeDevice} from './home-add-device.js';
+import {openAddDevice,openEditDevice,openSiteEdit,openSiteTelemetry,removeDevice} from './home-add-device.js';
 import {timeZone} from './site.js';
 import {emptyState,pageHeader,toast,icon} from './ui.js';
-import {statusPill,hasReadings,tileNotice,telemetryNotice,runtimesSection} from './home-telemetry.js';
-// Adding, editing and removing devices needs write access (the server checks it again).
-let canEdit=false,canAdmin=false;
+import {statusPill,hasReadings,tileNotice,telemetryNotice,runtimesSection,nativePanel,familyOf,FEED_NAMES} from './home-telemetry.js';
+// Adding, editing and removing devices needs write access (the server checks it again). A machine of the site
+// configuration is edited (its display metadata, over the site's values) only after a password sign-in: canEditSite.
+let canEdit=false,canEditSite=false,canAdmin=false;
 let cache=null,historyCache=new Map(),state={machine:null,blk:null,range:'30m'};
 // A different account must not be shown the previous one's tiles or history.
 onSessionReset(()=>{cache=null;historyCache.clear();});
@@ -97,7 +98,8 @@ function macGauges(m){
  const usedPct=total&&used!=null?used/total*100:null,gpuPct=total&&gmem!=null?Math.min(usedPct??100,gmem/total*100):0;
  const memTone=pressureLevel(q.memPressure)||(usedPct!=null&&usedPct>=90?'hot':'');
  const memSub={text:gmem!=null?`GPU ${Math.round(gmem/GiB)} GB`:total?t('z {gb} GB',{gb:Math.round(total/GiB)}):'',
-  title:gmem!=null?t('GPU drží {gb} GB (alokováno, např. načtený model){active}. Celkem RAM {total} GB.',{gb:Math.round(gmem/GiB),active:gactive!=null?t(', z toho právě aktivně {gb} GB',{gb:Math.round(gactive/GiB)}):'',total:total?Math.round(total/GiB):'?'}):t('Thermo na tomto Macu zatím neposílá paměť GPU (build < 97).')};
+  title:gmem!=null?t('GPU drží {gb} GB (alokováno, např. načtený model){active}. Celkem RAM {total} GB.',{gb:Math.round(gmem/GiB),active:gactive!=null?t(', z toho právě aktivně {gb} GB',{gb:Math.round(gactive/GiB)}):'',total:total?Math.round(total/GiB):'?'})
+   :familyOf(m)==='windows'?t('Operační paměť Windows. Paměť GPU (VRAM) je zvlášť, na stránce stroje.'):familyOf(m)==='linux'?t('Operační paměť Linuxu (bez MemAvailable; mezipaměť ZFS ARC se počítá jako použitá).'):t('Thermo na tomto Macu zatím neposílá paměť GPU (build < 97).')};
  const temp=q.temp!=null?Math.round(q.temp):null;
  const stat=(label,value,tone='')=>el('span',{class:tone},el('span',{class:'hv-k'},label),el('b',{},value));
  return el('div',{class:`hv-metrics${m.telemetry?.state==='stale'?' stale':''}`},
@@ -131,11 +133,23 @@ function propsLine(m){
 }
 const hostLine=m=>[m.hostname,m.ip&&m.ip!==m.hostname?m.ip:null].filter(Boolean).join(' · ');
 // What decides a tile's structure; while it stays the same a refresh only swaps the numbers.
-const tileShape=m=>[m.kind,hasReadings(m),m.name,hostLine(m),m.image||m.picture||'',JSON.stringify(m.props||{}),m.spark?.series||'',sortable].join('|');
+const tileShape=m=>[m.kind,hasReadings(m),m.name,hostLine(m),m.image||m.picture||'',JSON.stringify(m.props||{}),m.spark?.series||'',sortable,Boolean(editorOf(m))].join('|');
+// Who edits what: an added device opens its own dialog, a machine of the site configuration the site editor (its display
+// metadata over the site's values, and its telemetry where the site allows it). null = this account may not.
+let reloadHome=null;
+function editorOf(m){
+ const onSaved=()=>reloadHome?.();
+ if(m.added&&canEdit)return ()=>openEditDevice({machine:m,meta:cache?.telemetry,onSaved});
+ if(m.source==='site'&&canEditSite)return ()=>openSiteEdit({machine:m,meta:cache?.telemetry,onSaved});
+ return null;
+}
+// A tile is two siblings in one card: the link to the machine's page (all of the tile's content, so the whole card opens
+// it, by click or Enter) and, for someone who may edit it, an Edit button laid over its corner. A button is never put
+// inside the link. The card (class hv-tile, data-id) is what home-drag.js moves; the link holds the focus.
 function tile(m){
  const prefetch=()=>{if(hasReadings(m))void loadHistory(m.id,state.range).catch(()=>{});void loadECharts().catch(()=>{});};
  // draggable=false: the browser's own drag of a link would take the pointer away from ours (home-drag.js).
- const node=el('a',{class:'hv-tile',href:`#host-${m.id}`,'data-id':m.id,draggable:'false','aria-describedby':sortable?'hv-order-hint':null,onmouseenter:prefetch,onfocus:prefetch},
+ const link=el('a',{class:'hv-tile-link',href:`#host-${m.id}`,draggable:'false','aria-describedby':sortable?'hv-order-hint':null,onmouseenter:prefetch,onfocus:prefetch},
   art(m),
   el('div',{class:'hv-tile-body'},
    el('div',{class:'hv-tile-head'},el('h3',{},m.name),statusPill(m)),
@@ -143,6 +157,10 @@ function tile(m){
    propsLine(m),
    el('div',{class:'hv-live'},liveBlock(m)),
    tileSpark(m)));
+ const open=editorOf(m);
+ const edit=open?el('button',{type:'button',class:'hv-tile-edit','aria-label':t('Upravit {name}',{name:m.name}),title:t('Upravit {name}',{name:m.name}),
+  onclick:e=>{e.preventDefault();e.stopPropagation();open();}},icon('pencil'),el('span',{},t('Upravit'))):null;
+ const node=el('div',{class:'hv-tile','data-id':m.id},link,edit);
  node.dataset.shape=tileShape(m);return node;
 }
 // In-place refresh of one tile: state, gauges and the small chart; the picture and layout stay put.
@@ -289,9 +307,19 @@ function stackSection(m){
 // --- machine page ------------------------------------------------------------------------------
 const RANGES={'30m':'30 min','7d':'7 dní','30d':'30 dní','6m':'6 měsíců'};
 const ROLES={computer:'počítač',nas:'NAS',router:'router',other:'jiné zařízení'};
+const PLATFORM_NAMES={macos:'macOS',windows:'Windows',linux:'Linux',other:'jiný systém'};
+// Windows reports no power or temperature: those charts would stay empty, so its page leaves them out, and
+// its memory is the system RAM alone (the GPU's own memory is in the Windows panel).
+// Linux: no GPU and no power (those sources do not measure them); temperature only when the machine reports any.
+const ramOnly=d=>d.key==='mem'?{...d,title:'Paměť · RAM',extra:undefined,liveGpu:undefined}:d;
+const seriesFor=m=>familyOf(m)==='windows'?SERIES.filter(d=>d.key!=='power'&&d.key!=='temp').map(ramOnly)
+ :familyOf(m)==='linux'?SERIES.filter(d=>d.key!=='power'&&d.key!=='gpu'&&(d.key!=='temp'||m.native?.temps?.length)).map(ramOnly):SERIES;
 const section=(title,sub,...body)=>el('section',{class:'hv-sec'},el('div',{class:'hv-sec-head'},el('h2',{},title),sub?el('p',{},sub):null),...body.flat().filter(Boolean));
 function sourceBadge(m){
- if(m.source==='site')return el('span',{class:'hv-badge',title:t('Stroj je zapsaný v local/site.json; přes API a tady v přehledu se nemění.')},t('z konfigurace webu'));
+ const changed=Boolean(m.siteOverride?.fields?.length||m.siteOverride?.image);
+ if(m.source==='site')return el('span',{class:'hv-badge',title:changed?t('Stroj je zapsaný v local/site.json. Název, adresu, hardware nebo obrázek tu upravil vlastník; id, role, systém a napojení zůstávají podle konfigurace webu.')
+  :t('Stroj je zapsaný v local/site.json. Název, adresu, hardware a obrázek jde upravit tady (Upravit stroj); id, role, systém a napojení zůstávají podle konfigurace webu.')},
+  changed?t('z konfigurace webu · upraveno'):t('z konfigurace webu'));
  const when=m.createdAt?stamp(m.createdAt):'';
  return el('span',{class:'hv-badge',title:when||null},m.source==='agent'?t('přidal agent {name}',{name:m.createdBy||'API'}):t('přidáno v přehledu'));
 }
@@ -309,67 +337,83 @@ function volumes(m){
   bar.firstChild.style.width=`${pct??0}%`;
   return el('div',{class:'hv-volume'},el('div',{},el('b',{},v.name||v.mount),el('span',{},`${size(v.usedBytes)??'–'} / ${size(v.sizeBytes)??'–'}${pct!=null?` · ${pct} %`:''}`)),bar);}));
 }
+// A NAS's probed services stay on its page whether or not its telemetry is connected.
 function services(m){
- if(m.kind!=='nas'||!m.services?.length)return null;
+ if((m.kind!=='nas'&&m.role!=='nas')||!m.services?.length)return null;
  return el('div',{class:'hv-services'},el('span',{class:'hv-k'},t('Služby')),el('div',{class:'hv-chips'},m.services.map(s=>el('span',{class:`hv-status ${s.status==='reachable'?'ok':'dim'}`},el('i',{'aria-hidden':'true'}),s.name||s.id))));
 }
 // What must be drawn again when it changes; anything else is refreshed in place.
-const hostShape=m=>[m.name,hostLine(m),m.telemetry?.state,m.telemetry?.reason,m.hash||'',m.image||m.picture||'',Boolean(m.stack),m.stack?.source,m.stack?.hash||'',Boolean(m.runtimes),canEdit].join('|');
+const hostShape=m=>[m.name,hostLine(m),m.telemetry?.state,m.telemetry?.reason,m.telemetry?.provider||'',m.telemetry?.detail||'',m.platform||'',m.hash||'',m.image||m.picture||'',Boolean(m.stack),m.stack?.source,m.stack?.hash||'',Boolean(m.runtimes),canEdit,canEditSite,m.telemetryBinding?.provider||'',m.telemetryEditable===true,m.siteOverride?.hash||'',JSON.stringify(m.props||{})].join('|');
 function renderChild(slot,machine,{repaint:again,focus}={}){
  disposeCharts();childCards=null;
  const meta=cache?.telemetry;
- const reload=()=>load().then(()=>{built=false;again?.();}).catch(()=>{});
+ const reload=()=>{historyCache.clear();return load().then(()=>{built=false;again?.();}).catch(()=>{});};
  const edit=part=>openEditDevice({machine,meta,focus:part,onSaved:reload});
+ // A machine of the site configuration: Edit machine changes its display metadata over the site's values (never
+ // site.json; it cannot be removed here), and its telemetry connection where the site allows one (no thermoId, not the
+ // router: the server says so, telemetryEditable). Both open the same site editor.
+ const siteEdit=machine.source==='site'&&canEditSite?()=>openSiteEdit({machine,meta,onSaved:reload}):null;
+ const siteTelemetry=machine.source==='site'&&machine.telemetryEditable===true&&canEditSite?()=>openSiteTelemetry({machine,meta,onSaved:reload}):null;
  const actions=machine.added&&canEdit?el('div',{class:'ui-head-actions'},
-  el('button',{type:'button',class:'ui-button',onclick:()=>edit()},t('Upravit zařízení')),
+  el('button',{type:'button',class:'ui-button','data-action':'edit',onclick:()=>edit()},icon('pencil'),t('Upravit zařízení')),
   el('button',{type:'button',class:'ui-button hv-danger',onclick:async e=>{const b=e.currentTarget;b.disabled=true;
-    try{if(await removeDevice(machine)){cache=null;historyCache.clear();location.hash='#overview';}else b.disabled=false;}catch{b.disabled=false;}}},t('Odebrat zařízení'))):null;
+    try{if(await removeDevice(machine)){cache=null;historyCache.clear();location.hash='#overview';}else b.disabled=false;}catch{b.disabled=false;}}},t('Odebrat zařízení')))
+  :siteEdit?el('div',{class:'ui-head-actions'},el('button',{type:'button',class:'ui-button','data-action':'edit',onclick:siteEdit},icon('pencil'),t('Upravit stroj')),
+   siteTelemetry?el('button',{type:'button',class:'ui-button','data-action':'site-telemetry',onclick:siteTelemetry},machine.telemetryBinding?t('Nastavení telemetrie'):t('Připojit telemetrii')):null):null;
  const head=el('header',{class:'hv-host-head'},
   el('a',{href:'#overview',class:'hv-back'},t('← přehled')),
   el('div',{class:'hv-host-main'},art(machine,'hv-host-art'),
    el('div',{class:'hv-host-title'},el('h1',{},machine.name),el('p',{class:'hv-host'},hostLine(machine)||' '),
-    el('div',{class:'hv-badges'},statusPill(machine),el('span',{class:'hv-badge'},t(ROLES[machine.role]||ROLES.other)),sourceBadge(machine),
-     machine.collectedAt?el('span',{class:'hv-badge'},t('sebráno {when}',{when:date(machine.collectedAt)})):null)),
+    el('div',{class:'hv-badges'},statusPill(machine),el('span',{class:'hv-badge'},t(ROLES[machine.role]||ROLES.other)),machine.platform?el('span',{class:'hv-badge'},t(PLATFORM_NAMES[machine.platform]||machine.platform)):null,sourceBadge(machine),
+     machine.collectedAt?el('span',{class:'hv-badge'},t('sebráno {when}',{when:date(machine.collectedAt)})):null,
+     // What is set up for this machine across the hub (telemetry, backups, versions, …): Integrations → Machines.
+     canAdmin?el('a',{class:'hv-badge hv-badge-link',href:`#integrations/machine/${encodeURIComponent(machine.id)}`},t('Integrace stroje →')):null)),
    actions),
   hostProps(machine));
- const notice=telemetryNotice(machine,meta,{onConnect:machine.added&&canEdit?()=>edit('telemetry'):null});
+ const notice=telemetryNotice(machine,meta,{onConnect:machine.added&&canEdit?()=>edit('telemetry'):siteTelemetry});
  const telemetry=[notice];
  if(hasReadings(machine)){
   const bar=el('div',{class:'hv-ranges',role:'group','aria-label':t('Období grafů')},...Object.entries(RANGES).map(([r,label])=>el('button',{type:'button',class:state.range===r?'on':'','aria-pressed':String(state.range===r),
    onclick:()=>{state.range=r;renderChild(slot,latest(machine.id)||machine,{repaint:again});},onmouseenter:()=>void loadHistory(machine.id,r).catch(()=>{})},t(label))));
   const source=el('span',{class:'hv-source'});
-  const cards=SERIES.map(def=>{const value=el('div',{class:'hv-val'},'–'),sub=el('div',{class:'hv-chart-sub'}),node=el('div',{class:'hv-chart'});
+  const cards=seriesFor(machine).map(def=>{const value=el('div',{class:'hv-val'},'–'),sub=el('div',{class:'hv-chart-sub'}),node=el('div',{class:'hv-chart'});
    // Two lines in one chart (memory and what the GPU holds of it) need a legend; one line is named by the title.
    const legend=def.extra?el('div',{class:'hv-chart-legend'},el('span',{class:`key-${def.key}`},el('i',{'aria-hidden':'true'}),t(def.title).split(' ·')[0]),el('span',{class:'key-gpu'},el('i',{'aria-hidden':'true'}),t(def.extra.name))):null;
    return {def,value,sub,node,card:el('article',{class:`hv-card key-${def.key}`},el('h3',{},el('i',{'aria-hidden':'true'}),t(def.title)),value,sub,legend,node)};});
   childCards=cards;
-  telemetry.push(el('div',{class:'hv-chartbar'},bar,source),el('div',{class:'hv-charts'},cards.map(c=>c.card)),volumes(machine));
+  telemetry.push(el('div',{class:'hv-chartbar'},bar,source),el('div',{class:'hv-charts'},cards.map(c=>c.card)),volumes(machine),nativePanel(machine),services(machine));
   const gen=++viewGen;
-  loadHistory(machine.id,state.range).then(h=>{if(gen!==viewGen)return;const since=h.coverageSeconds?new Date(Date.now()-h.coverageSeconds*1000):null;
-   source.textContent=`${t(h.source||'')}${h.complete===false&&since?t(' · data teprve od {when}',{when:stamp(since.toISOString())}):''}`;return renderCharts(cards,h,state.range,machine.quad||{});})
+  loadHistory(machine.id,state.range).then(h=>{if(gen!==viewGen)return;
+   source.textContent=historyCaption(h);return renderCharts(cards,h,state.range,{...machine.quad,telemetryProvider:familyOf(machine)==='windows'?'windows':machine.telemetry?.provider});})
    .catch(()=>{source.textContent=t('Historie nedostupná.');});
  }else if(machine.kind==='router'){
   const q=machine.quad;
   telemetry.push(el('p',{class:'hv-note'},t('Router nemá telemetrického agenta: počty klientů dodává adaptér routeru.')),q?cells([[t('Klienti'),q.clients],['Wi-Fi',q.wifi]]):null);
  }else telemetry.push(services(machine));
- slot.replaceChildren(...[head,disabledBar()].filter(Boolean),
-  section(t('Telemetrie'),hasReadings(machine)?t('Živá čísla a historie z agenta {name}.',{name:meta?.agent||'Thermo'}):null,telemetry),
+ slot.replaceChildren(...[head,disabledBar(),
+  section(t('Telemetrie'),hasReadings(machine)?machine.telemetry?.provider==='windows'?t('Živá čísla a historie z Windows přes SSH: čítače výkonu, bez agenta, jedno čtení za interval.'):familyOf(machine)?t('Živá čísla a historie z {name}, bez agenta, jedno čtení za interval.',{name:FEED_NAMES[machine.telemetry.provider]}):t('Živá čísla a historie z agenta {name}.',{name:meta?.agent||'Thermo'}):null,telemetry),
   stackSection(machine),
   // Only where a provider reports on this machine; a machine nobody reports on has no such section.
-  machine.runtimes?section(t('Lokální LLM runtimy'),null,runtimesSection(machine,meta)):null);
+  machine.runtimes?section(t('Lokální LLM runtimy'),null,runtimesSection(machine,meta)):null].filter(Boolean));
  slot.dataset.shape=hostShape(machine);
  // The router's machine page ends with the adapter's census and health (router-view.js, module "router").
  if(machine.kind==='router')import('./router-view.js').then(v=>{if(slot.isConnected)slot.append(v.routerPanel());}).catch(()=>{});
  if(focus)slot.querySelector('h1')?.focus?.();
 }
+// The chart bar's caption: the history's source, and since when it has data. Set on every refresh as well, so a
+// device switched to another provider never keeps the old provider's name from a cached history.
+const historyCaption=h=>{const since=h.coverageSeconds?new Date(Date.now()-h.coverageSeconds*1000):null;
+ return `${t(h.source||'')}${h.complete===false&&since?t(' · data teprve od {when}',{when:stamp(since.toISOString())}):''}`;};
 let childCards=null,viewGen=0,built=false;
 const latest=id=>cache?.machines.find(x=>x.id===id);
 // Machine page refresh: new numbers into the existing chart instances (no rebuild, no jump).
 function refreshChild(slot,machine,again){
  if(slot.dataset.shape!==hostShape(machine)){renderChild(slot,machine,{repaint:again});return;}
  slot.querySelector('.hv-host-head .hv-status')?.replaceWith(statusPill(machine));
+ const native=slot.querySelector('.hv-native'),updatedNative=nativePanel(machine);
+ if(native&&updatedNative)native.replaceWith(updatedNative);
  if(childCards){const gen=viewGen,cards=childCards,range=state.range;
-  loadHistory(machine.id,range,true).then(h=>{if(gen!==viewGen)return;return renderCharts(cards,h,range,machine.quad||{},{keep:true});}).catch(()=>{});}
+  loadHistory(machine.id,range,true).then(h=>{if(gen!==viewGen)return;const caption=slot.querySelector('.hv-source');if(caption)caption.textContent=historyCaption(h);return renderCharts(cards,h,range,{...machine.quad,telemetryProvider:familyOf(machine)==='windows'?'windows':machine.telemetry?.provider},{keep:true});}).catch(()=>{});}
  // Services/models change while the page is open: rebuild the stack from the latest data
  // (selection kept, no panel animation).
  const old=document.querySelector('#hv-stack-slot');if(old&&machine.stack)old.replaceWith(stackGrid(machine));
@@ -402,12 +446,13 @@ function emptyOverview(add){
 const summary=list=>{const counted=list.filter(m=>m.telemetry?.state!=='not-applicable'),ok=counted.filter(m=>m.telemetry?.state==='ok').length;
  return `${tp(list.length,'{n} stroj|{n} stroje|{n} strojů')} · ${t('telemetrie běží na {ok} z {all}',{ok,all:counted.length})}`;};
 export function homeView(machineId,me){
- canEdit=me?.canWrite===true;canAdmin=me?.canAdmin===true;
+ canEdit=me?.canWrite===true;canEditSite=canEdit&&me?.authKind==='session';canAdmin=me?.canAdmin===true;
  viewGen++;disposeCharts();disposeSparks();dragger?.destroy();dragger=null;childCards=null;built=false;
  onLeave(()=>{dragger?.destroy();dragger=null;disposeSparks();});
  const slot=el('div',{id:'home-slot',class:'hv-page'});
  const loading=text=>el('p',{class:'hv-loading',role:'status'},text);
  const reload=()=>load().then(()=>{built=false;paint();}).catch(()=>{});
+ reloadHome=()=>{historyCache.clear();return reload();};
  const add=()=>openAddDevice({meta:cache?.telemetry,onSaved:reload});
  const headActions=()=>el('div',{class:'ui-head-actions'},canEdit?el('button',{type:'button',class:'ui-button primary',onclick:add},t('⊕ Přidat zařízení')):null);
  const paint=()=>{
@@ -449,9 +494,9 @@ export function homeView(machineId,me){
  let said=null;
  async function commit(order,id){
   const gen=viewGen,before=orderCache.get()?.order??null,saving=orderSaver.save(order);
-  const held=document.activeElement?.classList?.contains('hv-tile')?document.activeElement.dataset.id:null;
+  const active=document.activeElement,held=active?.classList?.contains('hv-tile-link')?active.parentNode?.dataset?.id:active?.classList?.contains('hv-tile')?active.dataset.id:null;
   paint();
-  if(held)slot.querySelector(`.hv-tile[data-id="${held}"]`)?.focus();// moving a node drops its focus
+  if(held){const card=slot.querySelector(`.hv-tile[data-id="${held}"]`);(card?.querySelector('.hv-tile-link')||card)?.focus();}// moving a node drops its focus
   const outcome=await saving;
   // A newer move or another account owns the screen now. A page opened since then only repaints a rollback.
   if(outcome==='stale'||outcome==='superseded')return;

@@ -6,6 +6,7 @@
 import path from 'node:path';
 import {runStatus,settingsInput,settingsView,INTEGRATION_KINDS} from '../integrations.mjs';
 import {pluginsDirectory} from '../plugins.mjs';
+import {machinesOverview} from '../machine-facets.mjs';
 
 const MESSAGES={
  invalid:[400,'INVALID_INPUT','Neplatný požadavek.'],
@@ -51,10 +52,12 @@ export async function integrationsList(hub){
 
 export default {
  id:'integrations',title:'Integrations',
- assets:['integrations-view.js','integrations.css','i18n-en-integrations.js'],
+ assets:['integrations-view.js','machines-view.js','integrations.css','i18n-en-integrations.js','i18n-en-machines.js'],
  nav:[{groupKey:'Správa',hash:'integrations',labelKey:'Integrace',view:'integrations-view.js#integrationsPage',admin:true,order:52,icon:'plug'}],
  routes:routes([
   {method:'GET',path:'/api/admin/integrations',handler:async({json,hub})=>json(200,await integrationsList(hub))},
+  // Integrations → Machines: every machine of the overview with what each module knows about it (server/machine-facets.mjs).
+  {method:'GET',path:'/api/admin/machines',handler:async({json,hub})=>json(200,await machinesOverview(hub))},
   // {id, enabled}: turn one on or off. An integration with toggle:false refuses (its switch is elsewhere).
   {method:'POST',path:'/api/admin/integrations/toggle',async handler(c){
     const input=only(c.input,['id','enabled'],['id','enabled']);if(typeof input.enabled!=='boolean')fail('invalid','enabled must be true or false');
@@ -92,6 +95,7 @@ export default {
    const rows=await Promise.all(hub.registry.integrations.map(async i=>{const s=await runStatus(i,hub.state(i.module),hub,{enabled:hub.integrationEnabled(i.id)});return {id:i.id,kind:i.kind,state:s.state,summary:s.summary};}));
    return {integrations:rows};}}],
  apiDocs:[{title:'Integrace',routes:[
+  ['GET','/api/admin/machines','admin','Stroje: každý stroj z Přehledu a co o něm ví který modul (telemetrie, zálohy, verze, SSH klíče, inventář, LLM runtimy, Git LFS): nastaveno, nenastaveno, varování, vypnuto.'],
   ['GET','/api/admin/integrations','admin','Všechny integrace: stav, kde jsou nastavené, vypínač, test a nastavení. MCP integrations_status (jen čtení).'],
   ['POST','/api/admin/integrations/toggle','admin','{id, enabled}: zapnout nebo vypnout integraci. Zapíše se do auditu.'],
   ['POST','/api/admin/integrations/test','admin','{id}: spustit test integrace teď.'],

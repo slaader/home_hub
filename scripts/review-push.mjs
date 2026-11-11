@@ -3,14 +3,15 @@
 //   HOME_HUB_URL=https://… HOME_HUB_TOKEN=hhk_… node scripts/review-push.mjs review.json [--dry-run]
 // review.json has the shape of POST /api/review/publish (docs/review.md), except that media may name a local
 // file instead of a sha256:  {"file":"mockups/login-a.html"}  (relative to review.json; type from the extension).
-// A 3D model (.glb) may name its rendered still the same way:  {"file":"units/unit-a.glb","poster":"units/unit-a.png"}.
+// A 3D model (.glb) or a clip (.mp4, .webm) may name its still the same way:  {"file":"units/unit-a.glb","poster":"units/unit-a.png"}.
 // Files are hashed, blobs the hub already has are skipped, the rest go up in 4 MiB chunks, then the set is
 // published. The token needs the review:write scope. Nothing is printed of the token. No dependencies.
 import {readFile,stat,open} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 
-const TYPES={'.html':'text/html','.htm':'text/html','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.gif':'image/gif','.glb':'model/gltf-binary'};
+const TYPES={'.html':'text/html','.htm':'text/html','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.gif':'image/gif','.glb':'model/gltf-binary','.mp4':'video/mp4','.m4v':'video/mp4','.webm':'video/webm',
+ '.mp3':'audio/mpeg','.wav':'audio/wav','.ogg':'audio/ogg','.oga':'audio/ogg','.opus':'audio/ogg','.flac':'audio/flac','.m4a':'audio/mp4'};
 const CHUNK=4*1024*1024;
 const die=m=>{console.error('review-push: '+m);process.exit(1);};
 
@@ -28,7 +29,7 @@ export async function resolveManifest(manifest,base){
   if(m.file===undefined)continue;
   if(typeof m.file!=='string'||!m.file)throw new Error('media.file must be a path');
   const file=path.resolve(base,m.file),type=m.type||TYPES[path.extname(file).toLowerCase()];
-  if(!type)throw new Error(`unknown file type: ${m.file} (use .html, .png, .jpg, .webp, .gif or .glb, or set "type")`);
+  if(!type)throw new Error(`unknown file type: ${m.file} (use .html, .png, .jpg, .webp, .gif, .glb, .mp4, .webm, .mp3, .wav, .ogg, .opus, .flac or .m4a, or set "type")`);
   const size=(await stat(file)).size,sha=await hashFile(file);
   files.set(sha,{file,size});delete m.file;Object.assign(m,{sha256:sha,type});if(!m.name)m.name=path.basename(file);
  }

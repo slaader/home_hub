@@ -1,0 +1,2 @@
+#!/usr/bin/env node
+import('./fake-tools.mjs').then(m=>m.main('ssh-keyscan'));

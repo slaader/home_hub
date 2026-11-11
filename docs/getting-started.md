@@ -99,6 +99,24 @@ placeholder for now). Install it, turn on its remote access, then either:
 
 The hub only reads from it. Skip this step and nothing else changes.
 
+A Windows machine needs no agent: in **Overview → Add device** choose the system Windows and Telemetry → Windows
+(SSH). The dialog asks for host, SSH port and Windows user, creates the hub's own SSH key, shows the one
+PowerShell step to run on Windows (and, when OpenSSH Server is not there yet, how to install it), lets you confirm
+the host-key fingerprint and tests the connection. Nothing is set up on the machine that runs the hub, whatever
+its system, beyond the OpenSSH client tools (`ssh` and `ssh-keyscan`). Windows can instead be read over WinRM
+HTTPS (Telemetry → Windows (WinRM)); the dialog shows the explicit PowerShell step that adds an HTTPS listener and
+enables Basic for the WinRM service only.
+
+A Linux machine: choose the system Linux, then **Linux (Node Exporter)** (recommended; install Node Exporter with
+your distribution's package or the official release, the dialog shows how, and allow port 9100 only from the hub),
+**Linux (Prometheus)** when a Prometheus already scrapes the machine (the dialog lists its node_exporter targets;
+pick exactly one), or **Linux (SSH)** (the hub's own key in `~/.ssh/authorized_keys` of a normal account; no sudo).
+A machine you described in `site.json` (a NAS, say) is connected on its own page instead: **Telemetry settings**
+opens the same steps, shows its name and address read-only, and stores only the connection; `site.json` is not
+changed. A machine with `thermoId` keeps Thermo from the site files.
+Prerequisites in short: Node Exporter ≥ 1.x with its default `cpu`, `meminfo`, `filesystem`, `diskstats`, `netdev`
+collectors; Prometheus 2.x or 3.x with its HTTP API reachable from the hub; for SSH, `/bin/sh`, `df` and a readable `/proc`.
+
 ## 5. Fill the inventory
 
 The inventory is one checked file, `data/knowledge.json`: machines, runtimes, tools and stores, and what

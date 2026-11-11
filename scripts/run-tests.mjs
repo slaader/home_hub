@@ -7,7 +7,9 @@
 // Run it whole, every time. While iterating:  npm test -- tests/security.test.mjs  (files from one half
 // or both; each goes to the right run).
 import {spawn} from 'node:child_process';
+import {randomBytes} from 'node:crypto';
 import {existsSync,readdirSync} from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -25,7 +27,8 @@ function run(label,files,env){
  return new Promise(resolve=>{
   if(!files.length)return resolve(null);
   console.log(`\n=== ${label}: ${files.length} file(s) ===`);
-  const child=spawn(process.execPath,['--import',hook,'--test',...flags,...files],{cwd:root,env:{...process.env,...env},stdio:['ignore','pipe','inherit']});
+  // A throwaway key for sealed files (server/secret-box.mjs): no test reaches the Keychain or private/secret.key.
+  const child=spawn(process.execPath,['--import',hook,'--test',...flags,...files],{cwd:root,env:{...process.env,HOME_HUB_SECRET_KEY:randomBytes(32).toString('hex'),HOME_HUB_SECRET_KEY_FILE:path.join(os.tmpdir(),`home-hub-tests-${process.pid}`,'secret.key'),...env},stdio:['ignore','pipe','inherit']});
   // The reporter's own totals ("ℹ tests 12"), picked out of the stream line by line.
   const counts={};let rest='';
   child.stdout.on('data',d=>{process.stdout.write(d);const lines=(rest+d).split('\n');rest=lines.pop();for(const line of lines){const m=/^. (tests|pass|fail|skipped) (\d+)$/.exec(line);if(m)counts[m[1]]=Number(m[2]);}});

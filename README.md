@@ -112,7 +112,7 @@ each one needs. The same key works on the HTTP API ([docs/API.md](docs/API.md)).
 | SSH key inventory | Says what to configure and run | SSH access and `scripts/collect-security.mjs` | A collector |
 | Router client census | The router page says what to set up | A UniFi gateway and `scripts/collect-router-unifi.py`, or a plugin's adapter | A collector |
 | Project tracker: projects, releases, tickets with attachments | Works | Nothing | You or an agent (`tickets:write`) |
-| Review: variants to decide on, with pictures and 3D models | Works | Nothing | An agent (`review_publish`) or `scripts/review-push.mjs` |
+| Review: variants to decide on, with pictures, 3D models, clips and audio | Works | Nothing | An agent (`review_publish`) or `scripts/review-push.mjs` |
 | Full-text search over tickets and reviews | Works | Nothing (SQLite is built into Node) | — |
 | MCP endpoint and HTTP API | Works | A service-account key | — |
 | Light and dark theme, English and Czech | Works | Nothing | — |
@@ -210,7 +210,7 @@ inventory, and the first write creates it.
 - **Tracker** (`#projects`, `#items`, `#releases`): projects with a ticket prefix, releases, and tickets with
   comments, attachments, labels and a change history, as a table or a board. A change takes the `rev` of what
   was read.
-- **Review** (`#review`): an agent publishes variants (HTML mockups, images, 3D models) for a person to
+- **Review** (`#review`): an agent publishes variants (HTML mockups, images, 3D models, video and audio clips) for a person to
   compare side by side, pin comments on and decide; the next round answers the comments.
   [docs/review.md](docs/review.md) has the details.
 - **Search** (`#search`, and the command palette on Cmd-K or Ctrl-K): full text over tickets and review
@@ -260,6 +260,27 @@ installs or changes anything there.
   older than 3 minutes) or fine. Tiles and machine pages show which, with the install steps. A failed read is
   never shown as "off".
 - Without it, nothing breaks: tiles show the facts from your configuration.
+- **Windows needs no agent.** In **Add device** (or **Edit device**) choose the system Windows and Telemetry →
+  Windows (SSH): enter host, SSH port and the Windows user, let the hub create its own key, run the one PowerShell
+  step it shows on Windows, confirm the host-key fingerprint, test and save. The hub may run on Linux, macOS or
+  Windows; its server needs only the OpenSSH client tools (`ssh`, `ssh-keyscan`). Keys live in `state/home/ssh/`
+  (private to the hub's account): back that up as privately as `private/`. Details: [docs/API.md](docs/API.md) →
+  Windows telemetry. Windows can also be read over **WinRM HTTPS** (Basic with a local account, only after the
+  listener's certificate is verified or pinned; the dialog shows the one explicit PowerShell step that enables Basic
+  for the WinRM service only).
+- **Linux needs no agent from the hub either.** Choose the system Linux and one of: **Node Exporter** (recommended:
+  the hub reads its `/metrics` on port 9100 directly, no Prometheus server needed), **Prometheus** (a Prometheus you
+  already run, on the host or in Docker: the hub reads one node_exporter target, job + instance, through the
+  read-only `/api/v1/query` on port 9090), or **SSH** (the hub's own key and a fixed script that only reads `/proc`,
+  `/sys` and `df`). GPU and power are not measured on Linux; temperatures appear where the machine reports them.
+  Passwords and tokens of these connections live in `state/home/telemetry-hosts.json` (0600, sealed with the hub's key: docs/storage.md → Secrets at rest). Details:
+  [docs/API.md](docs/API.md) → Agent-less telemetry.
+- A machine from `site.json` without `thermoId` (a NAS, for example) is connected on its own page: **Telemetry
+  settings** stores only the connection (`state/home/site-telemetry.json`, no secrets), never edits `site.json`, and
+  the machine keeps its identity, services and read-only status.
+- Every tile has **Edit** for an account with write access signed in with a password. On a machine from `site.json`
+  it changes the name, address, hardware and picture shown, as an override over the site's values
+  (`state/home/site-overrides.json`), with **Reset to site defaults**; id, role, system and how it is read stay the site's.
 - Where to get it: `https://example.com/home-hub/telemetry-agent`. This address is a placeholder until the
   agent has a public home. The UI takes it from one constant, `TELEMETRY_AGENT_URL` in `public/site.js`, and
   the API reports `TELEMETRY_REPO_URL` from `server/thermo-client.mjs`.

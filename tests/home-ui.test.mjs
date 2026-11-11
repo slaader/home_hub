@@ -9,7 +9,7 @@ const bus=new EventTarget();
 globalThis.addEventListener=bus.addEventListener.bind(bus);
 globalThis.dispatchEvent=bus.dispatchEvent.bind(bus);
 const {statusOf,hasReadings,installSteps}=await import('../public/home-telemetry.js');
-const {validateDevice,inNetworks,PICTURES,telemetryChoices}=await import('../public/home-add-device.js');
+const {validateDevice,inNetworks,PICTURES,telemetryChoices,choicesFor}=await import('../public/home-add-device.js');
 const {pictureChain,orderedMachines,moveId,sparkLabel}=await import('../public/home-view.js');
 const server=await import('../server/home-devices.mjs');
 const {inCidrs}=await import('../server/site-config.mjs');
@@ -38,7 +38,7 @@ test('a machine\'s state: readings decide for telemetry machines, a failed read 
  assert.equal(hasReadings({kind:'nas',telemetry:{state:'ok'}}),false);
  // How to install: an added device is connected in its dialog, a site machine in the site's files.
  const meta={agent:'Thermo',repoUrl:TELEMETRY_REPO_URL};
- assert.match(installSteps({source:'agent'},meta)[2],/Edit device → Telemetry/);assert.match(installSteps({source:'site'},meta)[2],/local\/site\.json/);assert.match(installSteps({source:'ui'},meta)[0],/Thermo/);
+ assert.match(installSteps({source:'agent'},meta)[1],/Edit device → Telemetry/);assert.match(installSteps({source:'agent',platform:'macos'},meta)[2],/Edit device → Telemetry/);assert.match(installSteps({source:'site'},meta)[2],/local\/site\.json/);assert.match(installSteps({source:'ui'},meta)[0],/Thermo/);
 });
 
 test('a tile tries the machine\'s own picture first, then the built-in one for what it is',()=>{
@@ -116,14 +116,21 @@ test('machine charts are drawn again with the new colours when the theme changes
 // Add device → 3 · Telemetry: the choices are the agents the server lists, as far as the dialog has a form
 // for them. Nothing is offered that the hub cannot connect, and a later adapter needs no change to the list.
 test('the telemetry choices of the device dialog come from the server',async()=>{
- const thermo={id:'thermo',name:'Thermo',summary:'CPU, GPU, paměť, příkon, teploty a disky',defaultPort:49286};
- assert.deepEqual(telemetryChoices({adapters:TELEMETRY_ADAPTERS}),[thermo],'every adapter the server lists today has a form');
+ const thermo={id:'thermo',name:'Thermo',summary:'CPU, GPU, paměť, příkon, teploty a disky',defaultPort:49286,platform:'macos',recommended:false};
+ const windows={id:'windows',name:'Windows (SSH)',summary:'CPU a jádra, GPU, paměť, disky a síť přes SSH a PowerShell, bez agenta; teploty a příkon Windows nehlásí',defaultPort:22,platform:'windows',recommended:false};
+ const all=telemetryChoices({adapters:TELEMETRY_ADAPTERS});
+ assert.deepEqual(all.slice(0,2),[thermo,windows]);
+ assert.deepEqual(all.map(a=>a.id),['thermo','windows','winrm','node-exporter','prometheus','linux-ssh'],'every adapter the server lists today has a form');
+ assert.deepEqual(choicesFor(all,'linux').map(a=>a.id),['node-exporter','prometheus','linux-ssh'],'Linux: its own sources, the recommended one first');
+ assert.deepEqual(choicesFor(all,'windows').map(a=>a.id),['windows','winrm']);assert.deepEqual(choicesFor(all,'macos').map(a=>a.id),['thermo']);
+ assert.equal(choicesFor(all,'').length,6,'with no system said, every adapter');assert.equal(choicesFor(all,'other').length,6);
+ const bare={id:'thermo',name:'Thermo',summary:'',defaultPort:49286,platform:null,recommended:false};
  assert.deepEqual(telemetryChoices({adapters:[{id:'future-agent',name:'Later'},{...thermo,name:'Renamed',defaultPort:50000},null,{name:'no id'}]}),[{...thermo,name:'Renamed',defaultPort:50000}],'an adapter without a form here is not offered; names and ports are the server\'s');
  assert.deepEqual(telemetryChoices({adapters:[]}),[],'a hub that supports none offers none');
- assert.deepEqual(telemetryChoices({agent:'Thermo'}),[{id:'thermo',name:'Thermo',summary:'',defaultPort:49286}],'a server from before the list: the one agent it names');
+ assert.deepEqual(telemetryChoices({agent:'Thermo'}),[bare],'a server from before the list: the one agent it names');
  for(const a of TELEMETRY_ADAPTERS)assert.ok(dictionary[a.summary],`English for "${a.summary}"`);
  const src=await readFile(new URL('../public/home-add-device.js',import.meta.url),'utf8');
- assert.match(src,/offered\.map\(a=>choice\('had-telemetry',a\.id,/,'one choice per offered adapter');
+ assert.match(src,/fit\.map\(a=>choice\('had-telemetry',a\.id,/,'one choice per offered adapter that fits the system');
  assert.doesNotMatch(src,/Zatím bez telemetrie|živé CPU, GPU, paměť, příkon a teploty/,'the old fixed pair is gone');
 });
 

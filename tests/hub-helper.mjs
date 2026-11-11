@@ -25,7 +25,8 @@ export async function hub(t,{bridgeRequest=async()=>{throw new Error('offline');
  await writeFile(path.join(dir,'knowledge.json'),JSON.stringify(knowledge()));
  server=http.createServer();await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin=`http://127.0.0.1:${server.address().port}`;
  const before=process.env.INVENTORY_LOCAL;process.env.INVENTORY_LOCAL='1';
- const handler=createHandler({directory:dir,stateDirectory:dir,credentials,origin,secure:false,bridgeRequest,...extra});server.on('request',handler);
+ // Thermo hosts default to the temp dir: the checkout's own private/thermo-hosts.json must never reach a test.
+ const handler=createHandler({directory:dir,stateDirectory:dir,credentials,origin,secure:false,bridgeRequest,thermoHostsFile:path.join(dir,'private','thermo-hosts.json'),...extra});server.on('request',handler);
  if(before===undefined)delete process.env.INVENTORY_LOCAL;else process.env.INVENTORY_LOCAL=before;
  const post=(url,body,headers={})=>fetch(origin+url,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json',...headers},body:JSON.stringify(body)});
  const login=await post('/api/session',{username:'admin',password:'administrator-test-password'});

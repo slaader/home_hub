@@ -11,8 +11,8 @@ This repository is two things kept apart on purpose:
 
 - **Core** — everything outside `local/`. Generic: it knows no household. Sign-in, users, service accounts,
   scopes and API keys, the overview with the Thermo telemetry client, the inventory map and services catalog,
-  the tracker, review, search, the SSH-key and versions collectors, the router adapter, the integrations page
-  (what the hub reads from outside, and the switch that turns each off), the MCP endpoint.
+  the tracker, review, search, the SSH-key and versions collectors, the router adapter, the Git LFS view (git hosts over their API and git), the integrations page
+  (what the hub reads from outside, the switch that turns each off, and every machine with what is set up for it), the MCP endpoint.
 - **Overlay** — `local/`. One household's configuration (`local/site.json`), its plugins
   (`local/plugins/<id>/`), pictures, deployment recipes and runbooks. In the private repository it is tracked;
   a public export leaves it out. A public checkout has no `local/` until its owner creates one.
@@ -51,14 +51,14 @@ The run ends with one line per half and a total, and exits non-zero when either 
 an overlay it looks like this (the `overlay` numbers are that household's):
 
 ```
-core     tests 409  pass 408  fail 0  skipped 1
+core     tests 582  pass 581  fail 0  skipped 1
 overlay  tests 76  pass 76  fail 0
-total    tests 485  pass 484  fail 0
+total    tests 658  pass 657  fail 0
 ```
 
-- **Core: 409 tests in 53 files (2026-11-10), and none may fail, on any machine.** In a tree that has
+- **Core: 582 tests in 79 files (2026-11-11), and none may fail, on any machine.** In a tree that has
   `local/`, one is reported as skipped: `public edition: no overlay in the tree…` checks an export, and it
-  runs there, so an export passes 409 of 409 with no `overlay` line.
+  runs there, so an export passes 582 of 582 with no `overlay` line.
 - **Overlay: whatever the household added.** Its count, and which of its tests need files that are not in
   git (data, generated media, a runtime on another machine), are written down in `local/AGENTS.md`. A failing
   overlay test that is not on that list is a real failure.

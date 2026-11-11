@@ -15,6 +15,8 @@
 // test() return {state, summary, lastSuccessAt, lastError, configuredBy, items}; while hub.integrationEnabled
 // says it is off, nothing is read (no poll, no history read, no stream held open) and nothing is provided.
 import path from 'node:path';
+import {runtimesFacet} from '../machine-facet-sources.mjs';
+import {FACETS_POINT} from '../machine-facets.mjs';
 import {toolError} from '../mcp.mjs';
 import {RUNTIME_KINDS,RUNTIME_ENDPOINT_ID,RUNTIME_ENDPOINT_LIMIT} from '../site-config.mjs';
 import {KIND_NAMES,READ_PATHS} from '../runtime-adapters.mjs';
@@ -163,7 +165,8 @@ export default {
    state.historyTimer=setInterval(tick,state.intervalMs);state.historyTimer.unref?.();setTimeout(tick,2000).unref?.();
    if(typeof hub.onIntegrationChange==='function')state.unsubscribe=hub.onIntegrationChange(e=>{if(e.id!==INTEGRATION_ID)return;if(e.enabled)tick();else state.history.stopAll();});
   },stop:state=>{clearInterval(state.historyTimer);state.historyTimer=null;state.unsubscribe?.();state.unsubscribe=null;state.history.stopAll();}}],
- provides:{'home.runtimes':state=>state.poller.report(),
+ provides:{[FACETS_POINT]:()=>machines=>runtimesFacet(machines),
+  'home.runtimes':state=>state.poller.report(),
   // The history, once there is one to keep or one was kept: an endpoint that is llama-swap, or files on disk.
   'runtimes.requests':async(state,hub)=>{
    if(!await isEnabled(hub))return null;

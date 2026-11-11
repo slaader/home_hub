@@ -32,8 +32,8 @@ test('MCP tools follow scopes; inventory_update is hash-checked, secret-proof an
  const h=await hub(t);
  const agent=await h.account('agent-studio',['inventory:write']),reader=await h.account('reader-mini',[]);
  const names=async hd=>(await (await rpc(h,hd,'tools/list')).json()).result.tools.map(x=>x.name).sort();
- assert.deepEqual(await names(agent.headers),['home_status','integrations_status','inventory_bulk_upsert','inventory_delete','inventory_describe','inventory_get','inventory_search','inventory_update','machine_list','models_overview','review_get','review_list','runtime_endpoints_list','search','ticket_attachment_get','ticket_get','ticket_search','tickets_list','whoami']);
- assert.deepEqual(await names(reader.headers),['home_status','integrations_status','inventory_describe','inventory_get','inventory_search','machine_list','models_overview','review_get','review_list','runtime_endpoints_list','search','ticket_attachment_get','ticket_get','ticket_search','tickets_list','whoami']);
+ assert.deepEqual(await names(agent.headers),['backup_jobs_list','home_status','integrations_status','inventory_bulk_upsert','inventory_delete','inventory_describe','inventory_get','inventory_search','inventory_update','machine_list','models_overview','review_get','review_list','runtime_endpoints_list','search','ticket_attachment_get','ticket_get','ticket_search','tickets_list','whoami']);
+ assert.deepEqual(await names(reader.headers),['backup_jobs_list','home_status','integrations_status','inventory_describe','inventory_get','inventory_search','machine_list','models_overview','review_get','review_list','runtime_endpoints_list','search','ticket_attachment_get','ticket_get','ticket_search','tickets_list','whoami']);
  const tools=(await (await rpc(h,agent.headers,'tools/list')).json()).result.tools;
  assert.ok(tools.every(x=>x.inputSchema?.type==='object'&&typeof x.description==='string'&&!('scope'in x)));
 

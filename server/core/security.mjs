@@ -16,6 +16,8 @@ import {provenance,collectorSource} from '../provenance.mjs';
 import {readRun} from '../collector-run.mjs';
 import {COLLECTORS} from '../collector-state.mjs';
 import {collectorIntegrations,SYSTEMS_INTEGRATION,UPSTREAM_INTEGRATION,KEYS_INTEGRATION} from '../collector-integrations.mjs';
+import {securityFacets} from '../machine-facet-sources.mjs';
+import {FACETS_POINT} from '../machine-facets.mjs';
 
 // A collector an administrator turned off (server/collector-integrations.mjs): its file is not read, the
 // answer says who turned it off and when, and the provenance pill says "disabled".
@@ -137,6 +139,13 @@ export default {
     catch(e){if(!isWatchError(e))throw e;throw toolError(`${WATCH_MESSAGES[e.code]||'The watch list cannot be changed.'}${e.details?.length?` ${e.details.join('; ')}`:''}`);}}},
  ],
  integrations:collectorIntegrations,
+ // Integrations → Machines: versions, protection and SSH keys of each machine, from the collectors' snapshots.
+ provides:{[FACETS_POINT]:(state,hub)=>async machines=>{
+  const on={systems:hub.integrationEnabled(SYSTEMS_INTEGRATION),keys:hub.integrationEnabled(KEYS_INTEGRATION)};
+  const [systems,security]=await Promise.all([
+   on.systems?loadSystems(hub.directory,{site:hub.site,registryFile:state.watch.file,upstream:hub.integrationEnabled(UPSTREAM_INTEGRATION)}).catch(()=>null):null,
+   on.keys?loadSecurity(hub.directory).catch(()=>null):null]);
+  return securityFacets(machines,{site:hub.site,systems,security,on});}},
  apiDocs:[{title:'Bezpečnost',routes:[
   ['GET','/api/systems','security','Verze systémů a softwaru, kandidáti na aktualizaci a ochrana strojů (snímek z collect-systems).'],
   ['GET','/api/collectors','security','Stav kolektorů (verze, upstream, SSH klíče, router) bez jejich dat; odpoví vždy 200.'],

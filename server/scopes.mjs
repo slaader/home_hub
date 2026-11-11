@@ -19,6 +19,10 @@ export const CORE_SCOPES=Object.freeze({
  // Overview module (server/core/home.mjs): machine_upsert, machine_remove, runtime_publish. New, so old read/write keys never get it.
  'home:write':{label:'Přehled – zápis',desc:'Přidávat, měnit a odebírat stroje v přehledu a zveřejňovat jejich runtime stack a endpointy LLM runtimů, které hub čte (s kontrolou otisku a bez tajemství).',legacy:false},
  'software:write':{label:'Sledovaný software – zápis',desc:'Číst a měnit seznam sledovaného softwaru: odkud se bere nejnovější verze a jak se na stroji zjistí nainstalovaná.',legacy:false},
+ // Backups (server/core/backups.mjs): run now, cancel, delete a snapshot. Setting a job up stays with administrators.
+ 'backup-jobs:manage':{label:'Zálohy – spouštění',desc:'Spouštět a rušit naplánované zálohy hubu a mazat jejich snímky. Úlohy zakládá a mění jen administrátor.',legacy:false},
+ // Git LFS module (server/core/git-lfs.mjs): connections to git hosts and deleting orphaned LFS objects.
+ 'git-lfs:write':{label:'Git LFS – správa a mazání',desc:'Přidávat, měnit a odebírat připojení ke git hostům (token jen zapisuje, nikdy nečte) a mazat nepoužívané LFS objekty tam, kde to host umí.',legacy:false},
 });
 
 // The live table: core scopes first, then whatever the loaded plugins registered, in load order.
