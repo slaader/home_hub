@@ -35,6 +35,7 @@ project content are examples, not data bundled with a fresh installation.
 - [Quick start](#quick-start)
 - [Docker](#docker)
 - [Connect your agent](#connect-your-agent)
+- [Review](#review)
 - [What works out of the box](#what-works-out-of-the-box)
 - [Make it yours](#make-it-yours)
 - [What is in it](#what-is-in-it): [overview and machines](#overview-and-machines),
@@ -165,6 +166,38 @@ The agent then sees tools such as `whoami`, `home_status`, `machine_list`, `inve
 the ones its scopes allow. When it connects it also gets a short orientation that says which tool is for
 what. **Users and API → Connect and API** lists every tool this hub offers, plugins included, with the scope
 each one needs. The same key works on the HTTP API ([docs/API.md](docs/API.md)).
+
+## Review
+
+An agent working on your product can put its alternatives in Review: a game character, a logo, a UI,
+a 3D model, music or a video. You compare them side by side in the hub, choose one, comment on a variant
+or ask for a redo. The agent reads your decisions and comments back, makes the changes and submits the
+next round to the same review.
+
+With five or six alternatives, seeing them together makes the choice easier than scrolling back and forth
+through a Claude Code, ChatGPT or other agent chat. Each item holds up to six variants; a review can contain
+several items. Review displays images, self-contained HTML mockups, `.glb` models, video and audio, so the
+agent submits previews of the work where needed.
+
+**Submit → choose or comment → agent reads back → next round.** Give the agent a service account with
+`read` and `review:write`, and create a project in the tracker first.
+
+| Step | MCP / HTTP API |
+|---|---|
+| Agent submits variants | `review_publish` / `POST /api/review/publish`. Upload images and other files first with `scripts/review-push.mjs` or `PUT /api/review/blobs/<sha256>?offset=&size=`. |
+| You decide in the hub | Take a variant, leave comments or choose **None of these — redo**. The page saves through `POST /api/review/feedback`. Deliverables that each need approval use `mode: "approve"`. |
+| Agent reads and continues | `review_list` with `feedbackPending: true` / `GET /api/review?feedback=pending` finds feedback; `review_get` / `GET /api/review/sets/<R-n>` reads it. Call `review_publish` again with `set` and `addresses` (the comment IDs answered) for the next round. |
+
+**Six app-icon directions, submitted by a demo agent to an empty public hub.**
+
+![Review showing six app-icon variants side by side in Example Home](docs/screenshots/review-variants.jpg)
+
+**C is selected; a comment on B asks the agent to try its teal palette on C's shape.**
+
+![Review with variant C selected and saved feedback on variant B waiting for the agent](docs/screenshots/review-feedback.jpg)
+
+These screenshots use neutral demo content. [Review guide](docs/review.md) covers pinned comments,
+comparison modes and publishing another round; [API reference](docs/API.md#review) has the endpoints.
 
 ## What works out of the box
 
