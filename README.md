@@ -241,10 +241,42 @@ ORIGIN=https://hub.example.lan HTTP_BEHIND_PROXY=1 PORT=8799 BIND_HOST=127.0.0.1
 | `BIND_HOST` | Address to bind | `0.0.0.0` (`127.0.0.1` in a preview) |
 | `DATA_DIR`, `STATE_DIR`, `AUTH_FILE` | Collector output, the hub's own state, the administrator sign-in | `data/`, `data/state/`, `private/auth.json` |
 | `HOME_HUB_SITE_CONFIG`, `HOME_HUB_PLUGINS_DIR` | Another site file or plugin directory; `none` for neither | `local/site.json`, `local/plugins/` |
+| `HOME_HUB_UPDATE_CHECK=off` | Never ask whether a newer release exists (below) | on |
 
 State is one SQLite database and a few JSON files ([docs/storage.md](docs/storage.md)). Back up `data/` and
-`private/`. To update, pull and restart: state migrates forward at start and sign-ins survive. There are no version
-numbers; every page's footer shows the edition, the number of plugins and the commit that is running.
+`private/`.
+
+### Updating
+
+Home Hub has a version (semver; [CHANGELOG.md](CHANGELOG.md) says what each release changed). Every page's footer
+shows the one that is running, with the commit in its tooltip; `1.1.0+dev` means a checkout that is not on a release
+tag. Home Hub never updates itself: it tells you, and you update it on the server.
+
+```sh
+# stop the hub, back up data/ and private/, then:
+git fetch --tags && git checkout v1.1.0     # the release you want; or `git pull` to follow main
+npm test                                    # optional, under ten seconds
+# start the hub again
+```
+
+State migrates forward at start and sign-ins survive. Going back is switching to the older tag, unless the
+changelog entry has a **Data** part: then the on-disk format changed and going back also needs the backup you made.
+
+**The update check, and exactly what it contacts.** About twice a day (first 2 to 5 minutes after start, then every
+12 hours) the hub asks GitHub whether a newer release exists: two requests,
+`GET https://api.github.com/repos/<repository>/releases?per_page=20` and `…/releases/latest`, where the repository is
+the one named in `package.json → homeHub.updates.repo`. The requests carry the constant `User-Agent`
+`home-hub-update-check` and nothing else: no version, no instance id, no site name, nothing about your machines.
+Nothing is sent to the project; GitHub sees an address and a time, as for any `git fetch`. A token is not needed (if
+you already keep one in `GITHUB_TOKEN` or `private/github-token` for the versions collector, it is used, for
+`api.github.com` only). The result is on **Administration → Integrations** (card "Home Hub update check", with the
+release notes) and, for an administrator, in the footer as `→ 1.2.0`. When a check fails the card says so and says
+what it last knew; it never claims you are up to date.
+
+To turn it off: the switch on that card, or `HOME_HUB_UPDATE_CHECK=off` in the environment, which also removes the
+switch. While it is off the hub makes no request about updates at all. `local/site.json → updates` follows another
+repository (`repo`, for a fork), takes pre-releases (`channel: "prerelease"`) or changes how often it asks
+(`intervalHours`, 6 to 168).
 
 ## Documentation
 

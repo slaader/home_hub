@@ -15,7 +15,8 @@ const missesOf=hub=>{if(!passwordMisses.has(hub))passwordMisses.set(hub,new Map(
 function manifestFor(principal,hub){
  const m=hub.registry.manifest(principal),strings={...m.strings};
  for(const [lang,dict] of Object.entries(hub.site.strings))strings[lang]={...strings[lang],...dict};
- return {...m,strings,inventory:hub.site.inventory,tools:toolCatalog(hub.registry.tools)};
+ // version: the release this hub runs; development: true when the checkout is not on that release's tag.
+ return {...m,strings,inventory:hub.site.inventory,tools:toolCatalog(hub.registry.tools),version:hub.version.version,development:hub.version.exact===false};
 }
 // The time zone a signed-in person asked for (Settings): null = the site's, "browser" = the browser's own.
 const zonePref=(principal,hub)=>principal?.authKind==='session'?hub.accessStore.timeZone?.(principal.id)??null:null;

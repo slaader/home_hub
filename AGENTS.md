@@ -10,7 +10,7 @@ If `local/AGENTS.md` exists, read it too: it describes the deployment this check
 This repository is two things kept apart on purpose:
 
 - **Core** — everything outside `local/`. Generic: it knows no household. Sign-in, users, service accounts,
-  scopes and API keys, the overview with the Thermo telemetry client, the inventory map and services catalog,
+  scopes and API keys, the version and the update check, the overview with the Thermo telemetry client, the inventory map and services catalog,
   the tracker, review, search, the SSH-key and versions collectors, the router adapter, the Git LFS view (git hosts over their API and git), the integrations page
   (what the hub reads from outside, the switch that turns each off, and every machine with what is set up for it), the MCP endpoint.
 - **Overlay** — `local/`. One household's configuration (`local/site.json`), its plugins
@@ -40,7 +40,7 @@ Rules that keep the split honest:
 |---|---|---|
 | **S — small** | Copy, styling, a README/SPEC line, a doc-only change | `npm test` |
 | **M — medium** | One module or endpoint changes, no contract change | `npm test` |
-| **L — large** | Auth, tokens/scopes, MCP write path, the module contract, site config, knowledge/inventory schema, a collector that touches other hosts, anything that changes `docs/API.md` | `npm test` + the python suites + a live preview smoke test |
+| **L — large** | Auth, tokens/scopes, MCP write path, the module contract, site config, knowledge/inventory schema, a collector that touches other hosts, anything that changes `docs/API.md`, the version and release tooling (`server/version.mjs`, `scripts/release.mjs`), the update check | `npm test` + the python suites + a live preview smoke test |
 
 `npm test` runs `scripts/run-tests.mjs`: the core tests (`tests/*.test.mjs`) on a generic fixture site
 (`tests/fixtures/site.json`) with no plugins, then, when `local/` exists, the overlay's tests
@@ -51,14 +51,14 @@ The run ends with one line per half and a total, and exits non-zero when either 
 an overlay it looks like this (the `overlay` numbers are that household's):
 
 ```
-core     tests 587  pass 586  fail 0  skipped 1
+core     tests 611  pass 610  fail 0  skipped 1
 overlay  tests 78  pass 78  fail 0
-total    tests 665  pass 664  fail 0
+total    tests 689  pass 688  fail 0
 ```
 
-- **Core: 587 tests in 79 files (2026-11-12), and none may fail, on any machine.** In a tree that has
+- **Core: 611 tests in 83 files (2026-11-12), and none may fail, on any machine.** In a tree that has
   `local/`, one is reported as skipped: `public edition: no overlay in the tree…` checks an export, and it
-  runs there, so an export passes 587 of 587 with no `overlay` line.
+  runs there, so an export passes 611 of 611 with no `overlay` line.
 - **Overlay: whatever the household added.** Its count, and which of its tests need files that are not in
   git (data, generated media, a runtime on another machine), are written down in `local/AGENTS.md`. A failing
   overlay test that is not on that list is a real failure.
@@ -73,19 +73,47 @@ LOCAL_PREVIEW=1 PORT=8891 AUTH_FILE=/abs/path/test-auth.json DATA_DIR=/abs/scrat
 Core tests must pass on any machine: they use the fixture site, placeholder addresses and no network. A test
 that needs a household's own data or machines is an overlay test.
 
-## Versioning — deliberately not semver
+## Versioning: semver, released from tags
 
-`package.json` says `1.0.0` and has never been bumped; nothing reads it. There are no git tags and no CHANGELOG.
-Keep it that way, because:
+Core is versioned with semver. `package.json → version` is the source of truth (`server/version.mjs` reads it);
+the footer, `GET /api/ui/manifest`, the MCP `serverInfo`, the tool `hub_version`, the start-up line and
+`<state>/run.json` show it. Releases are annotated tags `vX.Y.Z` with a GitHub Release each; `CHANGELOG.md` has
+one section per version, and that section is the text of the Release. A checkout that is not on the tag of its
+version is a development build and says so (`1.1.0+dev`).
 
-- This is a **continuously deployed single-host application**, not a published artifact. No consumer pins a
-  version — the web UI, native apps and the MCP clients all talk to whatever is running right now.
-- A version nobody can install is theatre. The real anchors are the git commit and the pre-change archive.
-- If you want a rollback anchor per deploy, tag `deploy-YYYYMMDD-HHMM` (pointing at the deployed commit). Those
-  are un-orderable on purpose — they are timestamps, not releases.
+What the number promises (the public surface): the HTTP API in `docs/API.md`, the MCP tools, the plugin
+contract (`docs/plugins.md`: module fields, the `hub` object, extension points, the browser modules a plugin
+page imports), `site.json`, the environment variables, script names and flags, and that state written by any
+earlier release of the same major migrates forward. Page layout, wording and styling are not part of it.
 
-Add real versioning only when there are two supported versions at once. If a native client starts needing
-compatibility guarantees, version the **API** in `docs/API.md`, not `package.json`.
+- **MAJOR**: something on that surface is removed, renamed or changes meaning, a configuration or plugin that
+  was valid is refused, or the minimum Node major rises.
+- **MINOR**: additions, deprecations, and every change of on-disk format. A format change raises
+  `package.json → homeHub.dataEpoch` and is written under `### Data` in the changelog;
+  `tests/data-epoch.test.mjs` fails until the epoch moves with the schema constants. It cannot see a format
+  that changes without a version constant: that stays a review rule.
+- **PATCH**: fixes only. Never a contract change, never a data migration, so a patch can be rolled back by
+  switching code alone.
+
+Rules:
+
+- Do not edit `version` by hand and do not tag by hand: `node scripts/release.mjs <version>` checks (clean tree
+  on `main`, changelog section, the epoch rules, the leak scan, the tests on exactly what ships), bumps, commits
+  and tags. `--dry-run` only checks; `--notes` prints the Release text; `--baseline <commit>` tags something
+  that is already published. **It never pushes**: it prints the push and `gh release create` commands, and
+  running them is the owner's decision.
+- In a tree with an overlay (private history) the tag goes on the commit of the public export, on the orphan
+  branch, never on a commit of this history; the script does that itself. The tagger is a neutral identity.
+- Tags are SSH-signed when `git config user.signingkey` is set (`--sign` insists, `--unsigned` declines without
+  the warning). The public key belongs in `config/release-signers`; the script prints how to set it up.
+- Every change that touches the public surface adds a line to the top section of `CHANGELOG.md` in the same commit.
+- A breaking change needs a deprecation in an earlier MINOR and the owner's agreement. Prefer adding.
+- Migrations are forward-only. Older code refuses newer state (`server/db.mjs`, `server/update-check.mjs`); it
+  never "tries anyway".
+- The update check (`server/update-check.mjs`, core module `updates`) only tells. Nothing in the hub applies
+  an update: no route, no button, no MCP tool. Where releases are published is one line,
+  `package.json → homeHub.updates.repo`; nothing else in core names that repository.
+- `deploy-YYYYMMDD-HHMM` tags stay what they were: timestamps of a deployment, not releases.
 
 ## Rules
 

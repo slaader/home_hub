@@ -5,7 +5,7 @@
 // machines and networks come from the site configuration (server/site-config.mjs).
 import https from 'node:https';
 import http from 'node:http';
-import {readFile} from 'node:fs/promises';
+import {readFile,writeFile,mkdir,rename} from 'node:fs/promises';
 import {readFileSync,readdirSync,existsSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
@@ -17,6 +17,7 @@ import {registerScopes,scopeFor,scopeIds,sessionOnly,useRoutes} from './scopes.m
 import {createMcp,MCP_TOOLS} from './mcp.mjs';
 import {createDeviceTokens,bearerOf} from './device-tokens.mjs';
 import {readBuild} from './build-info.mjs';
+import {readVersion} from './version.mjs';
 import {repoRoot,readEdition} from './edition.mjs';
 import {site as loadedSite,siteConfigPath} from './site-config.mjs';
 import {defineModule,createRegistry,loadPlugins} from './plugins.mjs';
@@ -35,17 +36,20 @@ import runtimesModule from './core/runtimes.mjs';
 import modelsModule from './core/models.mjs';
 import backupsModule from './core/backups.mjs';
 import gitLfsModule from './core/git-lfs.mjs';
+import updatesModule from './core/updates.mjs';
 
 const root=repoRoot;
-// The running commit, shown in the UI footer. Read once: a deploy restarts the server.
+// The running commit and version, shown in the UI footer. Read once: a deploy restarts the server.
 const build=readBuild(root);
+// {version, dataEpoch, commit, exact, label}: package.json's semver and whether this checkout is that release (server/version.mjs).
+export const HUB_VERSION=readVersion(root);
 // Review's 3D viewer (<model-viewer>, vendored) puts one fixed <style> block into its shadow DOM. The page CSP allows
 // exactly that block by its hash instead of 'unsafe-inline'; GLB textures are decoded from blob: URLs. docs/review.md.
 export const MODEL_VIEWER_STYLE_HASH=(()=>{try{const m=/<style>([\s\S]*?)<\/style>/.exec(readFileSync(path.join(root,'public','vendor','model-viewer.min.js'),'utf8'));return m?`'sha256-${createHash('sha256').update(m[1]).digest('base64')}'`:'';}catch{return '';}})();
 export const PAGE_CSP=`default-src 'self'; script-src 'self'; style-src 'self'${MODEL_VIEWER_STYLE_HASH?' '+MODEL_VIEWER_STYLE_HASH:''}; img-src 'self' blob:; connect-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`;
 
 // Core modules, in set-up order (a later one may use the state of an earlier one).
-export const CORE_MODULES=Object.freeze([sessionModule,shellModule,accessModule,homeModule,runtimesModule,inventoryModule,trackerModule,reviewModule,securityModule,routerModule,integrationsModule,modelsModule,backupsModule,gitLfsModule].map(m=>defineModule(m,{core:true})));
+export const CORE_MODULES=Object.freeze([sessionModule,shellModule,accessModule,homeModule,runtimesModule,inventoryModule,trackerModule,reviewModule,securityModule,routerModule,integrationsModule,modelsModule,backupsModule,gitLfsModule,updatesModule].map(m=>defineModule(m,{core:true})));
 // Plugins found in the overlay directory when the process started.
 export const STARTUP_PLUGINS=Object.freeze(await loadPlugins());
 // Core + plugins as one registry; scopes of every module join the scope table (server/scopes.mjs).
@@ -75,8 +79,8 @@ export function siteImages(directory){
  * stateDirectory = what the hub writes (hub.db, access.json, home/, tickets/, review/).
  * site = the site configuration (default: local/site.json); plugins = module objects to load instead of
  * the overlay found at start-up (tests). integrationSecretsFile: where write-only integration settings
- * are kept (default INTEGRATION_SECRETS_FILE, else private/integrations.json). Every other option is
- * handed to the modules as hub.options.
+ * are kept (default INTEGRATION_SECRETS_FILE, else private/integrations.json). version: what hub.version says
+ * instead of this checkout's own (tests). Every other option is handed to the modules as hub.options.
  */
 export function createHandler(options) {
   const {directory,credentials,authFile=null,origin,allowedOrigins=(process.env.ORIGIN_ALIASES||'').split(',').filter(Boolean),secure=true,
@@ -95,7 +99,8 @@ export function createHandler(options) {
   // A provider an integration lists under `provides` answers nothing while that integration is off.
   const silenced=(module,name)=>registry.integrations.some(i=>i.module===module&&i.provides.includes(name)&&!integrationStore.enabled(i.id));
   const providers=name=>registry.providers(name).filter(p=>!silenced(p.module,name));
-  const hub={root,directory,stateDirectory,site,edition:readEdition(),origin,secure,build,options,db,auth,accessStore,deviceTokens,registry,
+  const version=options.version||HUB_VERSION;
+  const hub={root,directory,stateDirectory,site,edition:readEdition(),origin,secure,build,version,options,db,auth,accessStore,deviceTokens,registry,
    state:id=>states.get(id)??null,
    // Values from every module that provides `name` (docs/plugins.md → extension points).
    collect:name=>providers(name).map(p=>p.provide(states.get(p.module),hub)),
@@ -111,7 +116,7 @@ export function createHandler(options) {
   for(const image of siteImages(siteImagesDirectory===undefined?(options.site?null:siteConfigPath()&&path.join(path.dirname(siteConfigPath()),'images')):siteImagesDirectory)){
    if(assets.has(image.url))throw new Error(`site image ${image.url} clashes with an asset of module "${assets.get(image.url).module}"`);assets.set(image.url,image);}
   const home=states.get('home'),tracker=states.get('tracker'),inventory=states.get('inventory');
-  const mcp=createMcp({version:'2',tools:registry.tools,instructions:registry.instructions,ctx:{home:()=>home.payload(),search:q=>db.search(q),tickets:tracker.tickets,ticketFiles:tracker.ticketFiles,review:states.get('review').review,
+  const mcp=createMcp({version:version.version,tools:registry.tools,instructions:registry.instructions,ctx:{home:()=>home.payload(),search:q=>db.search(q),tickets:tracker.tickets,ticketFiles:tracker.ticketFiles,review:states.get('review').review,
    inventory:{read:inventory.read,put:inventory.put},log:entry=>accessStore.logApi(entry),moduleContext:id=>({state:states.get(id),hub})}});
   const handler=async (req,res) => {
     res.setHeader('Content-Security-Policy',PAGE_CSP);
@@ -219,8 +224,25 @@ if(process.argv[1]===fileURLToPath(import.meta.url)){
   handler.start();
   const server=(preview||process.env.HTTP_BEHIND_PROXY==='1')?http.createServer(handler):https.createServer({key:await readFile(process.env.TLS_KEY||path.join(root,'private/server.key')),cert:await readFile(process.env.TLS_CERT||path.join(root,'private/server.crt')),minVersion:'TLSv1.2'},handler);
   server.requestTimeout=10000;server.headersTimeout=10000;
-  server.listen(port,process.env.BIND_HOST||(preview?'127.0.0.1':'0.0.0.0'),()=>console.info(`Home Hub (${readEdition()} edition, ${startupRegistry.modules.filter(m=>!m.core).length} plugin(s)) listening on ${port}`));
+  const plugins=startupRegistry.modules.filter(m=>!m.core);
+  server.listen(port,process.env.BIND_HOST||(preview?'127.0.0.1':'0.0.0.0'),()=>{
+   console.info(startupLine({version:HUB_VERSION,edition:readEdition(),plugins,port}));
+   writeRunFile(handler.hub.stateDirectory,{version:HUB_VERSION,plugins}).catch(e=>console.error(`Could not write run.json: ${e.message}`));
+  });
   installShutdown({server,handler});
+}
+
+// The first line of the log: which release this is, which tree, which plugins, where it listens.
+export const startupLine=({version,edition,plugins=[],port})=>`Home Hub ${version.label} (${edition} edition, ${plugins.length} plugin(s)${plugins.length?': '+plugins.map(p=>p.id).join(', '):''}) listening on ${port}`;
+// <state>/run.json (0600), written once the server listens: what is answering right now. A tool that changed the
+// code (an update, a deploy) reads it to confirm that the process running is the one it started. /healthz says
+// only {ok:true}, so nobody learns the version without a sign-in.
+export async function writeRunFile(stateDirectory,{version,plugins=[],pid=process.pid,now=Date.now()}){
+ const file=path.join(stateDirectory,'run.json'),tmp=`${file}.${pid}.tmp`;
+ const doc={version:version.version,commit:version.commit,exact:version.exact,dataEpoch:version.dataEpoch,pid,startedAt:new Date(now).toISOString(),plugins:plugins.map(p=>({id:p.id}))};
+ await mkdir(stateDirectory,{recursive:true,mode:0o700});
+ await writeFile(tmp,JSON.stringify(doc,null,1)+'\n',{mode:0o600});await rename(tmp,file);
+ return doc;
 }
 
 // SIGTERM and SIGINT (a deploy's `kill`, Ctrl-C): stop taking requests, let every module stop (its pollers'

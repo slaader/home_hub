@@ -48,6 +48,7 @@ the field. `HOME_HUB_SITE_CONFIG=/path/to/file.json` selects another file; `none
 | `runtimes[]` | `{id?, machine, kind, url, name?}`: local LLM runtimes the hub reads directly (core module `runtimes`). `machine` is a machine of this file; `kind` is `auto` (detected) or one of `llama-swap`, `ollama`, `lmstudio`, `llama-cpp`, `vllm`, `sglang`, `omlx`, `mlx-serve`, `openai`; `url` is an origin only (`http://127.0.0.1:11434`): no path, no user or password, an IP address on loopback or inside `lanCidrs` (any private range when `lanCidrs` is empty). `id` defaults to `<machine>-<port>`. At most 40, each URL once. Entries added through the API live in `state/runtimes-config.json`; these are read-only there | No direct reads; a plugin may still provide `home.runtimes` |
 | `runtimeClients` | `{"<User-Agent family>": "<client name>"}`: what the runtime request history calls a client, by the first word of its User-Agent (`deno`, `python-httpx`, …), matched without regard to case. Wins over the generic names in `server/runtime-history.mjs` (`claude-cli` → Claude Code, `codex` → Codex, …). At most 60; a family is letters, digits and `._+-` (≤ 40), a name ≤ 60 characters. Applies to stored history too: the name is looked up when the history is read | The generic names; an unknown family is shown as itself |
 | `router` | `{adapter, host, site}`: the router feed. `adapter` is `unifi` (included) or the id of an adapter a plugin provides; `host` is the gateway the included collector reads (default: the machine with role `router`); `site` its UniFi site name | No router feed: the router tile and page say what to set up |
+| `updates` | `{repo, channel, intervalHours}`: the update check. `repo` follows another GitHub repository's releases (`"owner/name"`, for a fork), `channel` is `stable` or `prerelease`, `intervalHours` is 6 to 168 | The repository in `package.json → homeHub.updates.repo`, stable releases, every 12 hours |
 | `strings.en` | English for your own labels (the UI's source language is Czech): `{"source text": "translation"}` | Your labels show as written |
 | `plugins.<id>` | Free-form settings for a plugin; core does not look inside | — |
 
@@ -367,6 +368,12 @@ Every toggle, test and settings change is a line in the access audit (`integrati
 `integration-disabled`, `integration-tested`, `integration-settings`, `integration-secret-cleared`) with who made
 it. Settings changes name the keys, never a value.
 
+Core's update check declares `updates.check` (kind `upstream`): whether a newer release of Home Hub exists
+(`server/update-check.mjs`; README → Updating says what it contacts). Its "Test now" is a real check, at most one
+a minute. `HOME_HUB_UPDATE_CHECK=off` turns it off from the environment and takes the switch away. Its state file
+keys results by source (`core` today), so a plugin package that is released on its own can join the same card once
+plugins carry a version; today a plugin has no version to compare, so only core is checked.
+
 Core's own LLM-runtime reader declares `runtimes.endpoints` (kind `llm-runtimes`), one item per runtime endpoint.
 A llama-swap item's summary adds when a record was last added, how many arrived today (on the site's clock) and
 whether the access-log stream is connected; the same, as `history` (`{lastSyncAt, lastIngestedAt, recordsToday,
@@ -454,6 +461,10 @@ Build text-safe DOM only: `el()` puts strings into text nodes and attributes. Ne
 Put them in `local/plugins/<id>/tests/*.test.mjs`. `npm test` runs them after the core tests, with your
 `site.json` and all your plugins loaded. A test builds a hub with `createHandler` from `server/index.mjs` and
 passes fakes through its options (they arrive as `hub.options`); `tests/hub-helper.mjs` has a ready helper.
+
+`hub.version` is the release that is running: `{version, dataEpoch, commit, exact, label}` (`server/version.mjs`).
+`exact` is `true` on the release tag of `version`, `false` on any other git checkout (`label` is then
+`1.1.0+dev (4172c37)`), and `null` where there is no git checkout to tell.
 Under the test runner, front-end modules can be imported in Node with the same URL-style imports.
 
 ## Editions and the public export

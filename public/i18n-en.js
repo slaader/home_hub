@@ -14,5 +14,6 @@ import models from './i18n-en-models.js';
 import backups from './i18n-en-backups.js';
 import gitLfs from './i18n-en-git-lfs.js';
 import machines from './i18n-en-machines.js';
-export const PARTS=Object.freeze({shell,home,security,systems,access,inventory,server,tracker,review,integrations,models,backups,gitLfs,machines});
+import updates from './i18n-en-updates.js';
+export const PARTS=Object.freeze({shell,home,security,systems,access,inventory,server,tracker,review,integrations,models,backups,gitLfs,machines,updates});
 export default Object.freeze(Object.assign({},...Object.values(PARTS)));

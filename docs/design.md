@@ -237,7 +237,7 @@ flowchart TB
     TB[Top bar<br>search and jump, clock]
     BN[Banner<br>hub not answering]
     PG[Page<br>your view]
-    FT[Footer<br>edition, plugins, commit]
+    FT[Footer<br>version, plugins]
   end
   M["GET /api/ui/manifest"] --> SB
   M --> PG
@@ -257,7 +257,8 @@ flowchart TB
 - **Offline and stale.** When requests stop reaching the hub, a banner says that what is on screen was loaded
   earlier, and the page is drawn again when the hub answers.
 - **A page that throws** while it draws is replaced by an error state with a retry; the shell stays.
-- **Footer.** Edition, number of plugins, running commit.
+- **Footer.** The version (`1.1.0`, or `1.1.0+dev` off a release tag; the commit and deploy time in its tooltip) and the
+  number of plugins. An administrator also sees `→ 1.2.0`, a link to Integrations, while a newer release is known.
 
 A page is one function, `(context) => Node`, with `context = {me, page, sub, machine, site}`. Register
 listeners on `document` or `window` and timers with `onLeave()` from `/views.js`, so they go when the page

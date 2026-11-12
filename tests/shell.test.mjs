@@ -327,7 +327,7 @@ test('server: the shell module serves its files, #welcome is a hidden page, a na
 
 test('shell: the pieces the app is built from are wired in, with text-safe DOM and no inline styles',async()=>{
  const app=await read('app.js');
- for(const piece of ["createPalette({","watchNetwork();","startLoading()","themeSwitch()","offersOnboarding(","document.title=pageTitle(machine,page)","manifest.edition==='private'","tp(plugins,"])assert.ok(app.includes(piece),piece);
+ for(const piece of ["createPalette({","watchNetwork();","startLoading()","themeSwitch()","offersOnboarding(","document.title=pageTitle(machine,page)","manifest.version?","t('verze {version}',{version})","tp(plugins,"])assert.ok(app.includes(piece),piece);
  assert.match(app,/\(e\.metaKey\|\|e\.ctrlKey\)&&!e\.altKey&&!e\.shiftKey&&e\.key\.toLowerCase\(\)==='k'/,'Cmd/Ctrl-K opens the palette');
  assert.match(app,/const pref=\{get:key=>\{try\{return localStorage\.getItem\(key\);\}catch\{return null;\}\}/,'shell preferences survive refused storage');
  assert.doesNotMatch(app,/innerHTML|\.style\.|style:/,'text-safe DOM and no inline styles');

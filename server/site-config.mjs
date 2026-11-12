@@ -81,6 +81,9 @@ export function runtimeEndpoint(raw,{lanCidrs=[],where='runtime'}={}){
 }
 
 // --- validation ------------------------------------------------------------------------------
+export const UPDATE_CHANNELS=Object.freeze(['stable','prerelease']);
+export const UPDATE_INTERVAL_HOURS=Object.freeze({min:6,max:168,default:12});
+const UPDATE_REPO=/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[A-Za-z0-9._-]{1,100}$/;
 function machine(raw,i){
  const where=`machines[${i}]`;keys(raw,['id','name','hostname','ip','role','picture','thermoId','hardware','ssh','stack','platform'],where);
  if(typeof raw.id!=='string'||!MACHINE_ID.test(raw.id))fail(`${where}.id must match ${MACHINE_ID}`);
@@ -101,7 +104,7 @@ function machine(raw,i){
  return {id:raw.id,name:str(raw.name??raw.id,60,`${where}.name`,{empty:false}),hostname:str(raw.hostname??'',253,`${where}.hostname`),ip,role,picture,thermoId,platform,hardware,ssh,stack};
 }
 export function validateSite(raw={}){
- keys(raw,['$comment','siteName','lanCidrs','timeZone','defaultLanguage','publicOrigin','machines','inventory','tracker','security','router','runtimes','runtimeClients','strings','plugins'],'the file');
+ keys(raw,['$comment','siteName','lanCidrs','timeZone','defaultLanguage','publicOrigin','machines','inventory','tracker','security','router','runtimes','runtimeClients','updates','strings','plugins'],'the file');
  const lanCidrs=list(raw.lanCidrs??[],16,'lanCidrs').map((c,i)=>parseCidr(c)?.text??fail(`lanCidrs[${i}] must be an IPv4 network such as 10.0.0.0/24`));
  const timeZone=raw.timeZone??null;
  if(timeZone!==null){try{new Intl.DateTimeFormat('en',{timeZone});}catch{fail('timeZone must be an IANA zone such as Europe/Berlin, or null');}}
@@ -148,6 +151,13 @@ export function validateSite(raw={}){
    if(!RUNTIME_CLIENT_FAMILY.test(family))fail(`runtimeClients key "${family.slice(0,40)}" must be a User-Agent family: letters, digits, . _ + -, at most 40`);
    if(Object.keys(runtimeClients).some(k=>k.toLowerCase()===family.toLowerCase()))fail(`runtimeClients names the family "${family}" twice`);
    runtimeClients[family]=str(name,60,`runtimeClients.${family}`,{empty:false}).trim();}}
+ // The update check (server/update-check.mjs): repo = another "owner/name" on GitHub whose releases to follow (a
+ // fork; default: the one in package.json), channel = stable or prerelease, intervalHours = how often (6 to 168).
+ const up=keys(raw.updates??{},['repo','channel','intervalHours'],'updates');
+ const updateRepo=up.repo??null;if(updateRepo!==null&&(typeof updateRepo!=='string'||!UPDATE_REPO.test(updateRepo)||updateRepo.endsWith('.git')))fail('updates.repo must be a GitHub repository as "owner/name", or null for the default');
+ const updateChannel=up.channel??'stable';if(!UPDATE_CHANNELS.includes(updateChannel))fail(`updates.channel must be one of ${UPDATE_CHANNELS.join(', ')}`);
+ const updateHours=up.intervalHours??UPDATE_INTERVAL_HOURS.default;
+ if(typeof updateHours!=='number'||!Number.isFinite(updateHours)||updateHours<UPDATE_INTERVAL_HOURS.min||updateHours>UPDATE_INTERVAL_HOURS.max)fail(`updates.intervalHours must be a number from ${UPDATE_INTERVAL_HOURS.min} to ${UPDATE_INTERVAL_HOURS.max}`);
  if(raw.plugins!==undefined&&!plain(raw.plugins))fail('plugins must be an object keyed by plugin id');
  // Translations of the site's own labels (the UI's source language is Czech): {"en": {"source text": "translation"}}.
  const strings={};
@@ -155,7 +165,7 @@ export function validateSite(raw={}){
  return deepFreeze({siteName:str(raw.siteName??'',60,'siteName'),lanCidrs,timeZone,defaultLanguage,publicOrigin,machines,
   inventory:{places,secretStores},tracker:{projects},
   security:{gitHost:security.gitHost?str(security.gitHost,253,'security.gitHost'):null,gitUrl:security.gitUrl?str(security.gitUrl,300,'security.gitUrl'):null,certificates,order},
-  router,runtimes,runtimeClients,strings,plugins:raw.plugins??{}});
+  router,runtimes,runtimeClients,updates:{repo:updateRepo,channel:updateChannel,intervalHours:updateHours},strings,plugins:raw.plugins??{}});
 }
 function deepFreeze(v){if(v&&typeof v==='object'&&!Object.isFrozen(v)){Object.freeze(v);for(const x of Object.values(v))deepFreeze(x);}return v;}
 export const EMPTY_SITE=validateSite({});

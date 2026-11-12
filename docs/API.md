@@ -131,6 +131,7 @@ file means every integration is on. While one is off its data routes answer **`2
 | `security.systems` | `GET /api/systems` → `{disabled, machines:[], collector:{state:"disabled"}}`; `snapshot.json` is not read |
 | `security.upstream` | `GET /api/systems` answers without the newest releases and with `upstreamDisabled`; `upstream.json` is not read |
 | `security.keys` | `GET /api/security` → `{disabled, machines:[], keys:[]}` |
+| `updates.check` | No request to GitHub about releases; `GET /api/updates` → `state: "disabled"` with `disabled` and `latest: null`; `POST /api/updates/check` → `409 INTEGRATION_DISABLED` |
 
 `GET /api/collectors` reports a collector that is off as `state: "disabled"`. `GET /api/home` lists what is off in
 `integrations.disabled: [{id, title, kind}]`. Turning a collector off does not stop its scheduled job.
@@ -162,6 +163,9 @@ A hub without `private/auth.json` (or `AUTH_FILE`) starts with no owner: `GET /a
   watch list, the tracker, review, and whatever a plugin adds through `mcpInstructions`). A line about a
   write tool is left out for a key without that scope.
 - `whoami` (`read`) tells a key what it is: `{account, key, kind, fullAccess, canWrite, scopes:[{id, allows, write}], never[]}`.
+- `initialize` → `serverInfo.version` is the release version (`1.1.0`). `hub_version` (`read`) says more:
+  `{version, label, commit, exact, dataEpoch, plugins:[{id, title}], updates:{state, code, summary, updateAvailable, latest:{version, url, publishedAt} | null, checkedAt, failedAt, error, quarantined, automatic:false}}`
+  (the fields of `GET /api/updates`, without the release text). Nothing checks, dismisses or applies an update over MCP.
 
 Users, roles, accounts and keys are never managed over MCP.
 
@@ -271,13 +275,16 @@ it may open. The web shell draws its sidebar, its pages and the Connect tab from
  "tools": [{"name": "machine_upsert", "title": "Overview: create or replace a machine", "scope": "home:write", "write": true, "description": "…", "module": "home"}],
  "apiDocs": [{"title": "Router", "routes": [["GET", "/api/router", "read", "…"]]}],
  "strings": {"en": {"source text": "translation"}},
- "inventory": {"places": [], "secretStores": []}}
+ "inventory": {"places": [], "secretStores": []},
+ "version": "1.1.0", "development": false}
 ```
 
 | Field | Sent | Meaning |
 |---|---|---|
 | `site` | always | `name`, `timeZone`, `defaultLanguage`, `lanCidrs` from the site configuration. For a signed-in person `timeZone` is their own choice when they made one (`null` = the browser's zone) |
-| `edition` | always | `private` (a tree with a site overlay) or `public` (an export). Shown in the footer; behaviour never depends on it |
+| `edition` | always | `private` (a tree with a site overlay) or `public` (an export). Behaviour never depends on it |
+| `version` | signed in | The release this hub runs, a semver such as `1.1.0` (`package.json`). Shown in the footer. A caller that is not signed in learns no version |
+| `development` | signed in | `true` when the checkout is not on the release tag of `version` (the footer then says `1.1.0+dev`); `false` on the tag, and where there is no git checkout to tell |
 | `signedIn` | always | Whether the request carried a valid credential |
 | `setupRequired` | only when `true` | No owner account exists yet: show how to create one (`node scripts/setup.mjs`) instead of a sign-in. The field is absent once an owner exists |
 | `pages` | signed in (else `[]`) | Every routable page: `hash`, the `module` that owns it, and `view` (`url` of the page module and the name of its `export`). **`admin: true` here means "this caller may not open it"**: the page is listed so the client can refuse it by name, and it comes without `view` |
@@ -1085,6 +1092,48 @@ answers `409 INTEGRATION_DISABLED`.
   The same `requestId` again returns the first answer (`repeated: true`).
 - `GET /api/git-lfs/audit` (`git-lfs:write`) → `{"items":[…]}`, the last 50 audit lines, newest first: `{at, requestId, actor, connection, provider, host, repo, oid, size, revision, result: started|deleted|failed, error?}`.
 - Host failures answer `502 GIT_LFS_HOST` with `error.host` = `auth`, `forbidden`, `not-found`, `network`, `timeout`, `rate-limited`, `redirect`, `host-error`, `bad-response`, `too-large` or `too-many`. git failures are recorded per repository (`scan.repos[].error`). A missing git binary is `503 GIT_LFS_GIT_MISSING`.
+
+## Version and updates
+
+Home Hub tells which release it runs and whether a newer one is known. It never applies an update: there is no
+route for that, and no MCP tool. The check itself is the integration `updates.check` (Administration →
+Integrations); `HOME_HUB_UPDATE_CHECK=off` in the environment turns it off for good.
+
+- `GET /api/updates` (any signed-in account, or an API key: scope `read`) →
+  `{schemaVersion:1, generatedAt, state, code, summary, summaryT?, installed:{version, label, exact, commit, dataEpoch}, latest:{version, tag, url, publishedAt, notes} | null, updateAvailable, dismissed, quarantined:{version, at, reason} | null, checkedAt, failedAt, error, notBefore, nextCheckAt, repo, repoSource, channel, intervalHours, apply:{automatic:false, tag}, disabled?}`.
+  - `state` is an integration state; `code` says which case it is:
+
+    | `state` | `code` | Meaning |
+    |---|---|---|
+    | `ok` | `current` | The last check succeeded and `latest` is the release that is running |
+    | `ok` | `available` | … and `latest` is newer: `updateAvailable: true` |
+    | `ok` | `development` | … and this is a development build (`installed.exact` is `false`), or a version ahead of every release. `updateAvailable` still says whether `latest` is newer |
+    | `ok` | `no-release` | … and the repository has published no release that counts (`latest: null`) |
+    | `stale` | `failed` | The last attempt failed (`error`, `failedAt`). `latest` is what was known at `checkedAt`; whether it is still the newest is **not known** |
+    | `stale` | `old` | No attempt failed, but the last success is older than three intervals (36 h by default) |
+    | `stale` | `pending` | Nothing has been attempted yet: the first check runs 2 to 5 minutes after start |
+    | `error` | `never` | No check has succeeded yet (`error`) |
+    | `off` | `env-off` | `HOME_HUB_UPDATE_CHECK=off` |
+    | `not-configured` | `no-repo` | No repository is named (`package.json → homeHub.updates.repo`, `site.json → updates.repo`) |
+    | `disabled` | `disabled` | An administrator turned the integration off: `disabled: {id, title, by, at}`, `latest: null` |
+
+    A failed check never answers `current`. A client that wants one bit shows "update available" only for
+    `updateAvailable && !dismissed`, and shows nothing, not "up to date", in every other case.
+  - `latest.notes` is the text of the Release (at most 8 000 characters): somebody else's prose, to be shown as
+    plain text. `latest.url` always starts with `https://github.com/<repo>/releases/`.
+  - `error` is short: `HTTP 403`, `timeout`, `ENOTFOUND`. `notBefore` is set while GitHub's rate limit asks the hub
+    to wait (at most a day); `nextCheckAt` is the next scheduled attempt.
+  - `quarantined` marks a release that was tried on this hub and rolled back (written to `state/updates.json` by
+    whatever applied it). `apply.tag` is the tag to switch the checkout to; `apply.automatic` is always `false`.
+- `POST /api/updates/check` `{}` (administrator, password sign-in; never an API key or a device token) →
+  `{checked, reason?, updates}`. `checked: false` with `reason` `too-soon` (one forced check a minute),
+  `rate-limited`, `env-off` or `no-repo` means no request was made. `409 INTEGRATION_DISABLED` while it is off.
+- `POST /api/updates/dismiss` `{version}` (the same) → `{updates}`: stop pointing at that release in the footer.
+  Only the newest known release that is newer than the running one can be dismissed (`409 UPDATE_NOT_CURRENT`
+  otherwise); the next release is told again.
+
+`state/run.json` (0600) is written when the server listens: `{version, commit, exact, dataEpoch, pid, startedAt,
+plugins:[{id}]}`. A tool that changed the code reads it to confirm which process is answering.
 
 ## Other read-only routes
 

@@ -12,6 +12,9 @@ Everything Home Hub keeps is a file on the machine that runs it, under its state
 | `state/home/ssh/` | **Private SSH keys** of the hub's Windows and Linux SSH connections, each connection's verified host key, an empty ssh configuration (directories 0700, files 0600; on Windows an ACL for the hub's account and SYSTEM only) | PEM / OpenSSH text |
 | `state/backup-jobs/` | Backup jobs (`jobs.json`, 0600), per job `<id>/runs.json` (≤ 200 runs, the last snapshot listing and free space), `<id>/logs/<run>.log` (≤ 256 KiB each), `<id>/run.lock`, and `<id>/staging/` (the hub's mirror of a source on another machine) | JSON / text |
 | `state/*-audit.jsonl` | Audit logs | JSONL |
+| `state/integrations.json` | Which integrations an administrator turned off | JSON |
+| `state/updates.json` | The update check: the newest release it found, when, the ETags of GitHub's answers, a dismissed release (0600). Deleting it costs one full check | JSON |
+| `state/run.json` | Written at every start: `{version, commit, exact, dataEpoch, pid, startedAt, plugins}` (0600). Not state to back up: it says what is answering right now | JSON |
 | `data/` | Inventory (`knowledge.json`), collector output | JSON |
 | `private/` | `auth.json` (the owner's hash and `passwordAt`; written by `scripts/setup.mjs`), TLS key, tokens; `backup-jobs/<id>/` (0700): each backup job's ed25519 key pair (private key 0600), its generated `ssh_config` and `known_hosts` with the pinned host keys | JSON / PEM |
 

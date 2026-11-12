@@ -10,6 +10,7 @@ import {timeZone} from './site.js';
 import {pageHeader,emptyState,errorState,loadingState,statusPill,toast,icon} from './ui.js';
 import {machinesSection,machinePage} from './machines-view.js';
 import {openAddDevice} from './home-add-device.js';
+import {updateDetails} from './updates-view.js';
 
 // ---- words -------------------------------------------------------------------------------------
 const KIND={telemetry:'Telemetrie','llm-runtimes':'Lokální LLM runtimy',router:'Router',collector:'Kolektory',upstream:'Kontrola vydání',storage:'Úložiště',bridge:'Mosty na jiné stroje',other:'Ostatní'};
@@ -134,6 +135,8 @@ export function card(row,{onchange}={}){
   s.configuredBy?.length?el('div',{class:'ig-config'},el('span',{class:'ig-config-label'},t('Nastaveno přes:')),...s.configuredBy.map(sourceChip))
    :el('div',{class:'ig-config'},el('span',{class:'ig-config-label'},t('Nastaveno přes:')),el('span',{class:'ig-dim'},t('nic – výchozí stav'))),
   items(s.items),how,
+  // The update check also shows the release it found: its notes and how to update (updates-view.js).
+  row.id==='updates.check'&&row.enabled?updateDetails():null,
   el('footer',{class:'ig-card-foot'},toggle(row,replace),testButton(row,replace)),
   settingsForm(row,replace));
  return node;

@@ -3,7 +3,7 @@
 // In the public edition the scan covers the whole tree and the overlay must be absent.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {existsSync} from 'node:fs';
+import {existsSync,readFileSync} from 'node:fs';
 import path from 'node:path';
 import {exportFiles,scanLeaks,scanText,scanBinary,formatFindings,isScanned,repoRoot,EXCLUDED_DIRS} from '../scripts/leak-scan.mjs';
 import {isPublicRelease} from '../server/edition.mjs';
@@ -25,6 +25,23 @@ test('the scanner finds each kind of household detail and lets placeholders thro
  assert.deepEqual(scanBinary('x.png',Buffer.concat([Buffer.from([0x89,0x50,0x4e,0x47,0,255]),Buffer.from(`tEXt model_path /Users/${owner}/models`),Buffer.from([0,1,2])])).map(f=>f.rule).sort(),['home-path','owner-name'],'metadata inside a picture is searched too');
  assert.deepEqual(scanBinary('x.png',Buffer.from(`tEXt {"model_path": null, "seed": 11} ${['a','b.cd'].join('@')}`)),[]);
  assert.equal(isScanned('public/app.js'),true);assert.equal(isScanned('public/images/nas.png'),false);assert.equal(isScanned('public/vendor/echarts.esm.min.mjs'),false);
+});
+
+// The update check names the public repository, whose owner is the site word. Only that slug passes.
+test('the site word passes only as the public repository slug',()=>{
+ const word=siteName.toLowerCase(),slug=`${word}/home_hub`;
+ const hits=text=>scanText('x.md',text).map(f=>f.rule);
+ for(const fine of [`{"homeHub":{"updates":{"repo":"${slug}"}}}`,`releases of \`${slug}\`.`,`see ${slug} for it`,`https://github.com/${slug}`,`https://github.com/${slug}/releases/tag/v1.1.0`,
+  `git clone https://github.com/${slug}.git`,`(github.com/${slug})`])assert.deepEqual(hits(fine),[],fine);
+ for(const caught of [word,`Home Hub · ${siteName}`,`the ${word} household`,`"siteName":"${siteName}"`,`${word}.json`,`local/${word}/notes.md`,
+  `https://github.com/${word}`,`https://github.com/${word}/other-repo`,`https://github.com/${word}/home_hub2`,`https://github.com/${word}/home_hub-private`,`${word}/home_hubs`,
+  `https://example.com/${slug}`,`https://gitlab.com/${slug}`,`https://notgithub.com/${slug}`,`https://github.com/x/${slug}`,`/srv/${slug}`,`~/${slug}`,`${siteName}/home_hub`,`${word.toUpperCase()}/home_hub`,
+  `user@${slug}`,`x.${slug}`,`${slug} and ${word}`])assert.ok(hits(caught).includes('site-name'),caught);
+ assert.deepEqual(hits(`${slug} and ${word}`),['site-name'],'the slug passes, the bare word next to it does not');
+ assert.deepEqual(scanBinary('x.png',Buffer.from(`tEXt ${word} studio`)).map(f=>f.rule),['site-name'],'and never in a picture');
+ // The slug is written once in core, in package.json; everything else reads it from there.
+ const withSlug=exportFiles().filter(f=>isScanned(f)&&readFileSync(path.join(repoRoot,f),'utf8').includes(slug));
+ assert.deepEqual(withSlug,['package.json']);
 });
 
 test('the export leaves out the overlay, state and deployment files',()=>{

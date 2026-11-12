@@ -32,8 +32,8 @@ export function exportFiles(root=repoRoot,{generated=false}={}){
  return all.filter(f=>!excluded(f,generated)).sort();
 }
 
-// What must not appear in the public core. Matching is per line; `allow` lists the neutral
-// placeholders and technical look-alikes that are fine.
+// What must not appear in the public core. Matching is per line; `allow(match, line, index)` lists the
+// neutral placeholders and technical look-alikes that are fine.
 const EMAIL=/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 // Placeholder mail domains, plus strings that look like an address but are not one: OpenSSH key and
 // certificate type names (sk-ssh-ed25519@openssh.com) and scp-style git remotes (git@host:path).
@@ -41,12 +41,24 @@ const EMAIL_ALLOWED=/@(?:[a-z0-9-]+\.)*example\.(?:com|org|net|lan)$|@(?:[a-z0-9
 // The words themselves are assembled from pieces, so that this file passes its own scan.
 const word=(...parts)=>parts.join('');
 const OWNER=word('sg','dovin'),SITE=word('sla','ader'),SUBNET=word('192','\\.168','\\.50');
+// The one place the site word may stand: the public repository's slug, "<site word>/home_hub", written in
+// lower case, on its own (after a quote, a space, a bracket…) or right after "github.com/" (with or without
+// https://). Not as part of a longer path, another host, another repository name, or an address.
+const PUBLIC_REPO=word(SITE,'/home','_hub');
+function publicRepoSlug(match,text,index){
+ if(match!==SITE||text.slice(index,index+PUBLIC_REPO.length)!==PUBLIC_REPO)return false;
+ if(/[A-Za-z0-9_-]/.test(text[index+PUBLIC_REPO.length]||''))return false;
+ const before=text.slice(Math.max(0,index-40),index);
+ return /(?:^|[^A-Za-z0-9_.\/@:-])$/.test(before)||/(?:^|[^A-Za-z0-9_.\/@:-])(?:https:\/\/)?github\.com\/$/.test(before);
+}
 export const LEAK_RULES=Object.freeze([
  {id:'owner-name',pattern:new RegExp(OWNER,'gi')},
  {id:'home-subnet',pattern:new RegExp(SUBNET,'g')},
  // A macOS home path. Placeholder users (alice, bob, you) and the shell variable in the SSH probe are fine.
  {id:'home-path',pattern:/\/Users\/[^\s'"`)]*/g,allow:m=>/^\/Users\/(?:alice|bob|you|example|Shared)(?:\/|$)|^\/Users\/\$|^\/Users\/<|^\/Users\/\*|^\/Users\/$/.test(m)},
- {id:'site-name',pattern:new RegExp(SITE,'gi')},
+ // The site word is also the owner of the public repository, and the update check has to name that repository
+ // (package.json → homeHub.updates.repo). Exactly that slug passes, and nothing else: see publicRepoSlug.
+ {id:'site-name',pattern:new RegExp(SITE,'gi'),allow:(m,text,index)=>publicRepoSlug(m,text,index)},
  {id:'home-domain',pattern:new RegExp(word('home\\.',OWNER),'gi')},
  {id:'email',pattern:EMAIL,allow:m=>EMAIL_ALLOWED.test(m)},
 ]);
@@ -60,7 +72,7 @@ export function scanText(file,text){
  const out=[];const lines=text.split('\n');
  for(let i=0;i<lines.length;i++)for(const rule of LEAK_RULES){
   rule.pattern.lastIndex=0;let m;
-  while((m=rule.pattern.exec(lines[i]))!==null){if(!rule.allow?.(m[0]))out.push({file,line:i+1,rule:rule.id,match:m[0].slice(0,80)});if(m[0]==='')rule.pattern.lastIndex++;}
+  while((m=rule.pattern.exec(lines[i]))!==null){if(!rule.allow?.(m[0],lines[i],m.index))out.push({file,line:i+1,rule:rule.id,match:m[0].slice(0,80)});if(m[0]==='')rule.pattern.lastIndex++;}
  }
  return out;
 }
@@ -69,7 +81,7 @@ export function scanText(file,text){
 export function scanBinary(file,buffer){
  const text=buffer.toString('latin1'),out=[];
  for(const rule of LEAK_RULES){if(rule.id==='email')continue;rule.pattern.lastIndex=0;let m;
-  while((m=rule.pattern.exec(text))!==null){if(!rule.allow?.(m[0]))out.push({file,line:0,rule:rule.id,match:m[0].replace(/[^\x20-\x7e]/g,'?').slice(0,80)});if(m[0]==='')rule.pattern.lastIndex++;}}
+  while((m=rule.pattern.exec(text))!==null){if(!rule.allow?.(m[0],text,m.index))out.push({file,line:0,rule:rule.id,match:m[0].replace(/[^\x20-\x7e]/g,'?').slice(0,80)});if(m[0]==='')rule.pattern.lastIndex++;}}
  return out;
 }
 export function scanLeaks(root=repoRoot,files=exportFiles(root)){

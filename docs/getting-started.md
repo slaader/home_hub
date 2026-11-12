@@ -177,5 +177,5 @@ To update: `git pull`, then restart. Sign-ins survive the restart.
 | The agent gets `SCOPE_REQUIRED` | Its service account lacks the scope the message names |
 | The footer says `0 plugins` and you expected yours | `local/plugins/<id>/index.mjs` is missing or the directory name starts with `_` |
 
-The footer of every page shows the edition, the number of plugins and the running commit. Include those three
-when you report a problem.
+The footer of every page shows the version and the number of plugins; the version's tooltip has the running commit.
+Include those three when you report a problem.

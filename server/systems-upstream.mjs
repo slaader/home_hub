@@ -38,14 +38,24 @@ export async function loadGithubToken({env=process.env,file=env.GITHUB_TOKEN_FIL
 }
 const isGithubApi=url=>{try{const u=new URL(url);return u.protocol==='https:'&&u.hostname==='api.github.com'&&(u.port===''||u.port==='443');}catch{return false;}};
 
+// What a refusal says about when to ask again (GitHub: 403 or 429 with x-ratelimit-* or retry-after), so a
+// caller can wait instead of asking again. retryAt: epoch milliseconds, or null when the answer names no time.
+export function rateLimitOf(headers,now=Date.now()){
+ const get=name=>{try{return headers?.get?.(name)??null;}catch{return null;}};
+ const number=v=>v!==null&&v!==''&&Number.isFinite(Number(v))?Number(v):null;
+ const remaining=number(get('x-ratelimit-remaining')),reset=number(get('x-ratelimit-reset')),retryAfter=number(get('retry-after'));
+ const times=[retryAfter!==null&&retryAfter>=0?now+retryAfter*1000:null,remaining===0&&reset!==null&&reset>0?reset*1000:null].filter(v=>v!==null);
+ return {remaining,retryAt:times.length?Math.max(...times):null};
+}
 // fetchJson with an optional token. Redirects are followed by hand so the Authorization header is
-// recomputed per hop and never forwarded to another host.
-export function createFetchJson({token=null,fetchImpl=fetch}={}){
+// recomputed per hop and never forwarded to another host. userAgent: what the caller calls itself.
+// A refusal throws an Error with .status and, when the answer carried them, .rateLimit = {remaining, retryAt}.
+export function createFetchJson({token=null,fetchImpl=fetch,userAgent=UA}={}){
  return async function fetchJson(url,{etag=null,timeoutMs=20000}={}){
   const signal=AbortSignal.timeout(timeoutMs);let current=url,r;
   for(let hop=0;;hop++){
    const github=isGithubApi(current);
-   const headers={'User-Agent':UA,Accept:github?'application/vnd.github+json':'application/json'};
+   const headers={'User-Agent':userAgent,Accept:github?'application/vnd.github+json':'application/json'};
    if(etag)headers['If-None-Match']=etag;
    if(github&&token)headers.Authorization=`Bearer ${token}`;
    r=await fetchImpl(current,{headers,redirect:'manual',signal});
@@ -56,7 +66,7 @@ export function createFetchJson({token=null,fetchImpl=fetch}={}){
   }
   // 304 only answers a conditional request; without our If-None-Match it validates nothing.
   if(r.status===304){if(!etag)throw Object.assign(new Error(`HTTP 304 without If-None-Match ${url.replace(/\?.*$/,'')}`),{status:304});return {status:304,etag};}
-  if(!r.ok)throw Object.assign(new Error(`HTTP ${r.status} ${url.replace(/\?.*$/,'')}`),{status:r.status});
+  if(!r.ok)throw Object.assign(new Error(`HTTP ${r.status} ${url.replace(/\?.*$/,'')}`),{status:r.status,...([403,429].includes(r.status)?{rateLimit:rateLimitOf(r.headers)}:{})});
   const text=await r.text();if(text.length>24_000_000)throw new Error('response too large');
   return {status:r.status,etag:r.headers.get('etag'),json:JSON.parse(text)};
  };
@@ -73,7 +83,7 @@ export function pickRelease(releases,{tagPrefix='',tagPattern=null,allowPrerelea
   if(re&&!re.test(tag))continue;
   const v=parseVersion(tag);if(!v||(!allowPrerelease&&v.pre))continue;
   const version=tag.replace(/^[vV]\.?/,'');
-  if(!best||compareVersions(version,best.version)>0)best={version,tag:r.tag_name,url:r.html_url||null,publishedAt:r.published_at||null};
+  if(!best||compareVersions(version,best.version)>0)best={version,tag:r.tag_name,url:r.html_url||null,publishedAt:r.published_at||null,...(typeof r.body==='string'?{notes:r.body}:{})};
  }
  return best;
 }
@@ -89,15 +99,18 @@ const isNotFound=e=>e?.status===404||/^HTTP 404\b/.test(String(e?.message||''));
 // Results written before UPSTREAM_CACHE_VERSION carry a single list ETag that never covered
 // /releases/latest (and may come from a list-only answer), so they are ignored: full fetch, no ETags.
 export const UPSTREAM_CACHE_VERSION=2;
-const slimRelease=r=>r&&typeof r==='object'?{tag_name:r.tag_name??null,prerelease:Boolean(r.prerelease),draft:Boolean(r.draft),html_url:r.html_url??null,published_at:r.published_at??null}:null;
+// notes: keep the release text too (bounded), for a caller that shows it (server/update-check.mjs).
+export const RELEASE_NOTES_LIMIT=8000;
+const slimRelease=(r,notes=false)=>r&&typeof r==='object'?{tag_name:r.tag_name??null,prerelease:Boolean(r.prerelease),draft:Boolean(r.draft),html_url:r.html_url??null,published_at:r.published_at??null,
+ ...(notes?{body:typeof r.body==='string'?r.body.slice(0,RELEASE_NOTES_LIMIT):''}:{})}:null;
 const validEntry=e=>e&&typeof e==='object'&&typeof e.etag==='string'&&e.etag&&Array.isArray(e.releases);
-async function fetchReleases(fetchJson,url,cached,{list=false}={}){
+async function fetchReleases(fetchJson,url,cached,{list=false,notes=false}={}){
  const prior=validEntry(cached)?cached:null;let r;
  try{r=await fetchJson(url,{etag:prior?.etag||null});}
  catch(e){if(!list&&isNotFound(e))return {etag:null,releases:[]};throw e;}
  if(r?.status===304){if(!prior)throw new Error(`unexpected 304 ${url.replace(/\?.*$/,'')}`);return {etag:prior.etag,releases:prior.releases};}
  if(list&&!Array.isArray(r?.json))throw new Error('release list is not an array');
- return {etag:r?.etag||null,releases:(list?r.json:[r?.json]).map(slimRelease).filter(Boolean)};
+ return {etag:r?.etag||null,releases:(list?r.json:[r?.json]).map(x=>slimRelease(x,notes)).filter(Boolean)};
 }
 
 export async function resolveUpstream(up,{fetchJson=defaultFetchJson,previous=null}={}){
@@ -105,15 +118,19 @@ export async function resolveUpstream(up,{fetchJson=defaultFetchJson,previous=nu
  if(t==='github'||t==='codeberg'){
   const cache=previous?.ok&&previous.cache?.v===UPSTREAM_CACHE_VERSION?previous.cache:null;
   const base=t==='github'?`https://api.github.com/repos/${up.repo}/releases`:`https://codeberg.org/api/v1/repos/${up.repo}/releases`;
-  const list=await fetchReleases(fetchJson,t==='github'?`${base}?per_page=20`:`${base}?limit=20`,cache?.list,{list:true});
+  const notes=up.notes===true;
+  const list=await fetchReleases(fetchJson,t==='github'?`${base}?per_page=20`:`${base}?limit=20`,cache?.list,{list:true,notes});
   // Projects that publish many builds (llama.cpp) can push the newest tagged version off the
   // first page, so GitHub's own "latest" release is added as one more candidate. It is part of the
   // answer: if it fails (403/429/5xx/timeout) the whole source fails. Only 404 is an answer
   // ("no latest release": the repo has only pre-releases or none).
-  const latest=t==='github'?await fetchReleases(fetchJson,`${base}/latest`,cache?.latest):null;
-  const best=pickRelease([...list.releases,...(latest?.releases||[])],up);if(!best)throw new Error('no stable release found');
+  const latest=t==='github'?await fetchReleases(fetchJson,`${base}/latest`,cache?.latest,{notes}):null;
+  const fresh={v:UPSTREAM_CACHE_VERSION,list,...(latest?{latest}:{})};
+  // Every request was answered and none of the releases counts: that is an answer too ("nothing published
+  // yet"), so the error says which one it is (code) and carries the ETags (cache) for the next run.
+  const best=pickRelease([...list.releases,...(latest?.releases||[])],up);if(!best)throw Object.assign(new Error('no stable release found'),{code:'no-release',cache:fresh});
   return {ok:true,version:best.version,url:best.url||`https://${t==='github'?'github.com':'codeberg.org'}/${up.repo}/releases`,publishedAt:best.publishedAt,
-   cache:{v:UPSTREAM_CACHE_VERSION,list,...(latest?{latest}:{})}};
+   ...(notes?{tag:best.tag,notes:best.notes??''}:{}),cache:fresh};
  }
  if(t==='pypi'){
   const {json}=await fetchJson(`https://pypi.org/pypi/${encodeURIComponent(up.package)}/json`);

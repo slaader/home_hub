@@ -23,6 +23,7 @@ import {getTheme,setTheme,resolvedTheme} from './theme.js';
 import {createPalette} from './palette.js';
 import {watchNetwork,pingHub,hubState} from './net.js';
 import {loadOnboarding,offersOnboarding,isDismissed} from './onboarding.js';
+import {loadUpdates,footerHint} from './updates-view.js';
 const root=document.querySelector('#root');
 let me=null,loginMessage='',manifest={pages:[],nav:[]},knownMachines=[];
 const WELCOME='welcome';
@@ -200,16 +201,33 @@ function afterDraw(machine,page){
  document.title=pageTitle(machine,page);
  if(moved){scrollTo(0,0);root.querySelector('#main')?.focus({preventScroll:true});}
 }
-// Footer: what is running. Home Hub has no semver on purpose; the edition, the number of plugins and the
-// commit are the version.
+// Footer: what is running: the release version ("+dev" on a checkout that is not on its release tag), with the
+// commit and when it was deployed in the tooltip, and the number of plugins. An administrator also sees
+// "→ 1.3.0" while a newer release is known (updates-view.js); nothing is shown when that is not known, and
+// the footer never says "up to date".
+let updateHint=null;
+function paintFooter(){const old=root.querySelector('.hh-foot');if(old&&me)old.replaceWith(footer());}
+async function refreshUpdateHint(){
+ if(!me?.canAdmin)return;
+ const who=me;let next=null;
+ try{next=footerHint(await loadUpdates());}catch{return;}
+ if(me!==who)return;
+ if(next?.latest!==updateHint?.latest){updateHint=next;paintFooter();}
+}
+// The card on Integrations reports what it loaded (after a check, a dismissal): the footer follows at once.
+addEventListener('updateschange',e=>{if(!me?.canAdmin)return;const next=footerHint(e.detail);if(next?.latest!==updateHint?.latest){updateHint=next;paintFooter();}});
+setInterval(refreshUpdateHint,3600000);
 function footer(){
  const b=me?.build,at=b?.at&&Number.isFinite(Date.parse(b.at))?new Intl.DateTimeFormat(locale(),{day:'numeric',month:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit',timeZone:timeZone()}).format(new Date(b.at)):null;
  const plugins=(manifest.modules||[]).filter(m=>!m.core).length;
+ const version=manifest.version?`${manifest.version}${manifest.development?'+dev':''}`:null;
+ const tip=b?.commit?(at?t('Commit {commit}, nasazeno {at}',{commit:b.commit,at}):t('Commit {commit}',{commit:b.commit})):null;
  return el('footer',{class:'hh-foot'},el('span',{},site().name?t('Home Hub · {site} · časy v {zone}',{site:site().name,zone:zoneName()}):t('Home Hub · časy v {zone}',{zone:zoneName()})),
   el('span',{class:'hh-version'},
-   el('span',{},manifest.edition==='private'?t('soukromá edice'):t('veřejná edice')),
-   el('span',{title:(manifest.modules||[]).filter(m=>!m.core).map(m=>m.title||m.id).join(', ')||null},tp(plugins,'{n} plugin|{n} pluginy|{n} pluginů')),
-   b?.commit?el('span',{title:at?t('Commit {commit}, nasazeno {at}',{commit:b.commit,at}):t('Commit {commit}',{commit:b.commit})},t('verze {commit}',{commit:b.commit}),at?' · '+at:''):null));
+   version?el('span',{title:tip},t('verze {version}',{version}),
+    updateHint?el('a',{class:'hh-update',href:'#integrations',title:t('Je dostupné vydání {latest}. Otevřít Integrace.',{latest:updateHint.latest})},` → ${updateHint.latest}`):null)
+    :b?.commit?el('span',{},tip):null,
+   el('span',{title:(manifest.modules||[]).filter(m=>!m.core).map(m=>m.title||m.id).join(', ')||null},tp(plugins,'{n} plugin|{n} pluginy|{n} pluginů'))));
 }
 // Freshness pill + pull interval switch: one place for all devices. Shown on the overview and the machine
 // pages of a hub that has live telemetry; other pages and hubs without it keep a quiet top bar.
@@ -307,7 +325,7 @@ async function start(){
   if(found.setupRequired)return setup();
   if(!found.signedIn)return login();
   const r=await fetch('/api/me');if(r.status===401)return login();if(!r.ok)throw new Error();
-  me=await r.json();setPrincipal(me);setPages(manifest.pages);setIdentity(me);await offerOnboarding();await render();
+  me=await r.json();setPrincipal(me);setPages(manifest.pages);setIdentity(me);updateHint=null;await offerOnboarding();await render();refreshUpdateHint();
  }
  catch{login('Home Hub teď neodpovídá. Zkus to znovu.');}
 }

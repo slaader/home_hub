@@ -10,6 +10,8 @@ import {readFile,rename} from 'node:fs/promises';
 import path from 'node:path';
 
 const SCHEMA=1,SEARCH_VERSION=1;
+// The schema version of hub.db, for the data-epoch table (tests/data-epoch.test.mjs).
+export const DB_SCHEMA=SCHEMA;
 const open=new Map();
 let DatabaseSync=null;
 function driver(){
