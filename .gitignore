@@ -2,6 +2,7 @@ data/
 private/
 state/
 router-private/
+backups/
 local/
 *.pem
 *.key

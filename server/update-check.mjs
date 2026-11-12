@@ -1,5 +1,6 @@
 // The update check: is there a newer release of Home Hub than the one running? It only tells. Nothing here
-// downloads, installs or restarts anything; an update is applied by a person on the server (README → Updating).
+// downloads, installs or restarts anything; an update is applied by a person on the server, with
+// scripts/update.mjs (docs/updating.md).
 //
 // What leaves the machine: GET https://api.github.com/repos/<repo>/releases?per_page=20 and …/releases/latest,
 // about twice a day, with the constant User-Agent below, no query beyond per_page, no version, no instance id
@@ -17,7 +18,8 @@
 //   publishedAt, notes, failedAt?, error?, failures, notBefore?, cache}}, quarantined: {"<version>": {at, reason}},
 //   dismissed: {version, by, at} | null}
 // `sources` is keyed so that plugin packages can join later (each with its own release location); today
-// there is one source, "core". `quarantined` is written by whatever applies an update and has to roll it back.
+// there is one source, "core". `quarantined` is written by the update command when it has to roll a release back
+// (server/update-apply.mjs → setQuarantine), with the hub stopped, and removed when that release later runs.
 import {readFileSync,existsSync} from 'node:fs';
 import {mkdir,writeFile,rename} from 'node:fs/promises';
 import path from 'node:path';

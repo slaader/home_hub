@@ -1,0 +1,16 @@
+# {{label}}: the host agent "{{agent}}" of the Home Hub plugin "{{plugin}}", written by scripts/install-host-agent.mjs.
+[Unit]
+Description={{title}}
+After=network-online.target
+
+[Service]
+ExecStart={{node}} {{entry}}
+WorkingDirectory={{target}}
+{{environment}}
+Restart=always
+RestartSec=10
+StandardOutput=append:{{stdout}}
+StandardError=append:{{stderr}}
+
+[Install]
+WantedBy=default.target

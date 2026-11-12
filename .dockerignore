@@ -8,6 +8,7 @@ private
 data
 state
 router-private
+backups
 deploy
 node_modules
 **/node_modules

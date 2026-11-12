@@ -10,7 +10,7 @@ If `local/AGENTS.md` exists, read it too: it describes the deployment this check
 This repository is two things kept apart on purpose:
 
 - **Core** — everything outside `local/`. Generic: it knows no household. Sign-in, users, service accounts,
-  scopes and API keys, the version and the update check, the overview with the Thermo telemetry client, the inventory map and services catalog,
+  scopes and API keys, the version, the update check and the update command, the overview with the Thermo telemetry client, the inventory map and services catalog,
   the tracker, review, search, the SSH-key and versions collectors, the router adapter, the Git LFS view (git hosts over their API and git), the integrations page
   (what the hub reads from outside, the switch that turns each off, and every machine with what is set up for it), the MCP endpoint.
 - **Overlay** — `local/`. One household's configuration (`local/site.json`), its plugins
@@ -40,7 +40,7 @@ Rules that keep the split honest:
 |---|---|---|
 | **S — small** | Copy, styling, a README/SPEC line, a doc-only change | `npm test` |
 | **M — medium** | One module or endpoint changes, no contract change | `npm test` |
-| **L — large** | Auth, tokens/scopes, MCP write path, the module contract, site config, knowledge/inventory schema, a collector that touches other hosts, anything that changes `docs/API.md`, the version and release tooling (`server/version.mjs`, `scripts/release.mjs`), the update check | `npm test` + the python suites + a live preview smoke test |
+| **L — large** | Auth, tokens/scopes, MCP write path, the module contract, site config, knowledge/inventory schema, a collector that touches other hosts, anything that changes `docs/API.md`, the version and release tooling (`server/version.mjs`, `scripts/release.mjs`), the update check, the update command (`scripts/update.mjs`, `server/update-apply.mjs`, `server/update-config.mjs`), where things are (`server/paths.mjs`), `plugin.json` and the plugin API exports (`server/plugin-api.mjs`, `tests/plugin-testing.mjs`, `server/semver.mjs`), the host-agent installer (`scripts/install-host-agent.mjs`, `server/agent-closure.mjs`) | `npm test` + the python suites + a live preview smoke test |
 
 `npm test` runs `scripts/run-tests.mjs`: the core tests (`tests/*.test.mjs`) on a generic fixture site
 (`tests/fixtures/site.json`) with no plugins, then, when `local/` exists, the overlay's tests
@@ -51,14 +51,14 @@ The run ends with one line per half and a total, and exits non-zero when either 
 an overlay it looks like this (the `overlay` numbers are that household's):
 
 ```
-core     tests 611  pass 610  fail 0  skipped 1
+core     tests 643  pass 642  fail 0  skipped 1
 overlay  tests 78  pass 78  fail 0
-total    tests 689  pass 688  fail 0
+total    tests 721  pass 720  fail 0
 ```
 
-- **Core: 611 tests in 83 files (2026-11-12), and none may fail, on any machine.** In a tree that has
+- **Core: 643 tests in 88 files (2026-11-12), and none may fail, on any machine.** In a tree that has
   `local/`, one is reported as skipped: `public edition: no overlay in the tree…` checks an export, and it
-  runs there, so an export passes 611 of 611 with no `overlay` line.
+  runs there, so an export passes 643 of 643 with no `overlay` line.
 - **Overlay: whatever the household added.** Its count, and which of its tests need files that are not in
   git (data, generated media, a runtime on another machine), are written down in `local/AGENTS.md`. A failing
   overlay test that is not on that list is a real failure.
@@ -82,8 +82,9 @@ one section per version, and that section is the text of the Release. A checkout
 version is a development build and says so (`1.1.0+dev`).
 
 What the number promises (the public surface): the HTTP API in `docs/API.md`, the MCP tools, the plugin
-contract (`docs/plugins.md`: module fields, the `hub` object, extension points, the browser modules a plugin
-page imports), `site.json`, the environment variables, script names and flags, and that state written by any
+contract (`docs/plugins.md`: module fields, the `hub` object, extension points, `plugin.json`, the named exports
+`home-hub/plugin-api` and `home-hub/testing`, the browser modules a plugin page imports), `site.json`, the
+environment variables, script names and flags, and that state written by any
 earlier release of the same major migrates forward. Page layout, wording and styling are not part of it.
 
 - **MAJOR**: something on that surface is removed, renamed or changes meaning, a configuration or plugin that
@@ -113,6 +114,18 @@ Rules:
 - The update check (`server/update-check.mjs`, core module `updates`) only tells. Nothing in the hub applies
   an update: no route, no button, no MCP tool. Where releases are published is one line,
   `package.json → homeHub.updates.repo`; nothing else in core names that repository.
+- An update is applied by `node scripts/update.mjs apply <tag>` (`docs/updating.md`), run on the server outside the
+  hub's process: preflight in a scratch worktree, stop, archive, switch to the tag, start, health check, and the
+  previous version back on any failure. How a service is stopped, started and checked is configuration
+  (`instance.json → service, health`, or `--service`, `--health`), never a label or a path in core. The steps live
+  in `server/update-apply.mjs` and take the world as an argument (`exec`, `probe`, clock): keep it that way, keep its
+  imports static (the command may run from the checkout it switches), and never let a test drive a real service.
+  When the data epoch rises, a rollback restores the archive; so a release that changes a format must still start
+  from a restored older state after the code goes back, which is what "forward-only" asks of it.
+- Plugins are versioned on their own (`plugin.json → version`, or their source's `package.json`). A plugin states
+  the core range it supports in `plugin.json → core`; core refuses to start with a plugin outside its range, with an
+  unmet `requires`, or without a setting its `config.required` names. A plugin imports core only by name
+  (`home-hub/plugin-api`, `home-hub/testing`); what those two files export is contract, everything else is internal.
 - `deploy-YYYYMMDD-HHMM` tags stay what they were: timestamps of a deployment, not releases.
 
 ## Rules

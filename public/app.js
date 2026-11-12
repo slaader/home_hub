@@ -202,7 +202,7 @@ function afterDraw(machine,page){
  if(moved){scrollTo(0,0);root.querySelector('#main')?.focus({preventScroll:true});}
 }
 // Footer: what is running: the release version ("+dev" on a checkout that is not on its release tag), with the
-// commit and when it was deployed in the tooltip, and the number of plugins. An administrator also sees
+// commit and when it was deployed in the tooltip, and the number of plugins (each with its version in that tooltip). An administrator also sees
 // "→ 1.3.0" while a newer release is known (updates-view.js); nothing is shown when that is not known, and
 // the footer never says "up to date".
 let updateHint=null;
@@ -227,7 +227,7 @@ function footer(){
    version?el('span',{title:tip},t('verze {version}',{version}),
     updateHint?el('a',{class:'hh-update',href:'#integrations',title:t('Je dostupné vydání {latest}. Otevřít Integrace.',{latest:updateHint.latest})},` → ${updateHint.latest}`):null)
     :b?.commit?el('span',{},tip):null,
-   el('span',{title:(manifest.modules||[]).filter(m=>!m.core).map(m=>m.title||m.id).join(', ')||null},tp(plugins,'{n} plugin|{n} pluginy|{n} pluginů'))));
+   el('span',{title:(manifest.modules||[]).filter(m=>!m.core).map(m=>`${m.title||m.id}${m.version?' '+m.version:''}`).join(', ')||null},tp(plugins,'{n} plugin|{n} pluginy|{n} pluginů'))));
 }
 // Freshness pill + pull interval switch: one place for all devices. Shown on the overview and the machine
 // pages of a hub that has live telemetry; other pages and hubs without it keep a quiet top bar.

@@ -29,6 +29,7 @@ import {createHomeDevices,validHost,DEVICE_ID,PICTURES,MACHINE_ROLES,PLATFORMS,R
 import {buildHome,mergeRuntimeReports,homeHistory,homeHistoryQuery,loadMachineDescriptors,homeMachineIds,machineList} from '../home-data.mjs';
 import {readRouterFor} from '../router-data.mjs';
 import {siteConfigPath,hubAddress} from '../site-config.mjs';
+import {privateFile} from '../paths.mjs';
 import {toolError} from '../mcp.mjs';
 
 const homeError=e=>[e.message==='invalid'?400:503,'HOME_UNAVAILABLE',e.message==='invalid'?'Neplatný požadavek na data domovské stránky.':'Data domovské stránky jsou dočasně nedostupná.'];
@@ -348,10 +349,10 @@ export default {
   ['POST','/api/home/machines/remove','home:write','Odebrat přidaný stroj {id, base}. MCP machine_remove.'],
   ['POST','/api/home/runtime','home:write','Zveřejnit runtime stack stroje {machine, stack|null, base?}. MCP runtime_publish.']]}],
  setup(hub){
-  const {site,directory,stateDirectory,root,options}=hub;
+  const {site,directory,stateDirectory,options}=hub;
   const ids=homeMachineIds(site);
   const homeDevices=options.homeDevices||createHomeDevices(path.join(stateDirectory,'home'),{reserved:ids,lanCidrs:site.lanCidrs,siteMachines:site.machines});
-  const thermoHostsFile=options.thermoHostsFile||process.env.THERMO_HOSTS_FILE||path.join(root,'private','thermo-hosts.json');
+  const thermoHostsFile=options.thermoHostsFile||process.env.THERMO_HOSTS_FILE||privateFile('thermo-hosts.json');
   const thermoPoller=options.thermoPoller||createThermoPoller({hostsFile:thermoHostsFile,extraHosts:()=>homeDevices.thermoHosts(),stateDirectory});
   // App-managed SSH: the hub's own keys and known_hosts (state/home/ssh), and the set-up drafts of the device dialog.
   // options.sshRun stands in for every OpenSSH tool the hub starts (tests); nothing else ever spawns one.

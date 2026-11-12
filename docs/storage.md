@@ -2,6 +2,32 @@
 
 Everything Home Hub keeps is a file on the machine that runs it, under its state and data directories (`STATE_DIR`, `DATA_DIR`).
 
+## Where everything is
+
+`server/paths.mjs` is the one place that decides it; the server, the scripts and the collectors all ask it. With none
+of these variables set every path is the checkout's own, as it always was. With `HOME_HUB_HOME` an **instance
+directory** holds everything a deployment owns, so the code checkout holds code only and can be replaced by an update.
+
+| Variable | With `HOME_HUB_HOME` | Without it |
+|---|---|---|
+| `HOME_HUB_CONFIG_DIR` (household configuration: `site.json`, `software-watch.json`, `images/`) | `<home>/config` | `<checkout>/local` |
+| `HOME_HUB_SITE_CONFIG` (`none` = no file) | `<config>/site.json` | `<checkout>/local/site.json` |
+| `DATA_DIR` (inventory, collector output) | `<home>/data` | `<checkout>/data` |
+| `STATE_DIR` (what the hub writes) | `<data>/state` | `<data>/state` |
+| `HOME_HUB_PRIVATE_DIR` (secrets) | `<home>/private` | `<checkout>/private` |
+| `AUTH_FILE` | `<private>/auth.json` | `<checkout>/private/auth.json` |
+
+A variable that is set always wins over the default another one derives (`HOME_HUB_HOME` with an explicit `DATA_DIR`
+keeps the data where `DATA_DIR` says). Every file in `private/` that has its own variable (`INTEGRATION_SECRETS_FILE`,
+`RUNTIME_TOKENS_FILE`, `GIT_LFS_TOKENS_FILE`, `THERMO_HOSTS_FILE`, `BACKUP_KEYS_DIR`, `GITHUB_TOKEN_FILE`, `TLS_KEY`,
+`TLS_CERT`, `HOME_HUB_SECRET_KEY_FILE`) defaults to its name in the private directory. The UniFi collector
+(`scripts/collect-router-unifi.py`) keeps `router-private/` in `HOME_HUB_HOME` (or `HOME_HUB_ROOT`) and writes its
+snapshot to `DATA_DIR` when that is set. `sh scripts/systems/install-launchd.sh --home <home>` gives the collector jobs
+the same instance.
+
+A plugin keeps its own files in `hub.pluginData(id)`: `<data>/plugins/<id>/` (0700, made on first use), never in its
+code directory.
+
 | Where | What | Format |
 |---|---|---|
 | `state/hub.db` (+ `-wal`, `-shm`) | Tickets (projects, releases, tickets with comments and history), the review index (sets → rounds → items → feedback, blob metadata), browser sign-in sessions, the full-text search index | SQLite, `node:sqlite` built into Node, no npm package |
@@ -16,6 +42,7 @@ Everything Home Hub keeps is a file on the machine that runs it, under its state
 | `state/updates.json` | The update check: the newest release it found, when, the ETags of GitHub's answers, a dismissed release (0600). Deleting it costs one full check | JSON |
 | `state/run.json` | Written at every start: `{version, commit, exact, dataEpoch, pid, startedAt, plugins}` (0600). Not state to back up: it says what is answering right now | JSON |
 | `data/` | Inventory (`knowledge.json`), collector output | JSON |
+| `data/plugins/<id>/` | A plugin's own files (`hub.pluginData(id)`) | the plugin's |
 | `private/` | `auth.json` (the owner's hash and `passwordAt`; written by `scripts/setup.mjs`), TLS key, tokens; `backup-jobs/<id>/` (0700): each backup job's ed25519 key pair (private key 0600), its generated `ssh_config` and `known_hosts` with the pinned host keys | JSON / PEM |
 
 ## hub.db
@@ -59,6 +86,12 @@ until a key is created again in the device dialog (and authorized on Windows).
 Back the state directory up with Home Hub stopped: the database is then closed and consistent, and the
 `-wal` file, if present, is copied with it. Do not copy `hub.db` from a running server with `cp`. Use
 `sqlite3 state/hub.db ".backup /path/copy.db"` instead.
+
+`node scripts/update.mjs backup` does exactly that for the whole instance (stop, archive `config/`, `data/`, the state
+directory and `private/` into one 0600 file, start), and `apply` does it before every update (`docs/updating.md`).
+Those archives hold every secret of the instance: `<home>/backups/`, or `backups/` in the checkout, is as private as
+`private/`. The update command's own files are `update-journal.json` and `update.lock` (in the instance directory,
+else in `backups/`) and `state/update-history.jsonl`, one line per update: `{at, id, from, to, by, seconds, result}`.
 
 A deploy (`scripts/deploy-mini-server.sh` on the mini) restarts the service in place. `state/` is gitignored, so
 pulling code never touches the database, and sessions survive the restart.

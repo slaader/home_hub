@@ -8,6 +8,7 @@
 // Distinct from the household plugin "lfs" (/api/lfs*, lfs:delete), which reads one Forgejo from its files.
 import path from 'node:path';
 import {placementFor} from '../git-lfs-placement.mjs';
+import {privateFile} from '../paths.mjs';
 import {createGitLfsStore} from '../git-lfs-store.mjs';
 import {GitError} from '../git-lfs-git.mjs';
 import {ProviderError} from '../git-lfs-providers.mjs';
@@ -73,7 +74,7 @@ export default {
  // options.gitLfsTokenFile, gitLfsNow, gitLfsGraceMs, gitLfsGit, gitLfsCheckLimit, gitLfsDeleteChunk, gitLfsAppendAudit: tests.
  // Otherwise GIT_LFS_TOKENS_FILE or private/git-lfs-tokens.json, and GIT_LFS_GRACE_HOURS (default 7 days).
  setup:hub=>({store:createGitLfsStore({stateDirectory:hub.stateDirectory,
-  tokenFile:hub.options.gitLfsTokenFile||process.env.GIT_LFS_TOKENS_FILE||path.join(hub.root,'private','git-lfs-tokens.json'),
+  tokenFile:hub.options.gitLfsTokenFile||process.env.GIT_LFS_TOKENS_FILE||privateFile('git-lfs-tokens.json'),
   providers:()=>hub.collect('git-lfs.providers'),now:hub.options.gitLfsNow,graceMs:hub.options.gitLfsGraceMs,git:hub.options.gitLfsGit,
   checkLimit:hub.options.gitLfsCheckLimit,deleteChunk:hub.options.gitLfsDeleteChunk,appendAudit:hub.options.gitLfsAppendAudit,
   isEnabled:()=>hub.integrationEnabled(GIT_LFS_INTEGRATION)})}),

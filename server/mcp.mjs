@@ -6,6 +6,7 @@
 // (server/plugins.mjs), each with a run(args, {principal, state, hub}) function. The initialize
 // instructions are assembled from the modules' mcpInstructions, so a plugin describes its own tools.
 import {entryHash,entryInput} from '../scripts/knowledge-edit.mjs';
+import {toolError} from './tool-error.mjs';
 import {TICKET_ID,TICKET_TYPES,TICKET_STATUSES,TICKET_PRIORITIES,RELEASE_STATUSES,PROJECT_TYPES} from './tickets-store.mjs';
 import {readFile} from 'node:fs/promises';
 import {REVIEW_ID,REVIEW_KINDS,LIMITS as REVIEW_LIMITS} from './review-store.mjs';
@@ -282,6 +283,6 @@ export function createMcp({version='2',ctx,tools:extraTools=[],instructions=[]})
  };
 }
 const reply=(status,body)=>({status,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-// For a plugin tool's run(): an error whose message goes back to the agent as the tool result
-// (isError: true). Anything else a tool throws is reported as an internal error.
-export const toolError=message=>Object.assign(new Error(message),{toolError:true});
+// toolError (server/tool-error.mjs): for a plugin tool's run(), an error whose message goes back to the agent as the
+// tool result (isError: true). Anything else a tool throws is reported as an internal error.
+export {toolError};

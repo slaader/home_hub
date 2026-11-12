@@ -5,7 +5,7 @@
 // access audit with who made it. Over MCP there is only a read-only summary, never a switch.
 import path from 'node:path';
 import {runStatus,settingsInput,settingsView,INTEGRATION_KINDS} from '../integrations.mjs';
-import {pluginsDirectory} from '../plugins.mjs';
+import {pluginsDirectories} from '../plugins.mjs';
 import {machinesOverview} from '../machine-facets.mjs';
 
 const MESSAGES={
@@ -40,13 +40,14 @@ async function row(hub,i,{withStatus=true}={}){
   test:Boolean(i.test),settings,...(status?{status}:{})};
 }
 const find=(hub,id)=>{if(typeof id!=='string')fail('invalid','id must be an integration id');const i=hub.registry.integration(id);if(!i)fail('not-found');return i;};
-// The overlay directory as people know it: inside the checkout, its relative path.
-const pluginsLabel=hub=>{const dir=pluginsDirectory();if(!dir)return null;const rel=path.relative(hub.root,dir);return rel&&!rel.startsWith('..')&&!path.isAbsolute(rel)?rel:path.basename(dir);};
+// The plugin directories as people know them: inside the checkout, the relative path; elsewhere the last two parts.
+const dirLabel=(hub,dir)=>{const rel=path.relative(hub.root,dir);return rel&&!rel.startsWith('..')&&!path.isAbsolute(rel)?rel:path.join(path.basename(path.dirname(dir)),path.basename(dir));};
+const pluginsLabel=hub=>{const dirs=pluginsDirectories();return dirs.length?dirs.map(d=>dirLabel(hub,d)).join(', '):null;};
 
 export async function integrationsList(hub){
  const rows=await Promise.all(hub.registry.integrations.map(i=>row(hub,i)));
  return {schemaVersion:1,generatedAt:new Date().toISOString(),kinds:[...INTEGRATION_KINDS],integrations:rows,
-  plugins:hub.registry.modules.filter(m=>!m.core).map(m=>({id:m.id,title:m.title,integrations:m.integrations.map(i=>i.id)})),
+  plugins:hub.registry.modules.filter(m=>!m.core).map(m=>({id:m.id,title:m.title,...(m.version?{version:m.version,source:m.source}:{}),integrations:m.integrations.map(i=>i.id)})),
   pluginsDirectory:pluginsLabel(hub)};
 }
 

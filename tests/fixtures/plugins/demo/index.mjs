@@ -1,5 +1,8 @@
 // A complete little plugin, used by tests/plugins.test.mjs and as the worked example in docs/plugins.md.
-// It keeps a list of notes in memory: one scope, three routes, one MCP tool, one poller, one page.
+// It keeps a list of notes in memory: one scope, four routes, one MCP tool, one poller, one page. Its plugin.json
+// says its version and the core range it supports; it imports core by name, through the plugin API.
+import {provenance,toolError,CORE_VERSION} from 'home-hub/plugin-api';
+
 export default {
  id:'demo',title:'Demo notes',
  scopes:{'demo:write':{label:'Demo – zápis',desc:'Přidávat poznámky v ukázkovém pluginu.'}},
@@ -17,6 +20,9 @@ export default {
  provides:{'home.snapshots':state=>({mini:{bridge:'demo',snapshot:null,notes:state.notes.length}})},
  routes:[
   {method:'GET',path:'/api/demo/notes',handler:({json,state})=>json(200,{notes:state.notes,site:state.site})},
+  // Which plugin and core this is, and where the answer comes from (the plugin API's provenance helper).
+  {method:'GET',path:'/api/demo/about',handler:({json,state,hub})=>json(200,{plugin:hub.registry.module('demo').version,core:CORE_VERSION,
+   provenance:provenance([{kind:'plugin',source:'demo',count:state.notes.length,unit:'items'}])})},
   {method:'GET',match:/^\/api\/demo\/notes\/(\d+)$/,error:e=>e.message==='not-found'?[404,'DEMO_FAILED','No such note.']:null,
    handler({params,json,state}){const note=state.notes[Number(params[1])];if(note===undefined)throw new Error('not-found');return json(200,{note});}},
   {method:'POST',path:'/api/demo/notes',scope:'demo:write',handler(c){
@@ -26,6 +32,7 @@ export default {
  // This plugin's lines in the MCP initialize instructions; the second part is said only to keys with demo:write.
  mcpInstructions:['Demo: demo_notes lists the notes.',{scope:'demo:write',text:'With demo:write: POST /api/demo/notes adds one.'}],
  mcpTools:[{name:'demo_notes',scope:'read',title:'Demo: notes',description:'The notes kept by the demo plugin.',
-  inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true},
-  run:(args,{state,principal})=>({notes:state.notes,for:principal.username})}],
+  inputSchema:{type:'object',properties:{max:{type:'integer',minimum:1}},additionalProperties:false},annotations:{readOnlyHint:true},
+  run:(args,{state,principal})=>{if(args.max!==undefined&&!(Number.isSafeInteger(args.max)&&args.max>0))throw toolError('max must be a positive whole number.');
+   return {notes:args.max?state.notes.slice(0,args.max):state.notes,for:principal.username};}}],
 };

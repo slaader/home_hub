@@ -18,6 +18,7 @@ import {parseSystemsProbe,buildSystems,systemsSpecs,systemMachines} from '../ser
 import {site as loadedSite,sshHosts} from '../server/site-config.mjs';
 import {readWatch,checkWatch} from '../server/software-watch.mjs';
 import {collectorRun} from '../server/collector-run.mjs';
+import {resolvePaths} from '../server/paths.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 
@@ -97,7 +98,7 @@ export const NOTHING_TO_PROBE=`No machine to probe yet. Nothing was written.
 if(process.argv[1]===fileURLToPath(import.meta.url)){
  const args=process.argv.slice(2);
  const opt=name=>{const i=args.indexOf(name);return i>=0?args[i+1]:null;};
- const dataDir=path.resolve(opt('--data')||process.env.DATA_DIR||path.join(root,'data'));
+ const dataDir=path.resolve(opt('--data')||resolvePaths().data);
  const outDir=process.env.SYSTEMS_DIR||path.join(dataDir,'systems');
  const site=loadedSite();
  // id=alias; "local" runs the probe on this machine.

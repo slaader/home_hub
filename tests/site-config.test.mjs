@@ -49,7 +49,8 @@ test('where the configuration comes from: local/site.json, HOME_HUB_SITE_CONFIG,
  assert.equal(siteConfigPath({HOME_HUB_SITE_CONFIG:'none'}),null);assert.equal(siteConfigPath({HOME_HUB_SITE_CONFIG:'/tmp/x.json'}),'/tmp/x.json');
  assert.equal(siteConfigPath({}),path.join(repoRoot,'local','site.json'));
  assert.equal(softwareWatchPath({SOFTWARE_WATCH_FILE:'/tmp/watch.json'}),'/tmp/watch.json');
- assert.match(softwareWatchPath({},path.join(repoRoot,'tests')),/config[\\/]software-watch\.json$/);
+ assert.equal(softwareWatchPath({},'/srv/hub'),path.join('/srv/hub','local','software-watch.json'),'beside the site file; config/software-watch.json is only an example');
+ assert.equal(softwareWatchPath({HOME_HUB_SITE_CONFIG:'none'}),null);
 });
 
 test('the shipped example configuration is valid and uses placeholders only',async()=>{

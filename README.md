@@ -239,28 +239,40 @@ ORIGIN=https://hub.example.lan HTTP_BEHIND_PROXY=1 PORT=8799 BIND_HOST=127.0.0.1
 | `LOCAL_PREVIEW=1` | Plain HTTP on 127.0.0.1, for trying it out | off |
 | `HTTP_BEHIND_PROXY=1` | Plain HTTP behind your TLS proxy | off: HTTPS with `TLS_KEY` / `TLS_CERT` |
 | `BIND_HOST` | Address to bind | `0.0.0.0` (`127.0.0.1` in a preview) |
-| `DATA_DIR`, `STATE_DIR`, `AUTH_FILE` | Collector output, the hub's own state, the administrator sign-in | `data/`, `data/state/`, `private/auth.json` |
-| `HOME_HUB_SITE_CONFIG`, `HOME_HUB_PLUGINS_DIR` | Another site file or plugin directory; `none` for neither | `local/site.json`, `local/plugins/` |
+| `HOME_HUB_HOME` | An instance directory that keeps configuration, data and secrets apart from the code: `config/` (`site.json`, `software-watch.json`, `images/`), `data/` (with `data/state/`), `private/`. The variables below still win one by one | unset: everything is in the checkout, as in the rows below |
+| `DATA_DIR`, `STATE_DIR`, `AUTH_FILE` | Collector output, the hub's own state, the administrator sign-in | `data/`, `data/state/`, `private/auth.json` (with `HOME_HUB_HOME`: `<home>/data`, `<home>/data/state`, `<home>/private/auth.json`) |
+| `HOME_HUB_PRIVATE_DIR` | Where secrets live: `auth.json`, `secret.key`, tokens, backup keys, the TLS key | `private/` (`<home>/private`) |
+| `HOME_HUB_CONFIG_DIR` | Where the household configuration lives: `site.json`, `software-watch.json`, `images/` | `local/` (`<home>/config`) |
+| `HOME_HUB_SITE_CONFIG`, `HOME_HUB_PLUGINS_DIR` | Another site file, or plugin directories (several separated by `:`); `none` for neither | `<config>/site.json`; the plugin sources `HOME_HUB_HOME/instance.json` names, else `local/plugins/` |
 | `HOME_HUB_UPDATE_CHECK=off` | Never ask whether a newer release exists (below) | on |
 
-State is one SQLite database and a few JSON files ([docs/storage.md](docs/storage.md)). Back up `data/` and
-`private/`.
+State is one SQLite database and a few JSON files ([docs/storage.md](docs/storage.md) says where each one is). Back up
+`data/` and `private/` (with `HOME_HUB_HOME`, the instance directory).
 
 ### Updating
 
 Home Hub has a version (semver; [CHANGELOG.md](CHANGELOG.md) says what each release changed). Every page's footer
 shows the one that is running, with the commit in its tooltip; `1.1.0+dev` means a checkout that is not on a release
-tag. Home Hub never updates itself: it tells you, and you update it on the server.
+tag. Home Hub never updates itself: it tells you, and one command on the server applies the update.
 
 ```sh
-# stop the hub, back up data/ and private/, then:
-git fetch --tags && git checkout v1.1.0     # the release you want; or `git pull` to follow main
-npm test                                    # optional, under ten seconds
-# start the hub again
+node scripts/update.mjs status              # what is installed and running, and the newest release tag
+node scripts/update.mjs apply v1.2.0 \
+  --service launchd:system/com.example.home-hub --health http://127.0.0.1:8781/healthz
+node scripts/update.mjs rollback            # undo the last update
 ```
 
+`apply` fetches the tags, checks the release in a scratch worktree (its tests, your plugins' version ranges, and a
+start-up check with your site file), stops the hub, archives `data/` and `private/`, switches the checkout to the tag,
+starts the hub and waits for it to answer. If anything fails after the stop it puts the previous version back and
+notes the release as "tried and rolled back". `--service` says how your service is stopped and started
+(`launchd:…`, `systemd:…`, or two commands) and `--health` where it answers; with an instance directory both live in
+`instance.json`. [docs/updating.md](docs/updating.md) has every step, the first update from 1.1.0 (which has no such
+command yet) and how to rehearse a rollback. A container is rebuilt instead: [docs/docker.md](docs/docker.md).
+
 State migrates forward at start and sign-ins survive. Going back is switching to the older tag, unless the
-changelog entry has a **Data** part: then the on-disk format changed and going back also needs the backup you made.
+changelog entry has a **Data** part: then the on-disk format changed, and `rollback` also restores the archive that
+`apply` made.
 
 **The update check, and exactly what it contacts.** About twice a day (first 2 to 5 minutes after start, then every
 12 hours) the hub asks GitHub whether a newer release exists: two requests,
@@ -285,6 +297,7 @@ repository (`repo`, for a fork), takes pre-releases (`channel: "prerelease"`) or
 | [docs/getting-started.md](docs/getting-started.md) | The first hour: install, sign in, connect an agent, add machines |
 | [docs/features.md](docs/features.md) | Every part of the hub in detail: machines, inventory, tracker, access, telemetry, LLM runtimes, collectors, security |
 | [docs/docker.md](docs/docker.md) | Docker in full |
+| [docs/updating.md](docs/updating.md) | The update command: preflight, apply, rollback, the data epoch, rehearsing a rollback |
 | [docs/plugins.md](docs/plugins.md) | Site configuration, the plugin contract, the public export |
 | [docs/API.md](docs/API.md) | The HTTP API, the UI manifest and the MCP tools |
 | [docs/review.md](docs/review.md), [docs/storage.md](docs/storage.md), [docs/design.md](docs/design.md) | Review sets and uploads; where state lives; design tokens and UI components |

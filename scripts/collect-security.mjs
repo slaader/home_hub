@@ -16,6 +16,7 @@ import {buildSecurity} from '../server/security-data.mjs';
 import {loadMachineDescriptors} from '../server/home-data.mjs';
 import {site as loadedSite,sshHosts,machineIds} from '../server/site-config.mjs';
 import {collectorRun} from '../server/collector-run.mjs';
+import {resolvePaths} from '../server/paths.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 
@@ -60,7 +61,7 @@ export async function forgejoKeys(git,exec=run){
  * → the document written
  */
 export async function collectSecurity({site=loadedSite(),hosts=sshHosts(site,m=>m.ssh.keys),out,exec=run,forgejo=true,portOpen=tcpOpen,collectedFrom=null,now=Date.now(),
- machinesDir=process.env.MACHINES_DIR||path.join(root,'data','machines'),probeFile=path.join(root,'scripts','security','ssh-probe.sh'),warn=()=>{},started=null}){
+ machinesDir=process.env.MACHINES_DIR||path.join(resolvePaths().data,'machines'),probeFile=path.join(root,'scripts','security','ssh-probe.sh'),warn=()=>{},started=null}){
  const router=site.machines.find(m=>m.role==='router'&&m.ip)||null,git=site.security;
  const script=await readFile(probeFile,'utf8');
  const [probeResults,forgejoDoc,routerSsh]=await Promise.all([
@@ -89,7 +90,7 @@ export const NOTHING_TO_PROBE=`No machine to read SSH keys from yet. Nothing was
 if(process.argv[1]===fileURLToPath(import.meta.url)){
  const args=process.argv.slice(2);
  const opt=name=>{const i=args.indexOf(name);return i>=0?args[i+1]:null;};
- const out=path.resolve(opt('--out')||path.join(opt('--data')||process.env.DATA_DIR||path.join(root,'data'),'security','ssh-keys.json'));
+ const out=path.resolve(opt('--out')||path.join(opt('--data')||resolvePaths().data,'security','ssh-keys.json'));
  // id=alias; "local" runs the probe on this machine. A NAS needs a sudo-capable alias to see every account.
  const site=loadedSite(),hosts=sshHosts(site,m=>m.ssh.keys);
  args.forEach((a,i)=>{if(a==='--host'){const [id,alias]=String(args[i+1]||'').split('=');if(id&&alias)hosts.set(id,alias);}});

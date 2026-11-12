@@ -16,6 +16,7 @@
 // says it is off, nothing is read (no poll, no history read, no stream held open) and nothing is provided.
 import path from 'node:path';
 import {runtimesFacet} from '../machine-facet-sources.mjs';
+import {privateFile} from '../paths.mjs';
 import {FACETS_POINT} from '../machine-facets.mjs';
 import {toolError} from '../mcp.mjs';
 import {RUNTIME_KINDS,RUNTIME_ENDPOINT_ID,RUNTIME_ENDPOINT_LIMIT} from '../site-config.mjs';
@@ -143,9 +144,9 @@ export default {
   'přihlášení heslem':'password sign-in',
  }},
  setup(hub){
-  const {root,stateDirectory,options,site}=hub;
+  const {stateDirectory,options,site}=hub;
   const store=options.runtimeEndpointStore||createEndpointStore(path.join(stateDirectory,'runtimes-config.json'));
-  const tokens=options.runtimeTokens||createTokenStore(options.runtimeTokensFile||process.env.RUNTIME_TOKENS_FILE||path.join(root,'private','runtime-tokens.json'));
+  const tokens=options.runtimeTokens||createTokenStore(options.runtimeTokensFile||process.env.RUNTIME_TOKENS_FILE||privateFile('runtime-tokens.json'));
   const seconds=Number(process.env.RUNTIMES_POLL_SECONDS);
   const intervalMs=options.runtimeIntervalMs||(Number.isFinite(seconds)&&seconds>=10&&seconds<=600?seconds*1000:DEFAULT_INTERVAL_MS);
   const endpoints=()=>allEndpoints(site,store);

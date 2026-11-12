@@ -9,6 +9,7 @@ import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {site as loadedSite} from '../server/site-config.mjs';
+import {resolvePaths} from '../server/paths.mjs';
 
 // The rules themselves live in public/inventory-rules.js: one pure module that this checker, the hub
 // and the entry form in the browser all run, so they can never disagree. Here they meet the site: the
@@ -38,9 +39,8 @@ function line(e) {
 }
 
 async function main(argv) {
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const fileArg = argv.indexOf('--file');
-  const file = fileArg >= 0 ? argv[fileArg + 1] : path.join(root, 'data', 'knowledge.json');
+  const file = fileArg >= 0 ? argv[fileArg + 1] : path.join(resolvePaths().data, 'knowledge.json');
   const doc = await load(file);
   const {errors, warnings} = validate(doc);
   const name = id => doc.entries.find(e => e.id === id)?.name || id;

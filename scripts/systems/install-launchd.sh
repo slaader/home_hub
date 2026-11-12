@@ -7,12 +7,15 @@
 # update or remove them: the labels are the jobs' identity.
 # All run once at load, as the logged-in user (they need ~/.ssh/config and its keys), at low priority.
 # The collectors are read-only on the machines they probe. On Linux use the units in examples/systemd/.
-#   sh scripts/systems/install-launchd.sh [--repo DIR] [--data DIR] [--node PATH] [--label-prefix P] [--with-security]   install or update
+# --home DIR (default: $HOME_HUB_HOME when set) is an instance directory (server/paths.mjs): the jobs then get
+# HOME_HUB_HOME in their environment, so they read its config/site.json, and --data defaults to DIR/data.
+#   sh scripts/systems/install-launchd.sh [--repo DIR] [--data DIR] [--home DIR] [--node PATH] [--label-prefix P] [--with-security]   install or update
 #   sh scripts/systems/install-launchd.sh --print [...]      print the property lists; install nothing
 #   sh scripts/systems/install-launchd.sh --uninstall [...]  remove the jobs
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 DATA=
+INSTANCE=${HOME_HUB_HOME:-}
 NODE=$(command -v node 2>/dev/null || echo /opt/homebrew/bin/node)
 UNINSTALL=0
 PRINT=0
@@ -22,6 +25,7 @@ while [ $# -gt 0 ]; do
   case $1 in
     --repo) REPO=$(cd "$2" && pwd); shift 2;;
     --data) DATA=$2; shift 2;;
+    --home) INSTANCE=$2; shift 2;;
     --node) NODE=$2; shift 2;;
     --label-prefix) PREFIX=$2; shift 2;;
     --with-security) SECURITY=1; shift;;
@@ -33,6 +37,7 @@ done
 case $PREFIX in
   ''|*[!A-Za-z0-9._-]*) echo "--label-prefix may contain letters, digits, dot, underscore and hyphen only" >&2; exit 2;;
 esac
+if [ -n "$INSTANCE" ]; then INSTANCE=$(cd "$INSTANCE" && pwd); DATA=${DATA:-$INSTANCE/data}; fi
 DATA=${DATA:-$REPO/data}
 AGENTS=$HOME/Library/LaunchAgents
 LOGS=$HOME/Library/Logs/home-hub-v2
@@ -54,7 +59,7 @@ plist() { # label script interval
   </array>
   <key>WorkingDirectory</key><string>$(xml "$REPO")</string>
   <key>EnvironmentVariables</key>
-  <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+  <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>$(if [ -n "$INSTANCE" ]; then printf '<key>HOME_HUB_HOME</key><string>%s</string>' "$(xml "$INSTANCE")"; fi)</dict>
   <key>StartInterval</key><integer>$3</integer>
   <key>RunAtLoad</key><true/>
   <key>ProcessType</key><string>Background</string>
@@ -85,4 +90,4 @@ job "$PREFIX.systems-collect" collect-systems.mjs 21600
 job "$PREFIX.systems-upstream" check-upstream.mjs 43200
 # The key inventory is opt-in on install; an uninstall removes it whether or not it was there.
 if [ "$SECURITY" = 1 ] || [ "$UNINSTALL" = 1 ]; then job "$PREFIX.security-collect" collect-security.mjs 86400; fi
-[ "$UNINSTALL" = 1 ] || [ "$PRINT" = 1 ] || echo "repo $REPO · data $DATA · logs $LOGS"
+[ "$UNINSTALL" = 1 ] || [ "$PRINT" = 1 ] || echo "repo $REPO · data $DATA${INSTANCE:+ · home $INSTANCE} · logs $LOGS"

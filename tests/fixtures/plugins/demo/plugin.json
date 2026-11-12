@@ -1,0 +1,7 @@
+{
+ "$comment": "The demo plugin's static facts: read before index.mjs runs (docs/plugins.md → plugin.json).",
+ "id": "demo",
+ "version": "1.0.0",
+ "title": "Demo notes",
+ "core": ">=1.1.0 <2.0.0"
+}

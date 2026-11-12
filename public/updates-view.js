@@ -19,6 +19,8 @@ export function releaseLink(u){
  const url=u?.latest?.url,prefix=typeof u?.repo==='string'&&/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/.test(u.repo)?`https://github.com/${u.repo}/releases/`:null;
  return prefix&&typeof url==='string'&&url.startsWith(prefix)&&!/[\s<>"'`\\]/.test(url)?url:null;
 }
+/** The command that applies the newest release (docs/updating.md), or null when the answer holds none of that shape. */
+export const applyCommand=u=>typeof u?.apply?.command==='string'&&/^node scripts\/update\.mjs apply v[0-9A-Za-z.+-]{1,64}$/.test(u.apply.command)?u.apply.command:null;
 /** What the footer shows an administrator: only a newer release that is known and was not dismissed. */
 export const footerHint=u=>u&&u.updateAvailable===true&&!u.dismissed&&typeof u.latest?.version==='string'?{latest:u.latest.version}:null;
 const announce=u=>{try{dispatchEvent(new CustomEvent('updateschange',{detail:u}));}catch{}};
@@ -41,8 +43,10 @@ function paint(box,u){
  box.replaceChildren(...[
   el('p',{class:'up-head'},el('b',{},t('Vydání {version}',{version:latest.version})),date?el('span',{class:'ig-dim'},` · ${date}`):null,
    link?el('a',{href:link,target:'_blank',rel:'noopener noreferrer'},t('Otevřít na GitHubu')):null),
-  u.updateAvailable?el('p',{},latest.tag?t('Home Hub se neaktualizuje sám. Na serveru přepni checkout na {tag} a restartuj ho; postup je v README (Updating).',{tag:latest.tag})
-   :t('Home Hub se neaktualizuje sám. Aktualizaci provede správce na serveru; postup je v README (Updating).')):null,
+  // The command is the server's own text for a plain release tag (GET /api/updates → apply.command); it goes in a text node.
+  u.updateAvailable?el('p',{},applyCommand(u)?t('Home Hub se neaktualizuje sám. Na serveru spusť v jeho checkoutu příkaz níže: ověří vydání {tag}, zazálohuje data, přepne, restartuje a při potížích se vrátí zpět. Postup je v docs/updating.md.',{tag:latest.tag})
+   :t('Home Hub se neaktualizuje sám. Aktualizaci provede správce na serveru příkazem scripts/update.mjs; postup je v docs/updating.md.')):null,
+  u.updateAvailable&&applyCommand(u)?el('code',{class:'up-command'},applyCommand(u)):null,
   latest.notes?el('details',{class:'up-notes',...(u.updateAvailable?{open:''}:{})},el('summary',{},t('Poznámky k vydání')),el('pre',{},latest.notes)):null,
   dismiss,u.updateAvailable&&u.dismissed?el('p',{class:'ig-dim'},t('V patičce se tohle vydání nepřipomíná.')):null].filter(Boolean));
 }

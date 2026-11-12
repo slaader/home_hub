@@ -15,7 +15,7 @@ import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {repoRoot} from './edition.mjs';
-import {siteConfigPath} from './site-config.mjs';
+import {resolvePaths} from './paths.mjs';
 
 export const WATCH_SCHEMA=1;
 export const WATCH_LIMITS=Object.freeze({items:200,categories:20,machinesPerItem:50,bytes:262144});
@@ -47,11 +47,7 @@ const text=(v,max)=>typeof v==='string'&&v.length<=max&&!/[\u0000-\u001f\u007f]/
 export const watchExamplePath=(root=repoRoot)=>path.join(root,'config','software-watch.json');
 // The list lives beside the site configuration (local/site.json → local/software-watch.json), so a hub
 // started with another site file, or with none (HOME_HUB_SITE_CONFIG=none → null), never reads this one's.
-export function watchPath(env=process.env,root=repoRoot){
- if(env.SOFTWARE_WATCH_FILE)return path.resolve(env.SOFTWARE_WATCH_FILE);
- const site=siteConfigPath(env,root);
- return site?path.join(path.dirname(site),'software-watch.json'):null;
-}
+export const watchPath=(env=process.env,root=repoRoot)=>resolvePaths(env,root).softwareWatch;
 export const emptyWatch=()=>({schemaVersion:WATCH_SCHEMA,categories:{},items:[]});
 
 // A stable hash of one item, for optimistic concurrency: read the list, change an item, send its hash back.

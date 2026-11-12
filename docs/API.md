@@ -107,7 +107,7 @@ key reaches these routes; MCP has only the read-only tool `integrations_status` 
 - `GET /api/admin/machines` → `{schemaVersion:1, generatedAt, telemetry, facets:[{id, title, icon, page, howTo, off}], machines:[…]}`: Integrations → Machines. Every machine of the overview once, with what each module knows about it (extension point `machines.facets`, `docs/plugins.md`).
   A machine: `{id, name, hostname, ip, kind, role, platform, source: site|added, online, lastSeen, state: ok|warn|error|not-configured, counts:{ok, attention, notConfigured, off}, facets:[{id, title, icon, how?:{by, text}, state, summary?, summaryT?, details?:[{label, value, valueT?}], href, prompt?, promptT?}]}`. `how.by` is `hub`, `source`, `collector`, `agent` or `integration`; `prompt` (a ready prompt for the person's own agent, the machine filled in) comes only where the part is not set up or needs attention. An integration that declares `machines` shows as a facet `int-<id>` on those machines only.
   A facet's `state` is `ok`, `warn`, `stale`, `error`, `off`, `not-configured` or `not-applicable`; `href` is the page where that part is set up. `telemetry` is what the add-machine dialog needs (as in `GET /api/home`). Read-only.
-- `GET /api/admin/integrations` → `{schemaVersion:1, generatedAt, kinds[], integrations:[…], plugins:[{id, title, integrations:[id]}], pluginsDirectory}`.
+- `GET /api/admin/integrations` → `{schemaVersion:1, generatedAt, kinds[], integrations:[…], plugins:[{id, title, version?, source?, integrations:[id]}], pluginsDirectory}`. `pluginsDirectory` names the plugin directories, comma-separated when there are several.
   An integration: `{id, module, moduleTitle, core, title, titleKey?, kind, description, howTo, page, docs, toggle, toggleNote?, enabled, disabledBy?, disabledAt?, test, settings, status}`.
   `status` = `{state, summary, summaryT?, lastSuccessAt, lastError, configuredBy:[{source, name}], items:[{id, label, state, summary, summaryT?, lastSuccessAt, lastError?}]}`;
   `state` is `ok`, `stale`, `error`, `off`, `not-configured` or `disabled`; `source` is `site.json`, `env`, `ui`, `file` or `plugin`.
@@ -271,7 +271,7 @@ it may open. The web shell draws its sidebar, its pages and the Connect tab from
  "pages": [{"hash": "overview", "admin": false, "module": "home", "view": {"url": "/home-view.js", "export": "homePage"}},
            {"hash": "versions", "admin": true, "module": "security"}],
  "nav": [{"label": null, "labelKey": "Domov", "items": [{"hash": "overview", "label": null, "labelKey": "Přehled", "soon": false, "module": "home"}]}],
- "modules": [{"id": "home", "core": true, "title": "Overview"}],
+ "modules": [{"id": "home", "core": true, "title": "Overview", "version": "1.2.0", "source": "core"}],
  "tools": [{"name": "machine_upsert", "title": "Overview: create or replace a machine", "scope": "home:write", "write": true, "description": "…", "module": "home"}],
  "apiDocs": [{"title": "Router", "routes": [["GET", "/api/router", "read", "…"]]}],
  "strings": {"en": {"source text": "translation"}},
@@ -289,7 +289,7 @@ it may open. The web shell draws its sidebar, its pages and the Connect tab from
 | `setupRequired` | only when `true` | No owner account exists yet: show how to create one (`node scripts/setup.mjs`) instead of a sign-in. The field is absent once an owner exists |
 | `pages` | signed in (else `[]`) | Every routable page: `hash`, the `module` that owns it, and `view` (`url` of the page module and the name of its `export`). **`admin: true` here means "this caller may not open it"**: the page is listed so the client can refuse it by name, and it comes without `view` |
 | `nav` | signed in (else `[]`) | The sidebar: groups in order, each with `label` (shown as written) or `labelKey` (Czech source text to translate) and `items`. An item has `hash`, `label` / `labelKey`, `module`, `soon` (a placeholder without a page), and `icon` when the module named one (a name from `public/icons.js` or a short glyph). Entries the caller may not open, and hidden pages (`settings`, `welcome`, `search`), are not in it |
-| `modules` | signed in (else `[]`) | The loaded modules: `id`, `title`, `core` (`false` = a plugin) |
+| `modules` | signed in (else `[]`) | The loaded modules: `id`, `title`, `core` (`false` = a plugin), and where known `version` (a core module has the core's; a plugin its `plugin.json`'s) and `source` (`core`, or the plugin source's name). An unversioned plugin (no `plugin.json`) has neither |
 | `tools` | signed in | The MCP tools of the loaded modules, in the order `tools/list` returns them: `name`, `title`, the `scope` a key needs, `write` (`false` when that scope is read-only), `description` (the text agents read) and `module` (`core` for the tools defined in `server/mcp.mjs`). The whole reference, not filtered by the caller's scopes; no input schemas and nothing callable |
 | `apiDocs` | signed in | Rows the modules documented for the API reference: `[method, path, who, description]`, `who` being a scope id, `read`, `admin`, `password` or `security` |
 | `strings` | signed in (else `{}`) | Translations of module and site labels, by language |
@@ -1100,7 +1100,7 @@ route for that, and no MCP tool. The check itself is the integration `updates.ch
 Integrations); `HOME_HUB_UPDATE_CHECK=off` in the environment turns it off for good.
 
 - `GET /api/updates` (any signed-in account, or an API key: scope `read`) →
-  `{schemaVersion:1, generatedAt, state, code, summary, summaryT?, installed:{version, label, exact, commit, dataEpoch}, latest:{version, tag, url, publishedAt, notes} | null, updateAvailable, dismissed, quarantined:{version, at, reason} | null, checkedAt, failedAt, error, notBefore, nextCheckAt, repo, repoSource, channel, intervalHours, apply:{automatic:false, tag}, disabled?}`.
+  `{schemaVersion:1, generatedAt, state, code, summary, summaryT?, installed:{version, label, exact, commit, dataEpoch}, latest:{version, tag, url, publishedAt, notes} | null, updateAvailable, dismissed, quarantined:{version, at, reason} | null, checkedAt, failedAt, error, notBefore, nextCheckAt, repo, repoSource, channel, intervalHours, apply:{automatic:false, tag, command}, disabled?}`.
   - `state` is an integration state; `code` says which case it is:
 
     | `state` | `code` | Meaning |
@@ -1124,7 +1124,9 @@ Integrations); `HOME_HUB_UPDATE_CHECK=off` in the environment turns it off for g
   - `error` is short: `HTTP 403`, `timeout`, `ENOTFOUND`. `notBefore` is set while GitHub's rate limit asks the hub
     to wait (at most a day); `nextCheckAt` is the next scheduled attempt.
   - `quarantined` marks a release that was tried on this hub and rolled back (written to `state/updates.json` by
-    whatever applied it). `apply.tag` is the tag to switch the checkout to; `apply.automatic` is always `false`.
+    `scripts/update.mjs`, `docs/updating.md`). `apply.tag` is the release tag to switch to and `apply.command` the
+    command a person runs on the server for it, from the core checkout (`node scripts/update.mjs apply <tag>`;
+    `null` when no newer release is known); `apply.automatic` is always `false`.
 - `POST /api/updates/check` `{}` (administrator, password sign-in; never an API key or a device token) →
   `{checked, reason?, updates}`. `checked: false` with `reason` `too-soon` (one forced check a minute),
   `rate-limited`, `env-off` or `no-repo` means no request was made. `409 INTEGRATION_DISABLED` while it is off.

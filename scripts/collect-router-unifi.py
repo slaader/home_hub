@@ -11,8 +11,10 @@ the key is never sent before the pin matches, and nothing here prints or stores 
 Which gateway and which networks: local/site.json. The gateway is router.host, else the address of the
 machine with role "router"; the networks are lanCidrs (clients outside them are dropped); router.site is
 the UniFi site name. UNIFI_HOST, UNIFI_LAN and UNIFI_SITE override the file. HOME_HUB_SITE_CONFIG selects
-another file ("none" = no file). HOME_HUB_ROOT is where data/ and router-private/ live (default: the
-checkout, or its parent when the checkout is deployed as <root>/app next to data/).
+another file ("none" = no file), else site.json in HOME_HUB_CONFIG_DIR, else in HOME_HUB_HOME/config/. HOME_HUB_ROOT
+is where data/ and router-private/ live (default: the instance directory HOME_HUB_HOME, else the checkout, or its
+parent when the checkout is deployed as <root>/app next to data/); DATA_DIR, when set, is where the snapshot goes.
+The same rules as server/paths.mjs.
 
 Two backends, chosen by what exists under router-private/: unifi-api-key (Network 9.x integration API,
 X-API-KEY) or unifi-credentials.json (a dedicated View Only local admin signing in through the same
@@ -36,6 +38,8 @@ def default_root(env=os.environ, repo=REPO):
     """Where data/ and router-private/ live."""
     if env.get('HOME_HUB_ROOT'):
         return pathlib.Path(env['HOME_HUB_ROOT'])
+    if env.get('HOME_HUB_HOME'):
+        return pathlib.Path(env['HOME_HUB_HOME']).resolve()
     # A checkout deployed as <root>/app keeps its data and secrets beside the code, not inside it.
     if repo.name == 'app' and (repo.parent / 'data').is_dir():
         return repo.parent
@@ -47,8 +51,16 @@ def load_site(env=os.environ, repo=REPO):
     choice = env.get('HOME_HUB_SITE_CONFIG')
     if choice == 'none':
         return {}
+    if choice:
+        file = pathlib.Path(choice)
+    elif env.get('HOME_HUB_CONFIG_DIR'):
+        file = pathlib.Path(env['HOME_HUB_CONFIG_DIR']) / 'site.json'
+    elif env.get('HOME_HUB_HOME'):
+        file = pathlib.Path(env['HOME_HUB_HOME']) / 'config/site.json'
+    else:
+        file = repo / 'local/site.json'
     try:
-        data = json.loads((pathlib.Path(choice) if choice else repo / 'local/site.json').read_text())
+        data = json.loads(file.read_text())
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -82,7 +94,7 @@ KEY_FILE = PRIVATE / 'unifi-api-key'
 PIN_FILE = PRIVATE / 'unifi-cert-sha256'
 CRED_FILE = PRIVATE / 'unifi-credentials.json'
 SESSION_FILE = PRIVATE / 'unifi-session.json'
-TARGET = ROOT / 'data/router-observations.json'
+TARGET = (pathlib.Path(os.environ['DATA_DIR']) if os.environ.get('DATA_DIR') else ROOT / 'data') / 'router-observations.json'
 # The gateway, the networks it serves and its UniFi site name (see the module docstring).
 HOST, LANS, SITE = site_settings(load_site())
 PORT, BASE = 443, '/proxy/network/integration/v1'

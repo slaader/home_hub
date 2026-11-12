@@ -5,7 +5,7 @@
 //   1. HOME_HUB_SECRET_KEY        64 hex characters (containers, a service manager's secret store, tests)
 //   2. the macOS login Keychain   only with HOME_HUB_SECRET_KEYCHAIN=1: generic password, service "Home Hub",
 //                                 account "secret-key"; needs the login keychain unlocked (a LaunchDaemon may not have it)
-//   3. a key file                 HOME_HUB_SECRET_KEY_FILE, else secret.key next to AUTH_FILE (private/ by default;
+//   3. a key file                 HOME_HUB_SECRET_KEY_FILE, else secret.key next to AUTH_FILE (the private directory by default;
 //                                 a preview with its own AUTH_FILE gets its own key), 0600, created on first use
 // Opening tries the key of the source the file names (kid) first, then every other key that is there; the GCM tag
 // decides. A key is created only for sealing, only in the sealing source, only when it has none: a missing key is
@@ -19,7 +19,7 @@ import {createCipheriv,createDecipheriv,randomBytes,createHash} from 'node:crypt
 import {spawn} from 'node:child_process';
 import {readFile,mkdir,link,rm,open} from 'node:fs/promises';
 import path from 'node:path';
-import {repoRoot} from './edition.mjs';
+import {resolvePaths} from './paths.mjs';
 
 const HEX_KEY=/^[0-9a-f]{64}$/i,KIDS=['env','keychain','file'];
 const SERVICE='Home Hub',ACCOUNT='secret-key',NOT_FOUND=44;
@@ -67,8 +67,9 @@ export function fileSource(file){
    catch(e){throw locked(`a key cannot be written to ${file} (${e.code||e.message}); set HOME_HUB_SECRET_KEY or HOME_HUB_SECRET_KEY_FILE`);}
    finally{await rm(tmp,{force:true});}}};
 }
+// Next to the auth file: AUTH_FILE's directory, else the private directory (server/paths.mjs).
 export const defaultKeyFile=(env=process.env)=>env.HOME_HUB_SECRET_KEY_FILE?path.resolve(env.HOME_HUB_SECRET_KEY_FILE)
- :path.join(env.AUTH_FILE?path.dirname(path.resolve(env.AUTH_FILE)):path.join(repoRoot,'private'),'secret.key');
+ :path.join(path.dirname(path.resolve(resolvePaths(env).authFile)),'secret.key');
 
 /**
  * options: env, platform, keyFile, keychain (a source), useKeychain.

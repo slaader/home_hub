@@ -1,12 +1,14 @@
 # Plugins and site configuration
 
-Home Hub is a generic core plus whatever one household adds. The additions live in an overlay directory,
-`local/`, in two forms:
+Home Hub is a generic core plus whatever one household adds. The additions come in two forms:
 
-- **`local/site.json`** — facts about the site: its name, network, machines. Core reads it.
-- **`local/plugins/<id>/`** — features only this household has. Core loads them.
+- **`site.json`** — facts about the site: its name, network, machines. Core reads it.
+- **plugins** — features only this household has, each a directory with `plugin.json` and `index.mjs`. Core loads them.
 
-Core never imports from `local/`. A hub without `local/` works: it is empty and generic.
+Both live in the overlay directory `local/` of the core checkout (`local/site.json`, `local/plugins/<id>/`), or
+apart from the code: the site file in an instance's `config/` (`HOME_HUB_HOME`, `docs/storage.md`) and the plugins
+in plugin sources of their own ([Where plugins are](#where-plugins-are)). Core never imports from a plugin; a
+plugin imports core only by name ([Importing core](#importing-core)). A hub without either works: it is empty and generic.
 
 ```mermaid
 flowchart LR
@@ -50,7 +52,7 @@ the field. `HOME_HUB_SITE_CONFIG=/path/to/file.json` selects another file; `none
 | `router` | `{adapter, host, site}`: the router feed. `adapter` is `unifi` (included) or the id of an adapter a plugin provides; `host` is the gateway the included collector reads (default: the machine with role `router`); `site` its UniFi site name | No router feed: the router tile and page say what to set up |
 | `updates` | `{repo, channel, intervalHours}`: the update check. `repo` follows another GitHub repository's releases (`"owner/name"`, for a fork), `channel` is `stable` or `prerelease`, `intervalHours` is 6 to 168 | The repository in `package.json → homeHub.updates.repo`, stable releases, every 12 hours |
 | `strings.en` | English for your own labels (the UI's source language is Czech): `{"source text": "translation"}` | Your labels show as written |
-| `plugins.<id>` | Free-form settings for a plugin; core does not look inside | — |
+| `plugins.<id>` | Settings for a plugin. Core checks only that the keys its `plugin.json → config.required` names are there; the plugin validates the values | — |
 
 A machine:
 
@@ -79,18 +81,132 @@ Pictures: any image under `local/images/` is served at `/images/<same path>`. Th
 
 ## A plugin
 
-A plugin is a directory `local/plugins/<id>/` with an `index.mjs` whose default export is a module object.
-`<id>` must equal the object's `id`. Directories whose name starts with `_` or `.` are skipped.
-`HOME_HUB_PLUGINS_DIR=/another/dir` loads from elsewhere; `none` loads nothing.
+A plugin is a directory `<plugins>/<id>/` with an `index.mjs` whose default export is a module object, and a
+`plugin.json` that says what it is (below). `<id>` must equal the object's `id`. Directories whose name starts
+with `_` or `.` are skipped. Where `<plugins>` is: [Where plugins are](#where-plugins-are); by default
+`local/plugins/`.
 
 ```
 local/plugins/notes/
+  plugin.json        its version, the core range it supports, what it needs (read before any code runs)
   index.mjs          the module definition (below)
   server/            its server code
   public/            its browser files, served at /plugins/notes/<file>
   scripts/           its command-line tools
   tests/*.test.mjs   run by npm test
 ```
+
+### plugin.json
+
+```json
+{
+  "id": "notes",
+  "version": "1.0.0",
+  "title": "Notes",
+  "core": ">=1.2.0 <2.0.0",
+  "requires": {"compute": ">=1.0.0"},
+  "dataEpoch": 1,
+  "config": {"required": ["hosts"]},
+  "hostAgents": [{"id": "bridge", "title": "Host bridge", "entry": "scripts/bridge.mjs", "service": "launchd-agent",
+                  "health": {"socket": "private/bridge.sock", "get": "/status"}}]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `id` | Equals the directory name and `index.mjs`'s `id` |
+| `version` | The plugin's semver. Optional when its source's `package.json` has a `version`: the plugin then has the source's |
+| `title` | Optional; for people |
+| `core` | The Home Hub versions it supports: comparators joined by spaces (`>=1.2.0 <2.0.0`), `^1.2.0`, `~1.2.0`, `1.x`, `*`, and `a \|\| b` for either (`server/semver.mjs`). Optional when the source's `package.json` has `homeHub.core` |
+| `requires` | Other plugins it needs, each with a range. Use it instead of importing another plugin silently |
+| `dataEpoch` | A positive integer you raise whenever the plugin's own stored format changes |
+| `config.required` | Keys of `site.json → plugins.<id>` it cannot work without; a missing one stops the start, by name. Checking the values stays the plugin's job, in `setup` |
+| `hostAgents` | Code the plugin runs as a service on another machine ([Host agents](#host-agents)): `id`, `title`, `entry` (a `.mjs` file in the plugin), `service` (`launchd-agent`, `launchd-daemon` or `systemd-user`), `health` (`socket` relative to the agent's directory, and a `get` path it answers), `config` (a module of the plugin that says what the agent needs to know). Nothing about one household goes here: no label, path or machine; that is configuration |
+
+An unknown field, a wrong value, a core range this core is outside of, an unmet `requires` or a missing required
+setting stops the start with the plugin's name (`node server/index.mjs --check` runs every one of these checks and
+exits, opening nothing). A plugin **without** `plugin.json` still loads in 1.x, with one warning line (an
+"unversioned plugin"); 2.0 will require it. The start-up line names every plugin with its version
+(`Home Hub 1.2.0 (… 9 plugin(s): compute 1.0.0, …)`), and so do `GET /api/ui/manifest → modules[]` and the footer's
+tooltip.
+
+### Importing core
+
+A plugin imports core **by name**, never by a relative path into the core tree:
+
+```js
+import {tx, provenance, toolError} from 'home-hub/plugin-api';    // server code, scripts, host agents
+import {hub, createHandler, hashPassword} from 'home-hub/testing'; // tests
+```
+
+| Export | What it has |
+|---|---|
+| `home-hub/plugin-api` (`server/plugin-api.mjs`) | `tx`, `sentences` (text to translate), `worstState` (integrations), `provenance`, `authoredProvenance`, `collectorSource`, `toolError` (MCP refusals), `byteRange` (Range requests), `readRouter`, `mergeRouter` (the router census), `createKnowledgeEditor`, `entryHash`, `validateKnowledge` (the inventory file), `satisfies`, `validRange`, `compareVersions`, `parseVersion` (semver), `site`, `loadSite` (the site configuration, for a plugin's scripts), `resolvePaths` (where data and secrets are), `CORE_VERSION` |
+| `home-hub/testing` (`tests/plugin-testing.mjs`) | `createHandler`, `buildRegistry`, `STARTUP_PLUGINS`, the `hub(t, options)` helper with `credentials` and `knowledge`, `hashPassword`, `createAuth`, `createAccessStore`, `SCOPES`, `scopeFor`, `legacyScopes`, `site`, `loadSite`, `validateSite`, `machineKind`, `sshHosts`, the front-end test hook `BROWSER_PATHS_HOOK`, `CORE_FIXTURES`; and what a household's tests check their data against: `readEdition`, `homeDefinitions`, `stackLayouts`, `systemMachines`, `buildSystems`, `parseSystemsProbe`, `liveState`, `placements`, `buildGraph`, `cleanRequest`, `READ_PATHS`, `EVENT_PATH`, `walkKnowledge`, `findKnowledge`, `loadKnowledge`, `validStore`, `storeNames`, `softwareWatchPath` |
+
+These two files **are** the server-side plugin contract and fall under semver; anything not exported there is
+internal and may change in any release. The browser side is unchanged: page modules import `/views.js`, `/ui.js`,
+`/i18n.js` by URL, and a test imports a core browser module the same way (`await import('/i18n.js')`) under the
+test runner's front-end hook.
+
+How the name resolves, with nothing installed:
+
+- **A plugin inside the core tree** (`local/plugins/…`): Node's package self-reference. The nearest `package.json`
+  above the plugin is core's, named `home-hub`, and its `exports` map the two names.
+- **A plugin anywhere else**: one link, `node_modules/home-hub → <core checkout>`, in a directory above it (the
+  instance directory, or the plugin source). `node scripts/plugins.mjs link [--plugins DIR] [--at DIR]` makes it;
+  `node scripts/plugins.mjs list` shows every plugin directory, its plugins with versions, and which core the name
+  resolves to there. Node resolves the link to its real path, so the plugin gets the very modules core runs with.
+
+At start-up core checks it: if `home-hub` resolves from a plugin directory to **another** core (a link left pointing
+at an old checkout), the hub refuses to start and prints the `link` command, because two copies of core in one
+process would each keep their own state. A plugin that imports the name where it does not resolve fails to load
+with the same hint. The link points at core itself: no third-party package, no `npm install`.
+
+### Host agents
+
+A **host agent** is the part of a plugin that runs as a service on another machine than the hub (a bridge to that
+machine's runtimes, say). The plugin declares it in `plugin.json → hostAgents`; the household says where it runs, in
+`site.json → plugins.<plugin>.agents.<agent>.<machine>`:
+
+```json
+"plugins": {"notes": {"agents": {"bridge": {"studio": {
+  "target": "~/agents/notes", "label": "com.example.notes-bridge", "node": "/opt/homebrew/bin/node",
+  "env": {"NOTES_MODE": "live"}, "logs": "~/Library/Logs/notes"}}}}}
+```
+
+`node scripts/install-host-agent.mjs --plugin notes --agent bridge`, run **on that machine** (the hub never pushes code
+to another host), installs or updates it: `--dry-run` prints the change, `--target` and `--label` make a side-by-side
+test install, `--no-service` only lays the files out. It
+
+- copies the agent's import closure (`server/agent-closure.mjs`: the entry and everything it imports, following
+  `home-hub/*` through core's `exports`) as real files: plugin files at their path in the plugin source
+  (`<target>/plugins/<id>/…`, `<target>/lib/…`), core files under `<target>/node_modules/home-hub/`, so the agent runs
+  with no checkout and no link. Files with uncommitted changes are refused;
+- writes the agent's configuration, what the plugin's `config` module (`({site, machine}) => object`) returns, to
+  `<target>/config/<agent>.json` (0600), and `<target>/.agent-install.json`: the plugin and its version, the core
+  version, both commits, every file with its sha256. Files the previous record listed and the new one does not are removed;
+- archives the previous copy and service file, writes the service (a launchd agent or daemon, or a systemd user unit,
+  from `scripts/host-agent/`) with `HOME_HUB_HOME=<target>` and `HOME_HUB_AGENT_SOCKET=<target>/<health.socket>`,
+  restarts it and waits for the health `GET` to answer; otherwise it puts the archive back and starts the previous agent.
+
+The agent reads its configuration from `resolvePaths().config` and says what it is with `installedAgent()` (both from
+`home-hub/plugin-api`); a plugin that shows this on its integration card ("the bridge runs 1.0.0, the hub has 1.1.0")
+has the update check for host agents, derived locally with no network.
+
+### Where plugins are
+
+| In this order | Plugin directories |
+|---|---|
+| `HOME_HUB_PLUGINS_DIR` | One or more directories separated by `:` (`;` on Windows); `none` loads nothing |
+| `HOME_HUB_HOME/instance.json` | `{"sources": {"plugins": ["household"]}}` → `<home>/household/plugins` for each name. The same file tells the update command where core is and how the service is stopped, started and checked (`sources.core`, `service`, `health`, `backups`: `docs/updating.md`); the server only checks that those are well formed |
+| otherwise | `local/plugins/` in the core checkout (deprecated in 1.2, removed in 2.0) |
+
+A plugin id is unique across all of them. A **plugin source** is a directory that holds `plugins/` and a
+`package.json` of its own, `{"name", "version", "homeHub": {"core": "<range>"}}`: its version and core range are
+the defaults of the plugins in it that state none, and its name is the `source` the manifest reports.
+
+### The module object
 
 The whole contract, with every field optional except `id`:
 
@@ -117,7 +233,7 @@ export default {
      error: e => e.message === 'invalid' ? [400, 'NOTES_FAILED', 'Invalid note.'] : null},
   ],
 
-  // MCP tools, listed for keys that hold the scope. Throw toolError('…') (server/mcp.mjs) for a refusal.
+  // MCP tools, listed for keys that hold the scope. Throw toolError('…') (from 'home-hub/plugin-api') for a refusal.
   mcpTools: [{name: 'notes_list', scope: 'read', title: 'Notes', description: 'All notes.',
               inputSchema: {type: 'object', properties: {}, additionalProperties: false},
               run: (args, {state, principal, hub}) => ({notes: state.notes})}],
@@ -168,7 +284,7 @@ A handler gets one context object:
 | `canWrite`, `canAdmin`, `signedIn`, `device` | Shortcuts |
 | `json(status, data)`, `error(status, code, message)` | Replies |
 | `state` | What this module's `setup` returned |
-| `hub` | The hub: `site`, `directory` (data), `stateDirectory`, `db`, `auth`, `accessStore`, `registry`, `options`, `state(id)`, `collect(name)`, `provided(name)`, `integrationEnabled(id)`, `integrationDisabled(id)`, `onIntegrationChange(fn)`, `integrationSecret(id, key)` (see Integrations) |
+| `hub` | The hub: `site`, `directory` (data), `stateDirectory`, `db`, `auth`, `accessStore`, `registry`, `options`, `state(id)`, `collect(name)`, `provided(name)`, `integrationEnabled(id)`, `integrationDisabled(id)`, `onIntegrationChange(fn)`, `integrationSecret(id, key)` (see Integrations), `pluginData(id)`: the plugin's own data directory, `<data>/plugins/<id>/` (0700, made on first use; `docs/storage.md` → Where everything is). Keep files there, never in the plugin's code directory |
 | `subject` | Set it to what a write touched; it goes into the API write log |
 
 The pipeline does the common checks before your handler runs, in this order: the credential, admin-only path
@@ -196,7 +312,7 @@ A data route that backs a page should say where its data comes from, in the same
 fields, bounds the lists and writes `kind`, `lastAt` and `summary` for you:
 
 ```js
-import {provenance, authoredProvenance, collectorSource} from '../../../../server/provenance.mjs';
+import {provenance, authoredProvenance, collectorSource} from 'home-hub/plugin-api';
 
 // Your own sources, in reading order: manual, agent, config, collector, telemetry, plugin or other.
 json(200, {notes: state.notes, provenance: provenance([
@@ -216,6 +332,11 @@ hard-code a kind for a page. On the page, pass the answer's `provenance` to `pag
 
 The server does not start when a plugin is wrong. The message names the plugin and, for a clash, both sides.
 
+- Its `plugin.json`: one that does not parse, has an unknown field or a wrong value, names another id, supports
+  a core range this core is outside of, `requires` a plugin that is not loaded or not in range, or names a
+  `config.required` key the site does not set ([plugin.json](#pluginjson)).
+- The same plugin id in two plugin directories; a plugin directory from which `home-hub` resolves to another
+  core ([Importing core](#importing-core)).
 - An unknown field, a missing `handler`, a write route without `scope`, a `view` that is not in `assets`,
   an asset path with `..`, an asset file that does not exist.
 - Two modules registering the same route (method + path, or method + the same pattern), scope id, page hash,
@@ -369,7 +490,7 @@ Every toggle, test and settings change is a line in the access audit (`integrati
 it. Settings changes name the keys, never a value.
 
 Core's update check declares `updates.check` (kind `upstream`): whether a newer release of Home Hub exists
-(`server/update-check.mjs`; README → Updating says what it contacts). Its "Test now" is a real check, at most one
+(`server/update-check.mjs`; README → Updating says what it contacts; `docs/updating.md` is how an update is applied). Its "Test now" is a real check, at most one
 a minute. `HOME_HUB_UPDATE_CHECK=off` turns it off from the environment and takes the switch away. Its state file
 keys results by source (`core` today), so a plugin package that is released on its own can join the same card once
 plugins carry a version; today a plugin has no version to compare, so only core is checked.
@@ -458,9 +579,22 @@ Build text-safe DOM only: `el()` puts strings into text nodes and attributes. Ne
 
 ### Tests
 
-Put them in `local/plugins/<id>/tests/*.test.mjs`. `npm test` runs them after the core tests, with your
-`site.json` and all your plugins loaded. A test builds a hub with `createHandler` from `server/index.mjs` and
-passes fakes through its options (they arrive as `hub.options`); `tests/hub-helper.mjs` has a ready helper.
+Put them in `<plugin>/tests/*.test.mjs`, and tests that span plugins in the source's `tests/*.test.mjs`. For
+`local/`, `npm test` runs them after the core tests, with your `site.json` and all your plugins loaded. A test
+imports what it needs from `home-hub/testing`: it builds a hub with `createHandler` and passes fakes through its
+options (they arrive as `hub.options`), or uses the ready helper `hub(t, options)`.
+
+A plugin source elsewhere (a directory with `plugins/` and a `package.json`) runs its tests with core's runner:
+
+```bash
+node <core>/scripts/run-tests.mjs --plugins . [--plugins <another source>] [--site tests/fixtures/site.json]
+```
+
+It runs `<source>/plugins/*/tests/*.test.mjs` and `<source>/tests/*.test.mjs`, one run per source with every given
+source's plugins loaded, on `--site` (default: the source's `tests/fixtures/site.json`, else no site), with the same
+front-end hook and throwaway secret key as `npm test`, and prints one summary line named after the source's
+`package.json`. Core's own tests are not part of that run. The plugins see the core the link points to
+(`node scripts/plugins.mjs link`), so testing against another core is a matter of pointing the link at it.
 
 `hub.version` is the release that is running: `{version, dataEpoch, commit, exact, label}` (`server/version.mjs`).
 `exact` is `true` on the release tag of `version`, `false` on any other git checkout (`label` is then

@@ -3,8 +3,8 @@
 // because the "latest release" flag is not reliable (it pointed OpenCode at 1.19.5 while 2.2.6 was out).
 // fetchJson is injectable so the tests run offline.
 import {readFile} from 'node:fs/promises';
-import {fileURLToPath} from 'node:url';
 import {compareVersions,parseVersion} from './versions.mjs';
+import {privateFile} from './paths.mjs';
 
 const UA='home-hub-systems/1';
 export function upstreamKey(up){
@@ -25,11 +25,12 @@ export function collectUpstreams(registry){
 }
 
 // Optional GitHub token, so the 12-hourly check is not capped at 60 anonymous requests per hour.
-// Source: GITHUB_TOKEN in the environment, else the file GITHUB_TOKEN_FILE or <repo>/private/github-token
-// (gitignored, 0600). It is sent only to https://api.github.com, never logged and never written to data/.
-export const DEFAULT_GITHUB_TOKEN_FILE=fileURLToPath(new URL('../private/github-token',import.meta.url));
+// Source: GITHUB_TOKEN in the environment, else the file GITHUB_TOKEN_FILE or github-token in the private directory
+// (private/github-token by default, server/paths.mjs; gitignored, 0600). It is sent only to https://api.github.com,
+// never logged and never written to data/.
+export const defaultGithubTokenFile=(env=process.env)=>privateFile('github-token',env);
 const tokenOk=t=>typeof t==='string'&&/^[A-Za-z0-9_.-]{20,255}$/.test(t);
-export async function loadGithubToken({env=process.env,file=env.GITHUB_TOKEN_FILE||DEFAULT_GITHUB_TOKEN_FILE}={}){
+export async function loadGithubToken({env=process.env,file=env.GITHUB_TOKEN_FILE||defaultGithubTokenFile(env)}={}){
  const fromEnv=env.GITHUB_TOKEN?.trim();
  if(fromEnv)return tokenOk(fromEnv)?{token:fromEnv,source:'env'}:{token:null,source:'env',invalid:true};
  let raw;try{raw=(await readFile(file,'utf8')).trim();}catch(e){return {token:null,source:e.code==='ENOENT'?null:'file',...(e.code==='ENOENT'?{}:{invalid:true})};}

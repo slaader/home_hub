@@ -34,10 +34,10 @@ export default {
  'Vydání {version}':'Release {version}',
  'Otevřít na GitHubu':'Open on GitHub',
  'Poznámky k vydání':'Release notes',
- 'Home Hub se neaktualizuje sám. Na serveru přepni checkout na {tag} a restartuj ho; postup je v README (Updating).':
-  'Home Hub does not update itself. On the server, switch the checkout to {tag} and restart it; the README (Updating) has the steps.',
- 'Home Hub se neaktualizuje sám. Aktualizaci provede správce na serveru; postup je v README (Updating).':
-  'Home Hub does not update itself. An administrator updates it on the server; the README (Updating) has the steps.',
+ 'Home Hub se neaktualizuje sám. Na serveru spusť v jeho checkoutu příkaz níže: ověří vydání {tag}, zazálohuje data, přepne, restartuje a při potížích se vrátí zpět. Postup je v docs/updating.md.':
+  'Home Hub does not update itself. On the server, run the command below in its checkout: it checks release {tag}, archives the data, switches, restarts, and goes back if anything fails. docs/updating.md has the steps.',
+ 'Home Hub se neaktualizuje sám. Aktualizaci provede správce na serveru příkazem scripts/update.mjs; postup je v docs/updating.md.':
+  'Home Hub does not update itself. An administrator updates it on the server with scripts/update.mjs; docs/updating.md has the steps.',
  'V patičce nepřipomínat':'Do not show in the footer',
  'V patičce se tohle vydání nepřipomíná.':'The footer does not point at this release.',
  'Vydání {version} se už v patičce nepřipomíná.':'The footer no longer points at release {version}.',

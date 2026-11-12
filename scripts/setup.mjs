@@ -19,10 +19,11 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {hashPassword} from '../server/auth.mjs';
 import {validCredentials} from '../server/access-store.mjs';
+import {resolvePaths} from '../server/paths.mjs';
 
-const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 export const USERNAME=/^[a-z][a-z0-9._-]{2,39}$/;
-export const defaultAuthFile=(env=process.env)=>env.AUTH_FILE?path.resolve(env.AUTH_FILE):path.join(root,'private','auth.json');
+// AUTH_FILE, else auth.json in the private directory (private/ of this checkout, or of HOME_HUB_HOME; server/paths.mjs).
+export const defaultAuthFile=(env=process.env)=>path.resolve(resolvePaths(env).authFile);
 export const passwordProblem=p=>typeof p!=='string'||p.length<12?'The password needs at least 12 characters.':p.length>256?'The password may have at most 256 characters.':/[\u0000-\u001f\u007f]/.test(p)?'The password must not contain control characters.':null;
 
 /**

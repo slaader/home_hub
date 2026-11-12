@@ -12,12 +12,11 @@ import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {check} from './check-knowledge.mjs';
+import {resolvePaths} from '../server/paths.mjs';
 import {EDITABLE,ENTRY_FIELDS,SECRET_FIELDS,ENTRY_ID,LIMITS,withFields,dependents} from '../public/inventory-rules.js';
 export {EDITABLE,LIMITS};
-const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const run=promisify(execFile);
 const HASH=/^[a-f0-9]{64}$/,DATE=/^\d{4}-\d{2}-\d{2}$/;
 const plain=v=>v&&typeof v==='object'&&!Array.isArray(v);
@@ -146,7 +145,7 @@ export const bulkSummary=results=>({create:results.filter(r=>r.action==='create'
  * the script named by KNOWLEDGE_PUBLISH (e.g. one that copies the file to the machine that serves it).
  * secretStores: the site's own store names; default = the site this process loaded.
  */
-export function createKnowledgeEditor({file=path.join(root,'data','knowledge.json'),secretStores,publish=process.env.KNOWLEDGE_PUBLISH?()=>run(path.resolve(process.env.KNOWLEDGE_PUBLISH),[],{timeout:30000}):async()=>{}}={}){
+export function createKnowledgeEditor({file=path.join(resolvePaths().data,'knowledge.json'),secretStores,publish=process.env.KNOWLEDGE_PUBLISH?()=>run(path.resolve(process.env.KNOWLEDGE_PUBLISH),[],{timeout:30000}):async()=>{}}={}){
  let busy=false;
  const read=async()=>{let text;try{text=await readFile(file,'utf8');}catch(e){if(e.code==='ENOENT')return emptyDoc();throw e;}return JSON.parse(text);};
  const write=async doc=>{await mkdir(path.dirname(file),{recursive:true});const tmp=`${file}.edit-${process.pid}`;await writeFile(tmp,JSON.stringify(doc,null,2)+'\n',{mode:0o600});await rename(tmp,file);};

@@ -8,15 +8,16 @@
 // Reads only the files named; fetches nothing. Records are de-duplicated against what the store holds (by
 // metricKey: machine, runtime, the runtime's record id and its time), so running it twice adds nothing; a
 // record that names a client is kept beside an unattributed copy, and reading prefers it. Writes to
-// $STATE_DIR, else $DATA_DIR/state, else data/state of this checkout: <state>/runtimes/<machine>/.
+// $STATE_DIR, else $DATA_DIR/state, else data/state of HOME_HUB_HOME or of this checkout (server/paths.mjs):
+// <state>/runtimes/<machine>/.
 // Stop the hub first, or restart it after: a running hub keeps its own window of known keys.
 import {readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createRequestHistory,fromImportLine} from '../server/runtime-history.mjs';
+import {resolvePaths} from '../server/paths.mjs';
 
-const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-export function stateDirectory(env=process.env){return env.STATE_DIR||path.join(env.DATA_DIR||path.join(root,'data'),'state');}
+export function stateDirectory(env=process.env){return resolvePaths(env).state;}
 export function parseArgs(argv){
  const out={machine:null,dryRun:false,files:[]};
  for(let i=0;i<argv.length;i++){

@@ -100,7 +100,7 @@ export function exportPublic(outDir,{root=repoRoot,force=false,log=()=>{}}={}){
  writeFileSync(path.join(out,'edition.json'),'{"edition":"public"}\n');
  writeFileSync(path.join(out,'README.md'),readme);
  // The overlay, state and secrets of whoever runs the public tree stay out of their repository too.
- writeFileSync(path.join(out,'.gitignore'),['data/','private/','state/','router-private/','local/','*.pem','*.key','!tests/fixtures/tls-*.key','node_modules/','.DS_Store','__pycache__/',''].join('\n'));
+ writeFileSync(path.join(out,'.gitignore'),['data/','private/','state/','router-private/','backups/','local/','*.pem','*.key','!tests/fixtures/tls-*.key','node_modules/','.DS_Store','__pycache__/',''].join('\n'));
  log(`${files.length} files → ${out}`);
  return {files:files.length+3,out,commit}; // + edition.json, README.md, .gitignore
 }

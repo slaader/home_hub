@@ -12,19 +12,23 @@
 //   create-viewer / delete-viewer                                                                        (the older names of create-user / delete-user)
 //
 // --root DIR is the checkout that holds private/ (default: this one); --state DIR is where access.json lives
-// (default: STATE_DIR, else <root>/data/state, else the older <root>/state when that is where the file is).
+// (default: STATE_DIR, else <data>/state, else the older <root>/state when that is where the file is). With
+// HOME_HUB_HOME, DATA_DIR or HOME_HUB_PRIVATE_DIR set, those decide (server/paths.mjs), as for the server.
 // --label NAME (or HOME_HUB_LAUNCHD_LABEL) names the launchd job to check, when the hub runs as one.
 // Secrets (a generated password, a key) go only into the --output file (0600, must not exist), never to the terminal.
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {createAccessStore} from '../server/access-store.mjs';
+import {resolvePaths} from '../server/paths.mjs';
 const args=process.argv.slice(2),command=args.shift();
 function option(name){const i=args.indexOf('--'+name);return i<0?undefined:args[i+1];}
 const root=option('root')||path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),output=option('output');
 const label=option('label')||process.env.HOME_HUB_LAUNCHD_LABEL;
 if(label&&os.platform()==='darwin'&&spawnSync('/bin/launchctl',['print',`gui/${process.getuid()}/${label}`],{stdio:'ignore'}).status===0)throw new Error('Stop Home Hub before local access administration. Use Users and API in the web UI while the service runs.');
-const legacyState=path.join(root,'state'),state=option('state')||process.env.STATE_DIR||(fs.existsSync(path.join(legacyState,'access.json'))&&!fs.existsSync(path.join(root,'data','state','access.json'))?legacyState:path.join(root,'data','state'));
-const authFile=process.env.AUTH_FILE||path.join(root,'private/auth.json');
+// Where the state and the auth file are: the environment (HOME_HUB_HOME, STATE_DIR, AUTH_FILE, …), else this root's (server/paths.mjs).
+const paths=resolvePaths(process.env,root);
+const legacyState=path.join(root,'state'),state=option('state')||process.env.STATE_DIR||(!paths.home&&!process.env.DATA_DIR&&fs.existsSync(path.join(legacyState,'access.json'))&&!fs.existsSync(path.join(paths.state,'access.json'))?legacyState:paths.state);
+const authFile=paths.authFile;
 const credentials=JSON.parse(fs.readFileSync(authFile,'utf8')),store=createAccessStore(state,credentials);
 const SECRET=['create-key','create-viewer','create-user','create-account'];
 if(SECRET.includes(command)&&(!output||!path.isAbsolute(output)||fs.existsSync(output)))throw new Error('Provide an unused private absolute --output path before creating credentials.');

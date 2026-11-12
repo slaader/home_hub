@@ -1,14 +1,15 @@
 // Site configuration: everything that describes one particular household (its name, LAN, machines,
 // inventory vocabulary, seed projects). Core code never hardcodes any of it; it reads this module.
 //   local/site.json            the real file (private overlay, not part of the public export)
+//   <config>/site.json         the same in an instance directory (HOME_HUB_HOME or HOME_HUB_CONFIG_DIR; server/paths.mjs)
 //   config/site.example.json   a generic example to copy
 //   HOME_HUB_SITE_CONFIG       another path (tests, a second instance); "none" = no file
 // A missing file is fine: the hub runs empty and generic. A file that is present but wrong is a loud
 // start-up error, never a silent fallback. Plugins keep their own settings under "plugins".<id>.
-import {readFileSync,existsSync} from 'node:fs';
-import path from 'node:path';
+import {readFileSync} from 'node:fs';
 import os from 'node:os';
 import {repoRoot} from './edition.mjs';
+import {resolvePaths} from './paths.mjs';
 
 const MACHINE_ID=/^[a-z][a-z0-9_-]{1,31}$/;
 export const MACHINE_ROLES=Object.freeze(['computer','nas','router','other']);
@@ -171,7 +172,8 @@ function deepFreeze(v){if(v&&typeof v==='object'&&!Object.isFrozen(v)){Object.fr
 export const EMPTY_SITE=validateSite({});
 
 // --- loading ---------------------------------------------------------------------------------
-export const siteConfigPath=(env=process.env,root=repoRoot)=>env.HOME_HUB_SITE_CONFIG==='none'?null:env.HOME_HUB_SITE_CONFIG?path.resolve(env.HOME_HUB_SITE_CONFIG):path.join(root,'local','site.json');
+// The site file: HOME_HUB_SITE_CONFIG, else site.json in the configuration directory (server/paths.mjs).
+export const siteConfigPath=(env=process.env,root=repoRoot)=>resolvePaths(env,root).siteConfig;
 export function loadSite({file=siteConfigPath()}={}){
  if(!file)return EMPTY_SITE;
  let text;try{text=readFileSync(file,'utf8');}catch(e){if(e.code==='ENOENT')return EMPTY_SITE;throw new Error(`site config: cannot read ${file}: ${e.message}`);}
@@ -192,13 +194,10 @@ export const inLan=(s,ip)=>inCidrs(ip,s.lanCidrs);
 export const sshHosts=(s,pick=()=>true)=>new Map(s.machines.filter(m=>m.ssh&&pick(m)).map(m=>[m.id,m.ssh.alias]));
 // What the browser may know before and after sign-in (GET /api/ui/manifest).
 export const publicSite=s=>({name:s.siteName,timeZone:s.timeZone,defaultLanguage:s.defaultLanguage,lanCidrs:[...s.lanCidrs]});
-// The software watch list (versions to follow per machine): SOFTWARE_WATCH_FILE, else the site's own
-// local/software-watch.json, else the generic example shipped in config/.
-export function softwareWatchPath(env=process.env,root=repoRoot){
- if(env.SOFTWARE_WATCH_FILE)return path.resolve(env.SOFTWARE_WATCH_FILE);
- const own=path.join(root,'local','software-watch.json');
- return existsSync(own)?own:path.join(root,'config','software-watch.json');
-}
+// The software watch list (versions to follow per machine): SOFTWARE_WATCH_FILE, else software-watch.json beside
+// the site file, else none (server/paths.mjs). The same answer as server/software-watch.mjs → watchPath; kept
+// here for older callers. config/software-watch.json is an example to copy, never the active list.
+export const softwareWatchPath=(env=process.env,root=repoRoot)=>resolvePaths(env,root).softwareWatch;
 
 // The hub's own IPv4 address inside the site's networks (lanCidrs), or null when it has none there: what another
 // machine sees the hub connect from (backups' from="…", the telemetry guides' firewall rules).

@@ -3,7 +3,8 @@ os.environ['UNIFI_HOST'] = '10.0.0.1'
 os.environ.pop('UNIFI_LAN', None)
 os.environ['HOME_HUB_SITE_CONFIG'] = 'none'  # the module settings come from the environment above, never from a real site
 os.environ.pop('UNIFI_SITE', None)
-os.environ.pop('HOME_HUB_ROOT', None)
+for name in ('HOME_HUB_ROOT', 'HOME_HUB_HOME', 'HOME_HUB_CONFIG_DIR', 'DATA_DIR'):
+    os.environ.pop(name, None)  # where data/ and router-private/ are comes from each test, never from the shell
 spec = importlib.util.spec_from_file_location('unifi', pathlib.Path(__file__).resolve().parents[1] / 'scripts/collect-router-unifi.py')
 unifi = importlib.util.module_from_spec(spec); spec.loader.exec_module(unifi)
 NOW = '2026-10-31T21:00:00+00:00'
@@ -147,6 +148,12 @@ class UnifiTests(unittest.TestCase):
    self.assertEqual(unifi.default_root({}, root / 'app'), root, 'deployed as <root>/app beside data/')
    self.assertEqual(unifi.default_root({}, root / 'data'), root / 'data', 'otherwise the checkout itself')
    self.assertEqual(unifi.default_root({'HOME_HUB_ROOT': '/srv/hub'}, root), pathlib.Path('/srv/hub'))
+   self.assertEqual(unifi.default_root({'HOME_HUB_HOME': str(root)}, root / 'data'), root.resolve(), 'an instance directory holds data/ and router-private/')
+   self.assertEqual(unifi.default_root({'HOME_HUB_ROOT': '/srv/hub', 'HOME_HUB_HOME': str(root)}, root), pathlib.Path('/srv/hub'), 'HOME_HUB_ROOT wins')
+   (root / 'config').mkdir(); (root / 'config/site.json').write_text(json.dumps({'router': {'site': 'inst'}}))
+   self.assertEqual(unifi.load_site({'HOME_HUB_HOME': str(root)}, root / 'data')['router']['site'], 'inst', 'the instance configuration')
+   self.assertEqual(unifi.load_site({'HOME_HUB_CONFIG_DIR': str(root)}, root / 'data')['router']['site'], 'home', 'a configuration directory of its own')
+   self.assertEqual(unifi.load_site({'HOME_HUB_SITE_CONFIG': 'none', 'HOME_HUB_HOME': str(root)}), {}, 'none still means none')
  def test_several_networks(self):
   saved = unifi.LANS
   try:

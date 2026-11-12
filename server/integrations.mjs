@@ -11,9 +11,10 @@ import {readFileSync,existsSync} from 'node:fs';
 import {mkdir,writeFile,rename} from 'node:fs/promises';
 import path from 'node:path';
 import {secretIn} from './home-devices.mjs';
+import {INTEGRATION_STATES,worstState} from './integration-states.mjs';
 
 export const INTEGRATION_KINDS=Object.freeze(['telemetry','llm-runtimes','router','collector','upstream','storage','bridge','other']);
-export const INTEGRATION_STATES=Object.freeze(['ok','stale','error','off','not-configured','disabled']);
+export {INTEGRATION_STATES};
 export const CONFIG_SOURCES=Object.freeze(['site.json','env','ui','file','plugin']);
 export const SETTING_TYPES=Object.freeze(['text','number','boolean','select']);
 // <module id>.<name>: the module part is the id of the module that declares it.
@@ -109,16 +110,9 @@ export function normalizeStatus(raw){
  return {state:plain(raw)?stateOf(r.state):'error',summary:summary.text,...(summary.parts?{summaryT:summary.parts}:{}),
   lastSuccessAt:iso(r.lastSuccessAt),lastError:r.lastError?errorText(r.lastError):null,configuredBy,items};
 }
-// The worst of a few item states, for a status made of parts (several hosts, several bridges).
-// No parts, or only parts that are not configured: "not-configured". Everything fine: "ok". Some
-// broken and some fine: "stale" (it works, partly). Nothing fine: "error".
-export function worstState(states){
- const live=states.filter(s=>s!=='not-configured'&&s!=='off');
- if(!live.length)return states.includes('off')?'off':'not-configured';
- if(live.every(s=>s==='ok'))return 'ok';
- if(live.some(s=>s==='ok'||s==='stale'))return 'stale';
- return 'error';
-}
+// worstState lives in server/integration-states.mjs, a module without imports, so the plugin API (and a host agent
+// that imports it) does not pull in this whole file.
+export {worstState};
 
 const deadline=(promise,ms)=>new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('timeout')),ms);timer.unref?.();
  Promise.resolve(promise).then(v=>{clearTimeout(timer);resolve(v);},e=>{clearTimeout(timer);reject(e);});});

@@ -9,15 +9,14 @@
 // (local/software-watch.json); without one there is nothing to check and nothing is written.
 import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
 import path from 'node:path';
-import {fileURLToPath} from 'node:url';
 import {checkUpstreams,createFetchJson,loadGithubToken} from '../server/systems-upstream.mjs';
 import {readWatch} from '../server/software-watch.mjs';
 import {collectorRun} from '../server/collector-run.mjs';
+import {resolvePaths} from '../server/paths.mjs';
 
-const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const args=process.argv.slice(2);
 const opt=name=>{const i=args.indexOf(name);return i>=0?args[i+1]:null;};
-const dataDir=path.resolve(opt('--data')||process.env.DATA_DIR||path.join(root,'data'));
+const dataDir=path.resolve(opt('--data')||resolvePaths().data);
 const outDir=process.env.SYSTEMS_DIR||path.join(dataDir,'systems');
 const {registry,source}=await readWatch();
 if(!registry.items.length){

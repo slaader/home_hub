@@ -20,6 +20,7 @@ import {readBuild} from './build-info.mjs';
 import {readVersion} from './version.mjs';
 import {repoRoot,readEdition} from './edition.mjs';
 import {site as loadedSite,siteConfigPath} from './site-config.mjs';
+import {resolvePaths,privateFile,pluginDataDirectory} from './paths.mjs';
 import {defineModule,createRegistry,loadPlugins} from './plugins.mjs';
 import {createIntegrationStore,createSecretStore} from './integrations.mjs';
 import sessionModule from './core/session.mjs';
@@ -50,8 +51,9 @@ export const PAGE_CSP=`default-src 'self'; script-src 'self'; style-src 'self'${
 
 // Core modules, in set-up order (a later one may use the state of an earlier one).
 export const CORE_MODULES=Object.freeze([sessionModule,shellModule,accessModule,homeModule,runtimesModule,inventoryModule,trackerModule,reviewModule,securityModule,routerModule,integrationsModule,modelsModule,backupsModule,gitLfsModule,updatesModule].map(m=>defineModule(m,{core:true})));
-// Plugins found in the overlay directory when the process started.
-export const STARTUP_PLUGINS=Object.freeze(await loadPlugins());
+// Plugins found in the plugin directories when the process started (server/plugins.mjs → pluginsDirectories), each
+// checked against its plugin.json and the site's plugins.<id> settings.
+export const STARTUP_PLUGINS=Object.freeze(await loadPlugins(undefined,{site:loadedSite()}));
 // Core + plugins as one registry; scopes of every module join the scope table (server/scopes.mjs).
 export function buildRegistry(plugins=STARTUP_PLUGINS){
  const registry=createRegistry([...CORE_MODULES,...plugins.map(p=>Object.isFrozen(p)&&p.routes?p:defineModule(p))],{reservedTools:MCP_TOOLS.map(t=>t.name)});
@@ -79,7 +81,7 @@ export function siteImages(directory){
  * stateDirectory = what the hub writes (hub.db, access.json, home/, tickets/, review/).
  * site = the site configuration (default: local/site.json); plugins = module objects to load instead of
  * the overlay found at start-up (tests). integrationSecretsFile: where write-only integration settings
- * are kept (default INTEGRATION_SECRETS_FILE, else private/integrations.json). version: what hub.version says
+ * are kept (default INTEGRATION_SECRETS_FILE, else integrations.json in the private directory, server/paths.mjs). version: what hub.version says
  * instead of this checkout's own (tests). Every other option is handed to the modules as hub.options.
  */
 export function createHandler(options) {
@@ -95,7 +97,7 @@ export function createHandler(options) {
   // Which integrations an administrator turned off (data/state/integrations.json) and the write-only
   // values of their settings (private/integrations.json). server/integrations.mjs, docs/plugins.md.
   const integrationStore=options.integrationStore||createIntegrationStore(stateDirectory);
-  const integrationSecrets=createSecretStore(options.integrationSecretsFile||process.env.INTEGRATION_SECRETS_FILE||path.join(root,'private','integrations.json'));
+  const integrationSecrets=createSecretStore(options.integrationSecretsFile||process.env.INTEGRATION_SECRETS_FILE||privateFile('integrations.json'));
   // A provider an integration lists under `provides` answers nothing while that integration is off.
   const silenced=(module,name)=>registry.integrations.some(i=>i.module===module&&i.provides.includes(name)&&!integrationStore.enabled(i.id));
   const providers=name=>registry.providers(name).filter(p=>!silenced(p.module,name));
@@ -110,6 +112,8 @@ export function createHandler(options) {
    integrationDisabled:id=>{const info=integrationStore.disabledInfo(id);if(!info)return null;const i=registry.integration(id);return {id,title:i?.title??id,...(i?.titleKey?{titleKey:i.titleKey}:{}),by:info.by,at:info.at};},
    onIntegrationChange:listener=>integrationStore.onChange(listener),
    integrationSecret:(id,key)=>integrationSecrets.get(id,key),
+   // A plugin's own data directory, <data>/plugins/<id>/ (0700, made on first use; server/paths.mjs): never its code directory.
+   pluginData:id=>{if(!registry.module(id))throw new Error(`pluginData: no module "${id}" is loaded`);return pluginDataDirectory(directory,id);},
    integrations:{store:integrationStore,secrets:integrationSecrets}};
   for(const m of registry.modules)states.set(m.id,m.setup?(m.setup(hub)??{}):{});
   const assets=new Map(registry.assets);
@@ -207,9 +211,19 @@ export function createHandler(options) {
   handler.stop=()=>Promise.all(registry.pollers.filter(p=>p.stop).map(p=>Promise.resolve().then(()=>p.stop(states.get(p.module),hub)).catch(()=>{})));
   return handler;
 }
+if(process.argv[1]===fileURLToPath(import.meta.url)&&process.argv.includes('--check')){
+  // node server/index.mjs --check: everything a start checks before it opens anything (the site file, every plugin and
+  // its plugin.json, the registry, the auth file), then exit. Writes nothing; 0 when this hub would start.
+  const paths=resolvePaths(),plugins=startupRegistry.modules.filter(m=>!m.core);
+  if(existsSync(paths.authFile)&&!validCredentials(JSON.parse(await readFile(paths.authFile,'utf8'))))throw new Error(`Invalid auth configuration (${paths.authFile})`);
+  console.info(`check ok: ${startupLine({version:HUB_VERSION,edition:readEdition(),plugins,port:0}).replace(/ listening on \d+$/,'')}; site ${siteConfigPath()??'none'}`);
+  process.exit(0);
+}
 if(process.argv[1]===fileURLToPath(import.meta.url)){
-  const directory=process.env.DATA_DIR||path.join(root,'data');
-  const authFile=process.env.AUTH_FILE||path.join(root,'private/auth.json');
+  // Where data, state and secrets live: HOME_HUB_HOME and friends, else this checkout's data/ and private/ (server/paths.mjs).
+  const paths=resolvePaths();
+  const directory=paths.data;
+  const authFile=paths.authFile;
   // First run: without an auth file the hub starts with no owner and shows "finish setup" instead of a
   // sign-in; `node scripts/setup.mjs` creates the owner, and the running hub picks the file up. A file
   // that exists but is not a valid one still stops the server.
@@ -219,10 +233,10 @@ if(process.argv[1]===fileURLToPath(import.meta.url)){
   const preview=process.env.LOCAL_PREVIEW==='1';const port=Number(process.env.PORT||8781);
   // Where browsers reach this hub: ORIGIN, else the site's publicOrigin; a local preview is its own origin.
   const origin=process.env.ORIGIN||(preview?`http://127.0.0.1:${port}`:loadedSite().publicOrigin);
-  if(!origin)throw new Error('Set ORIGIN (or publicOrigin in local/site.json) to the URL browsers use, or run with LOCAL_PREVIEW=1.');
+  if(!origin)throw new Error('Set ORIGIN (or publicOrigin in site.json) to the URL browsers use, or run with LOCAL_PREVIEW=1.');
   const handler=createHandler({directory,credentials,authFile,origin,secure:!preview});
   handler.start();
-  const server=(preview||process.env.HTTP_BEHIND_PROXY==='1')?http.createServer(handler):https.createServer({key:await readFile(process.env.TLS_KEY||path.join(root,'private/server.key')),cert:await readFile(process.env.TLS_CERT||path.join(root,'private/server.crt')),minVersion:'TLSv1.2'},handler);
+  const server=(preview||process.env.HTTP_BEHIND_PROXY==='1')?http.createServer(handler):https.createServer({key:await readFile(process.env.TLS_KEY||privateFile('server.key')),cert:await readFile(process.env.TLS_CERT||privateFile('server.crt')),minVersion:'TLSv1.2'},handler);
   server.requestTimeout=10000;server.headersTimeout=10000;
   const plugins=startupRegistry.modules.filter(m=>!m.core);
   server.listen(port,process.env.BIND_HOST||(preview?'127.0.0.1':'0.0.0.0'),()=>{
@@ -233,13 +247,14 @@ if(process.argv[1]===fileURLToPath(import.meta.url)){
 }
 
 // The first line of the log: which release this is, which tree, which plugins, where it listens.
-export const startupLine=({version,edition,plugins=[],port})=>`Home Hub ${version.label} (${edition} edition, ${plugins.length} plugin(s)${plugins.length?': '+plugins.map(p=>p.id).join(', '):''}) listening on ${port}`;
+// A plugin with a plugin.json is named with its version ("compute 1.0.0").
+export function startupLine({version,edition,plugins=[],port}){return `Home Hub ${version.label} (${edition} edition, ${plugins.length} plugin(s)${plugins.length?': '+plugins.map(p=>p.version?`${p.id} ${p.version}`:p.id).join(', '):''}) listening on ${port}`;}
 // <state>/run.json (0600), written once the server listens: what is answering right now. A tool that changed the
 // code (an update, a deploy) reads it to confirm that the process running is the one it started. /healthz says
 // only {ok:true}, so nobody learns the version without a sign-in.
 export async function writeRunFile(stateDirectory,{version,plugins=[],pid=process.pid,now=Date.now()}){
  const file=path.join(stateDirectory,'run.json'),tmp=`${file}.${pid}.tmp`;
- const doc={version:version.version,commit:version.commit,exact:version.exact,dataEpoch:version.dataEpoch,pid,startedAt:new Date(now).toISOString(),plugins:plugins.map(p=>({id:p.id}))};
+ const doc={version:version.version,commit:version.commit,exact:version.exact,dataEpoch:version.dataEpoch,pid,startedAt:new Date(now).toISOString(),plugins:plugins.map(p=>({id:p.id,...(p.version?{version:p.version}:{})}))};
  await mkdir(stateDirectory,{recursive:true,mode:0o700});
  await writeFile(tmp,JSON.stringify(doc,null,1)+'\n',{mode:0o600});await rename(tmp,file);
  return doc;

@@ -1,6 +1,6 @@
 // Core module "updates": which release of Home Hub is running and whether a newer one is known
 // (server/update-check.mjs has the rules). The hub only tells: there is no route, button or MCP tool that
-// installs anything; a person applies an update on the server (README → Updating).
+// installs anything; a person applies an update on the server, with scripts/update.mjs (docs/updating.md).
 //   GET  /api/updates          what is known (scope read)
 //   POST /api/updates/check    look now, at most once a minute (administrator, password sign-in)
 //   POST /api/updates/dismiss  {version}: stop pointing at that release in the footer (the same)
@@ -20,9 +20,11 @@ const zone=hub=>({timeZone:hub.site.timeZone});
 export function updatesPayload(state,hub){
  const view=state.checker.view({repoSource:state.settings.repoSource}),disabled=view.code==='disabled'?hub.integrationDisabled(UPDATE_INTEGRATION):null;
  return {...view,...field('summary',updateSummary(view,zone(hub))),...(disabled?{disabled}:{}),
-  // The hub never applies an update. `tag` is what to switch the checkout to.
-  apply:{automatic:false,tag:view.updateAvailable?view.latest.tag:null}};
+  // The hub never applies an update. `tag` is the release to switch to and `command` what a person runs on the
+  // server for it, from the core checkout (docs/updating.md). A tag that is not a plain release tag gets no command.
+  apply:{automatic:false,tag:view.updateAvailable?view.latest.tag:null,command:view.updateAvailable?applyCommand(view.latest.tag):null}};
 }
+export const applyCommand=tag=>typeof tag==='string'&&/^v[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/.test(tag)?`node scripts/update.mjs apply ${tag}`:null;
 const status=(state,hub)=>integrationStatus(state.checker.view({repoSource:state.settings.repoSource}),zone(hub));
 // Checking and dismissing are an administrator's, signed in with a password: no API key, no device token.
 const adminOnly=handler=>c=>c.canAdmin?handler(c):c.error(403,'ADMIN_REQUIRED','Administrator password sign-in is required.');
@@ -54,7 +56,7 @@ export default {
     catch(e){if(e.message==='invalid')return c.error(409,'UPDATE_NOT_CURRENT','Tohle není nejnovější známé vydání.');throw e;}
     return c.json(200,{updates:updatesPayload(c.state,c.hub)});})},
  ],
- integrations:[{id:UPDATE_INTEGRATION,title:'Kontrola aktualizací Home Hubu',kind:'upstream',docs:'README.md → Updating',
+ integrations:[{id:UPDATE_INTEGRATION,title:'Kontrola aktualizací Home Hubu',kind:'upstream',docs:'docs/updating.md',
   toggle:!ENV_OFF,toggleNote:'Vypnuto proměnnou prostředí HOME_HUB_UPDATE_CHECK=off. Zapnout jde jen tam.',
   description:'Zhruba dvakrát denně se zeptá GitHubu, jestli vyšlo novější vydání Home Hubu: dva dotazy GET na api.github.com, nic se neposílá. Jen oznamuje; aktualizaci nikdy neinstaluje sám. Vypnutá: Home Hub kvůli aktualizacím nekontaktuje nikoho.',
   status:(state,hub)=>status(state,hub),
@@ -65,7 +67,7 @@ export default {
   async run(args,{hub,state}){
    const u=updatesPayload(state,hub),v=hub.version;
    return {version:v.version,label:v.label,commit:v.commit,exact:v.exact,dataEpoch:v.dataEpoch,
-    plugins:hub.registry.modules.filter(m=>!m.core).map(m=>({id:m.id,title:m.title})),
+    plugins:hub.registry.modules.filter(m=>!m.core).map(m=>({id:m.id,title:m.title,...(m.version?{version:m.version}:{})})),
     // The release text is left out on purpose: it is somebody else's prose. The link leads to it.
     updates:{state:u.state,code:u.code,summary:u.summary,updateAvailable:u.updateAvailable,latest:u.latest?{version:u.latest.version,url:u.latest.url,publishedAt:u.latest.publishedAt}:null,
      checkedAt:u.checkedAt,failedAt:u.failedAt,error:u.error,quarantined:u.quarantined,automatic:false}};}}],

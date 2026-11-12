@@ -15,6 +15,7 @@ import path from 'node:path';
 import {readJobs,writeJobs,newJob,applyUpdate,jobHash,missing,complete,isBackupError,BackupError,JOB_ID,JOB_LIMIT,UPDATE_FIELDS,nextRun,SNAPSHOT} from '../backup-config.mjs';
 import {createBackupRunner,createBackupScheduler,createKey,publicKey,removeKey,authorizedKeys,hubAddress,errorMessage,warningMessage,pinFrom,scanHostKeys,guardSource,BACKUP_ERRORS} from '../backup-runner.mjs';
 import {expandHome} from '../backup-config.mjs';
+import {resolvePaths,privateFile} from '../paths.mjs';
 import {tx} from '../text.mjs';
 import {FACETS_POINT,machineForHost} from '../machine-facets.mjs';
 import {HOW,PROMPTS} from '../machine-facet-sources.mjs';
@@ -36,14 +37,14 @@ const by=c=>c.principal?.username||null;
 export function createBackups(hub){
  const o=hub.options;
  const stateDirectory=o.backupStateDirectory||path.join(hub.stateDirectory,'backup-jobs');
- const keysDirectory=o.backupKeysDirectory||process.env.BACKUP_KEYS_DIR||path.join(hub.root,'private','backup-jobs');
+ const keysDirectory=o.backupKeysDirectory||process.env.BACKUP_KEYS_DIR||privateFile('backup-jobs');
  const file=path.join(stateDirectory,'jobs.json');
  const tools=o.backupTools||null;
  const timeZone=()=>hub.site.timeZone||undefined;
  const stagingDirectory=o.backupStagingDirectory||process.env.BACKUP_STAGING_DIR||null;
  // What a local source may never be (the keys, the backup state and staging) and what is always left out of one
  // that contains it (those, and the hub's whole private/ directory).
- const privateDirectory=o.backupPrivateDirectory||path.join(hub.root,'private');
+ const privateDirectory=o.backupPrivateDirectory||resolvePaths().private;
  const own=[keysDirectory,stateDirectory,...(stagingDirectory?[stagingDirectory]:[])];
  const protect={reject:own,exclude:[...own,privateDirectory]};
  const runner=createBackupRunner({stateDirectory,keysDirectory,tools,spawnImpl:o.backupSpawn,stagingDirectory,protect,sshTimeoutMs:o.backupSshTimeoutMs,now:o.backupNow||(()=>new Date())});

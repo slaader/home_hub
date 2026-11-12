@@ -303,7 +303,7 @@ test('HTTP: anyone signed in reads it; checking and dismissing are an administra
  const get=headers=>fetch(h.origin+'/api/updates',{headers});
  assert.equal((await get({})).status,401);
  const first=await (await get(reader.headers)).json();
- assert.deepEqual({state:first.state,code:first.code,latest:first.latest,apply:first.apply,summary:first.summary},{state:'stale',code:'pending',latest:null,apply:{automatic:false,tag:null},summary:UPDATE_TEXT.pending});
+ assert.deepEqual({state:first.state,code:first.code,latest:first.latest,apply:first.apply,summary:first.summary},{state:'stale',code:'pending',latest:null,apply:{automatic:false,tag:null,command:null},summary:UPDATE_TEXT.pending});
  assert.deepEqual(first.summaryT,[{key:UPDATE_TEXT.pending,params:{}}]);
  // no API key checks or dismisses, whatever its scopes; nor does anyone from another origin
  for(const key of [reader,full])for(const route of ['check','dismiss'])assert.equal((await h.post(`/api/updates/${route}`,{},key.headers)).status,403,`${key.account.name} ${route}`);
@@ -313,7 +313,7 @@ test('HTTP: anyone signed in reads it; checking and dismissing are an administra
  // the administrator checks
  const checked=await (await h.post('/api/updates/check',{},h.admin)).json();
  assert.equal(checked.checked,true);assert.equal(g.calls.length,2);
- assert.deepEqual({state:checked.updates.state,code:checked.updates.code,available:checked.updates.updateAvailable,tag:checked.updates.apply.tag,notes:checked.updates.latest.notes},{state:'ok',code:'available',available:true,tag:'v1.2.0',notes:'<img src=x onerror=alert(1)>'});
+ assert.deepEqual({state:checked.updates.state,code:checked.updates.code,available:checked.updates.updateAvailable,tag:checked.updates.apply.tag,command:checked.updates.apply.command,notes:checked.updates.latest.notes},{state:'ok',code:'available',available:true,tag:'v1.2.0',command:'node scripts/update.mjs apply v1.2.0',notes:'<img src=x onerror=alert(1)>'});
  assert.deepEqual(await (await h.post('/api/updates/check',{},h.admin)).json().then(r=>[r.checked,r.reason]),[false,'too-soon']);assert.equal(g.calls.length,2);
  // the card on Administration → Integrations
  const row=(await (await fetch(h.origin+'/api/admin/integrations',{headers:h.admin})).json()).integrations.find(i=>i.id===UPDATE_INTEGRATION);
@@ -386,7 +386,7 @@ test('the release block: somebody else\'s text stays text, and only a release li
  globalThis.location={hash:'#integrations',origin:'http://127.0.0.1'};
  const events=[];globalThis.dispatchEvent=e=>{events.push(e);return true;};globalThis.CustomEvent=class{constructor(type,init){this.type=type;this.detail=init?.detail;}};
  const posts=[];
- const answer=over=>({schemaVersion:1,state:'ok',code:'available',repo:REPO,installed:{version:'1.1.0',label:'1.1.0'},updateAvailable:true,dismissed:false,
+ const answer=over=>({schemaVersion:1,state:'ok',code:'available',repo:REPO,installed:{version:'1.1.0',label:'1.1.0'},updateAvailable:true,dismissed:false,apply:{automatic:false,tag:'v1.2.0',command:'node scripts/update.mjs apply v1.2.0'},
   latest:{version:'1.2.0',tag:'v1.2.0',url:`https://github.com/${REPO}/releases/tag/v1.2.0`,publishedAt:'2026-11-10T09:00:00Z',notes:'<img src=x onerror=alert(1)>\n[link](javascript:alert(1))'},...over});
  let next=answer();
  const real=globalThis.fetch;t.after(()=>{globalThis.fetch=real;});
@@ -402,7 +402,8 @@ test('the release block: somebody else\'s text stays text, and only a release li
  const links=all(box,'a');
  assert.deepEqual(links.map(a=>[a.getAttribute('href'),a.getAttribute('rel'),a.textContent]),[[`https://github.com/${REPO}/releases/tag/v1.2.0`,'noopener noreferrer','Open on GitHub']]);
  assert.ok(!/null|undefined/.test(box.textContent),box.textContent);
- assert.match(box.textContent,/Release 1\.2\.0/);assert.match(box.textContent,/does not update itself\. On the server, switch the checkout to v1\.2\.0 and restart it/);
+ assert.match(box.textContent,/Release 1\.2\.0/);assert.match(box.textContent,/does not update itself\. On the server, run the command below in its checkout: it checks release v1\.2\.0/);
+ assert.deepEqual(all(box,'code').map(c=>c.textContent),['node scripts/update.mjs apply v1.2.0'],'the card names the command');
  assert.equal(events.at(-1).type,'updateschange');assert.deepEqual(footerHint(events.at(-1).detail),{latest:'1.2.0'});
  // dismissing asks the server and the footer hears about it
  const button=all(box,'button')[0];assert.equal(button.textContent,'Do not show in the footer');
