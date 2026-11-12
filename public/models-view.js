@@ -31,7 +31,10 @@ const at=iso=>iso?new Intl.DateTimeFormat(locale(),{dateStyle:'medium',timeStyle
 function ttl(sec){if(sec==null)return '—';if(sec<90)return t('{n} s',{n:Math.round(sec)});if(sec<5400)return t('{n} min',{n:Math.round(sec/60)});return t('{n} h',{n:Math.round(sec/3600)});}
 const STATE_TONE={loaded:'good',loading:'warn',unloaded:'',unknown:'plain',running:'good',stopped:'bad'};
 const STATE_LABEL={loaded:'načtený',loading:'načítá se',unloaded:'nenačtený',unknown:'neznámý',running:'běží',stopped:'zastavený'};
-const stateTag=s=>statusPill(t(STATE_LABEL[s]||STATE_LABEL.unknown),STATE_TONE[s]??'');
+// A model (or a placement) that generates or waits says so before its memory state.
+const stateTag=(s,x={})=>[x.active?statusPill(x.active>1?t('generuje ×{n}',{n:x.active}):t('generuje'),'accent'):null,
+ x.queued?statusPill(tp(x.queued,'{n} ve frontě|{n} ve frontě|{n} ve frontě'),'warn'):null,
+ x.active&&s==='loaded'?null:statusPill(t(STATE_LABEL[s]||STATE_LABEL.unknown),STATE_TONE[s]??'')].filter(Boolean);
 
 function svgBar(used,total,cls='used'){
  const NS='http://www.w3.org/2000/svg',svg=document.createElementNS(NS,'svg');svg.setAttribute('class','md-bar');svg.setAttribute('viewBox','0 0 100 8');svg.setAttribute('preserveAspectRatio','none');svg.setAttribute('aria-hidden','true');
@@ -61,7 +64,7 @@ export function clientMatches(c,f,models=[]){
 }
 // ── Sorting the models table ───────────────────────────────────────────────────────────────────
 const STATE_RANK={loaded:3,loading:2,unloaded:1,unknown:0};
-const SORTS={name:g=>g.name.toLowerCase(),kind:g=>KINDS.indexOf(g.kind),machine:g=>g.machines.join(','),state:g=>STATE_RANK[g.state]??0,size:g=>g.sizeGb??-1,context:g=>g.contextTokens??-1,ttl:g=>g.ttlRemainingSeconds??-1,last:g=>g.lastRequestAt?Date.parse(g.lastRequestAt):0,requests:g=>g.requests};
+const SORTS={name:g=>g.name.toLowerCase(),kind:g=>KINDS.indexOf(g.kind),machine:g=>g.machines.join(','),state:g=>(g.active?20:0)+(g.queued?10:0)+(STATE_RANK[g.state]??0),size:g=>g.sizeGb??-1,context:g=>g.contextTokens??-1,ttl:g=>g.ttlRemainingSeconds??-1,last:g=>g.lastRequestAt?Date.parse(g.lastRequestAt):0,requests:g=>g.requests};
 export function sortGroups(groups,{key='state',dir='desc'}={}){
  const f=SORTS[key]||SORTS.state,sign=dir==='asc'?1:-1;
  return [...groups].sort((a,b)=>{const x=f(a),y=f(b);return (x<y?-1:x>y?1:0)*sign||b.requests-a.requests||a.name.localeCompare(b.name);});
@@ -85,6 +88,23 @@ function strip(o){
 }
 function panel(title,lead,...content){return el('section',{class:'md-panel'},el('div',{class:'md-panel-head'},el('h2',{},title),lead?el('p',{},lead):null),...content);}
 
+// What generates right now on every machine (GET /api/models → work): the models whose runtimes or tools say
+// they run a request or a job, or wait for one. Only what is watched is listed; the note names the rest.
+function workNow(w,machines){
+ if(!w)return null;
+ const name=id=>machines.find(m=>m.machine===id)?.name||id,running=w.items.filter(x=>x.active).length;
+ const since=iso=>{const s=(Date.now()-Date.parse(iso))/1000;return Number.isFinite(s)&&s>=0?ttl(s):null;};
+ const row=x=>el('li',{class:x.active?'on':'wait'},el('i',{'aria-hidden':'true'}),el('b',{},x.name||x.id),kindTag(x.kind),
+  el('span',{class:'md-dim'},[name(x.machine),x.gateways?.length?t('{runtime} přes {gateways}',{runtime:x.runtimeName,gateways:x.gateways.join(', ')}):x.runtimeName].join(' · ')),
+  x.active?statusPill(x.since&&since(x.since)?x.active>1?t('generuje ×{n}, nejdéle {time}',{n:x.active,time:since(x.since)}):t('generuje {time}',{time:since(x.since)}):x.active>1?t('generuje ×{n}',{n:x.active}):t('generuje'),'accent'):null,
+  x.queued?statusPill(tp(x.queued,'{n} ve frontě|{n} ve frontě|{n} ve frontě'),'warn'):null);
+ const note=[w.watching.length?t('Co se generuje, hlásí: {list}.',{list:[...new Set(w.watching.map(r=>r.name))].join(', ')}):t('Žádný runtime neříká, jestli zrovna generuje.'),
+  w.blind.length?t('Neříká, jestli zrovna generuje: {list}.',{list:[...new Set(w.blind.map(r=>`${r.name} (${name(r.machine)})`))].join(', ')}):null].filter(Boolean).join(' ');
+ return el('section',{class:`md-work${running?' on':''}`,'aria-label':t('Teď generuje')},
+  el('h2',{},el('i',{'aria-hidden':'true'}),running?tp(running,'Teď generuje {n} model|Teď generují {n} modely|Teď generuje {n} modelů'):w.queued?t('Nic negeneruje, úlohy čekají ve frontě'):t('Teď nic negeneruje')),
+  w.items.length?el('ul',{},w.items.map(row)):null,el('p',{class:'md-note'},note));
+}
+
 // The model's own name large, its organisation (org/… or org--…) small under it; the whole id as the title.
 function modelCell(id){const m=/^(.*?)(?:\/|--)([^/]*)$/.exec(id),name=m?m[2]:id;return el('td',{class:'md-name',title:id},name,m?el('span',{class:'md-alias'},m[1]):null);}
 function modelsTable(data,{filter,sort,query,onSort}){
@@ -103,9 +123,9 @@ function modelsTable(data,{filter,sort,query,onSort}){
   rows.push(el('tr',{},
    modelCell(g.name),el('td',{},kindTag(g.kind)),
    el('td',{},one?where(one):tp(g.machines.length,'{n} stroj|{n} stroje|{n} strojů')+' · '+tp(g.placements.length,'{n} umístění|{n} umístění|{n} umístění')),
-   el('td',{},stateTag(g.state)),el('td',{class:'num'},gb(g.sizeGb)),el('td',{class:'num md-hide-narrow'},ctxLen(g.contextTokens)),
+   el('td',{class:'md-state'},stateTag(g.state,g)),el('td',{class:'num'},gb(g.sizeGb)),el('td',{class:'num md-hide-narrow'},ctxLen(g.contextTokens)),
    el('td',{class:'num md-hide-narrow'},ttl(g.ttlRemainingSeconds)),el('td',{class:'md-hide-narrow',title:at(g.lastRequestAt)||null},ago(g.lastRequestAt)),el('td',{class:'num'},g.requests?short(g.requests):'—')));
-  if(!one)for(const p of g.placements)rows.push(el('tr',{class:'md-sub'},modelCell(p.id),el('td',{},p.engine||''),el('td',{},where(p)),el('td',{},stateTag(p.state)),
+  if(!one)for(const p of g.placements)rows.push(el('tr',{class:'md-sub'},modelCell(p.id),el('td',{},p.engine||''),el('td',{},where(p)),el('td',{class:'md-state'},stateTag(p.state,p)),
    el('td',{class:'num'},gb(p.sizeGb)),el('td',{class:'num md-hide-narrow'},ctxLen(p.contextTokens)),el('td',{class:'num md-hide-narrow'},ttl(p.ttlRemainingSeconds)),el('td',{class:'md-hide-narrow',title:at(p.lastRequestAt)||null},ago(p.lastRequestAt)),el('td',{class:'num'},p.requests?short(p.requests):'—')));
  }
  const select=(name,label,options,value)=>el('select',{'aria-label':label,'data-q':name,onchange:e=>query.set(name,e.target.value)},el('option',{value:''},label),...options.map(([v,l])=>{const o=el('option',{value:v},l);if(v===value)o.selected=true;return o;}));
@@ -196,13 +216,13 @@ export function modelsPage(){
   if(d.empty){graph?.destroy();graph=null;charts?.destroy();charts=null;built=false;body.replaceChildren(emptyPage(d.known||[]));return;}
   if(!built){
    graph=wiringDiagram({onSelect:f=>{state.filter=f;drawFiltered();}});
-   parts.strip=el('div',{});parts.banners=el('div',{});parts.models=el('div',{class:'md-stack'});parts.clients=el('div',{});parts.usage=el('div',{});parts.known=el('div',{});parts.filter=el('div',{class:'md-filterbox'});
+   parts.strip=el('div',{});parts.work=el('div',{});parts.banners=el('div',{});parts.models=el('div',{class:'md-stack'});parts.clients=el('div',{});parts.usage=el('div',{});parts.known=el('div',{});parts.filter=el('div',{class:'md-filterbox'});
    parts.stamp=el('span',{class:'md-stamp'});
    const legend=el('div',{class:'md-legend'},...KINDS.map(k=>el('span',{},el('i',{class:`md-key k-${k}`,'aria-hidden':'true'}),kindLabel(k))),
     el('span',{},el('i',{class:'md-key line k-flow','aria-hidden':'true'}),t('provoz (šířka = požadavky)')),el('span',{},el('i',{class:'md-key dash','aria-hidden':'true'}),t('mezi stroji')),el('span',{},el('i',{class:'md-key line faint','aria-hidden':'true'}),t('bez provozu')));
    body.replaceChildren(el('div',{class:'md-page'},
     el('div',{class:'md-toolbar'},segmented({label:t('Rozsah'),value:state.range,options:RANGES.map(id=>({id,label:id})),onchange:id=>{state.range=id;load();}}),parts.filter,el('span',{class:'md-grow'}),parts.stamp),
-    parts.banners,parts.strip,
+    parts.banners,parts.work,parts.strip,
     panel(t('Zapojení'),t('Klienti vlevo podle stroje, na kterém běží; uprostřed vstupní brána a enginy; vpravo modely. Pohyb ukazuje provoz posledních 15 minut.'),graph.node,legend),
     panel(t('Modely'),t('Všechny modely, které runtimy hlásí. Jeden model na více strojích je jeden řádek s umístěními pod ním.'),parts.models),
     panel(t('Využití a historie'),null,parts.usage),
@@ -217,6 +237,7 @@ export function modelsPage(){
    stale.length?banner({tone:'warn',title:t('Starší data.'),body:t('{machines}: poslední stav je starší než 3 minuty; runtimy ukazujeme jako neznámé.',{machines:stale.map(m=>m.name).join(', ')})}):null,
    noHistory||emptyHistory?banner({tone:'info',title:t('Bez historie požadavků.'),body:noHistory?t('Žádný poskytovatel nedodává runtimes.requests, takže provoz, klienti a grafy jsou prázdné. Živý stav runtimů platí.'):t('Poskytovatel historie je připojený, ale zatím nic nezaznamenal (hub může runtimy číst jen jako snímek, historii pak drží jiný hub).')}):null].filter(Boolean));
   parts.strip.replaceChildren(strip(d.overview));
+  parts.work.replaceChildren(...[workNow(d.work,d.machines)].filter(Boolean));
   graph.update(d.graph,{selected:graph.selected()});
   if(state.filter&&!d.models.some(g=>groupMatches(g,state.filter,d.clients))&&!d.clients.some(c=>clientMatches(c,state.filter,d.models)))state.filter=null;
   drawFiltered();drawUsage();

@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {readStore} from './support/sealed.mjs';
 import {createHomeDevices,parseRuntime,machineHash,secretIn,PICTURES,DEVICE_LIMITS} from '../server/home-devices.mjs';
-import {buildHome as build,telemetryFor,runtimesFor,sparkFor,machineList,homeHistoryQuery,TELEMETRY_ADAPTERS,SPARK_WINDOW_SECONDS,SPARK_STEP_SECONDS} from '../server/home-data.mjs';
+import {buildHome as build,telemetryFor,runtimesFor,sparkFor,machineList,homeHistoryQuery,gpuProcessesFor,TELEMETRY_ADAPTERS,SPARK_WINDOW_SECONDS,SPARK_STEP_SECONDS} from '../server/home-data.mjs';
 import {TELEMETRY_REPO_URL,TELEMETRY_STALE_SECONDS} from '../server/thermo-client.mjs';
 import {legacyScopes,SCOPES} from '../server/scopes.mjs';
 import {EMPTY_SITE} from '../server/site-config.mjs';
@@ -163,12 +163,51 @@ test('home.runtimes extension point: provided runtimes are bounded and cleaned, 
  const r=runtimesFor({source:'agent',observedAt:'2026-11-10T10:00:00Z',extra:1,runtimes:[{id:'ollama',kind:'ollama',status:'running',url:'http://127.0.0.1:11434',models:[{id:'qwen3:14b',state:'loaded',sizeGb:9.3,contextTokens:32768,ttlRemainingSeconds:240,secret:'x'},{id:'idle',contextTokens:'many',ttlRemainingSeconds:-1}],stats:[{label:'tokens/s',value:42}]},
   {id:'odd',status:'exploded'},null,...Array.from({length:30},(_,i)=>({id:`r${i}`}))]});
  assert.equal(r.runtimes.length,20);assert.deepEqual(r.runtimes[0],{id:'ollama',name:'ollama',kind:'ollama',status:'running',url:'http://127.0.0.1:11434',version:null,
-  models:[{id:'qwen3:14b',state:'loaded',sizeGb:9.3,contextTokens:32768,ttlRemainingSeconds:240},{id:'idle',state:'',sizeGb:null,contextTokens:null,ttlRemainingSeconds:null}],stats:[{label:'tokens/s',value:'42'}]});
+  models:[{id:'qwen3:14b',state:'loaded',kind:'llm',sizeGb:9.3,contextTokens:32768,ttlRemainingSeconds:240},{id:'idle',state:'',kind:'llm',sizeGb:null,contextTokens:null,ttlRemainingSeconds:null}],stats:[{label:'tokens/s',value:'42'}]});
  assert.equal(r.runtimes[1].status,'unknown');
  const home=buildHome({runtimes:{mini:{runtimes:[{id:'llama-swap',status:'running'}]},ghost:{runtimes:[]}}});
  assert.equal(home.machines.find(m=>m.id==='mini').runtimes.runtimes[0].id,'llama-swap');assert.equal(home.machines.find(m=>m.id==='studio').runtimes,null);
  // A hub without a provider (a public install): no machine carries runtimes, so no page draws the section.
  assert.deepEqual(buildHome({}).machines.map(m=>m.runtimes),Array(SITE.machines.length).fill(null));
+});
+
+// What the GPU works on: how busy each runtime and model is, only where a provider says and only while it is
+// not stale; a request through a gateway is counted once, at the engine it reached.
+test('what runs now: activity is kept only when reported and fresh; the machine page lists the busy models once',()=>{
+ const r=runtimesFor({runtimes:[
+  {id:'llama-swap',status:'running',url:'http://127.0.0.1:8081',activity:{active:1,queued:0},models:[{id:'qwen-27b',state:'loaded',active:1,queued:0,since:'2026-11-12T00:20:00Z',via:'omlx',target:'Qwen3.8-27B-8bit'}]},
+  {id:'omlx',status:'running',url:'http://127.0.0.1:8000',activity:{active:1,queued:2},models:[{id:'Qwen3.8-27B-8bit',state:'loaded',active:1,queued:2,since:'2026-11-12T00:20:01Z'},{id:'idle-one',state:'unloaded',active:0,queued:0}]},
+  {id:'mflux',mode:'cli',status:'running',activity:{active:1,queued:1},models:[{id:'seedvr2-3b',kind:'image',state:'loaded',active:1,queued:0,since:'2026-11-12T00:19:00Z'},{id:'seedvr2-7b',kind:'image',state:'loading',active:0,queued:1}]},
+  {id:'mlx-serve',status:'running',url:'http://127.0.0.1:11234',models:[{id:'krea',state:'unloaded'}]},
+  {id:'old',status:'unknown',activity:{active:3,queued:0},models:[{id:'stale',state:'unknown',active:3,since:'2026-11-12T00:00:00Z'}]},
+  {id:'odd',status:'running',activity:{active:-1,queued:'x'},models:[{id:'m',active:'busy',queued:null}]}]});
+ const [ls,om,fx,mx,old,odd]=r.runtimes;
+ assert.deepEqual(ls.activity,{active:1,queued:0});assert.deepEqual([ls.models[0].active,ls.models[0].queued,ls.models[0].since],[1,0,'2026-11-12T00:20:00.000Z']);
+ assert.deepEqual([om.models[1].active,om.models[1].queued,om.models[1].since],[0,0,undefined],'idle: zero, and no start time');
+ assert.equal(fx.mode,'cli');assert.equal(fx.models[0].kind,'image','the provider\'s kind');
+ assert.equal(mx.activity,undefined);assert.equal(mx.models[0].active,undefined,'not reported: unknown, not zero');
+ assert.equal(old.activity,undefined,'a stale runtime says nothing about now');assert.equal(old.models[0].active,undefined);
+ assert.equal(odd.activity,undefined);assert.equal(odd.models[0].active,undefined,'nonsense is dropped');
+ // The machine page: busy models once each (the llama-swap alias folds into the oMLX model), running first.
+ const home=buildHome({runtimes:{studio:{source:'x',observedAt:new Date().toISOString(),runtimes:[
+  {id:'llama-swap',role:'gateway',status:'running',url:'http://127.0.0.1:8081',activity:{active:1,queued:0},models:[{id:'qwen-27b',state:'loaded',active:1,queued:0,since:'2026-11-12T00:20:00Z',via:'omlx',target:'Qwen3.8-27B-8bit'}]},
+  {id:'omlx',status:'running',url:'http://127.0.0.1:8000',activity:{active:1,queued:2},models:[{id:'Qwen3.8-27B-8bit',state:'loaded',active:1,queued:2,since:'2026-11-12T00:20:01Z'}]},
+  {id:'mflux',name:'mflux',mode:'cli',status:'running',activity:{active:1,queued:1},models:[{id:'seedvr2-3b',kind:'image',state:'loaded',active:1,queued:0,since:'2026-11-12T00:19:00Z'},{id:'seedvr2-7b',kind:'image',state:'loading',active:0,queued:1}]},
+  {id:'mlx-serve',name:'mlx-serve',status:'running',url:'http://127.0.0.1:11234',models:[]}]}}});
+ const work=home.machines.find(m=>m.id==='studio').work;
+ assert.deepEqual(work.items.map(x=>[x.id,x.kind,x.runtime,x.active,x.queued,x.gateways]),[
+  ['seedvr2-3b','image','mflux',1,0,[]],['Qwen3.8-27B-8bit','llm','omlx',1,2,['llama-swap']],['seedvr2-7b','image','mflux',0,1,[]]],'running first and oldest first; the gateway request is not counted twice');
+ assert.equal(work.items[1].since,'2026-11-12T00:20:00.000Z','the request began at the gateway');
+ assert.deepEqual([work.active,work.queued],[2,3]);
+ assert.deepEqual(work.watching,['llama-swap','omlx','mflux']);assert.deepEqual(work.blind,['mlx-serve'],'what cannot be seen is said');
+ assert.equal(home.machines.find(m=>m.id==='mini').work,null,'no runtimes: no such part');
+ // The busiest GPU processes from the telemetry agent, named by the runtime or the job whose process it is.
+ const thermo={gpuProcesses:()=>({studio:{at:Date.parse('2026-11-12T00:30:00Z'),gpu:64,attributedPercent:61,rows:[{pid:6640,name:'Python',percent:52.3},{pid:99605,name:'python3.11',percent:6},{pid:5772,name:'WindowServer',percent:2.7}]}})};
+ const raw={runtimes:[{id:'omlx',name:'oMLX',status:'running',pids:[6640],models:[]},{id:'mflux',name:'mflux',status:'running',pids:[99605],models:[{id:'seedvr2-3b',pids:[99605]}]},
+  {id:'old',name:'Old',status:'unknown',pids:[5772],models:[]}]};
+ assert.deepEqual(gpuProcessesFor(thermo,'studio',raw),{observedAt:'2026-11-12T00:30:00.000Z',gpu:64,attributedPercent:61,rows:[
+  {pid:6640,name:'Python',percent:52.3,runtime:'oMLX'},{pid:99605,name:'python3.11',percent:6,runtime:'mflux',model:'seedvr2-3b'},{pid:5772,name:'WindowServer',percent:2.7}]},'a stale runtime names nothing');
+ assert.equal(gpuProcessesFor(thermo,'mini',raw),null);assert.equal(gpuProcessesFor({},'studio',raw),null,'an agent without processes: none');
 });
 
 // The small chart on a tile: one series over the live window, in clock-aligned steps; a step without a

@@ -248,6 +248,41 @@
 .hv-runtime summary::before{content:'▸';color:var(--color-text-faint)}.hv-runtime details[open]>summary::before{content:'▾'}
 .hv-runtime summary:hover{color:var(--color-text)}
 .hv-runtime summary:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:var(--radius-xs)}
+/* What the GPU does now (above the runtime cards): its reading and the models at work. A model that generates
+   has a pulsing dot; one that waits a hollow one. */
+.hv-runtime-flags{display:inline-flex;flex-wrap:wrap;align-items:baseline;gap:var(--space-1) var(--space-2)}
+.hv-work-chip{font:var(--weight-medium) var(--text-2xs)/1.2 var(--font-mono);color:var(--color-warn);white-space:nowrap}
+.hv-work-chip.on{color:var(--color-accent-text)}
+.hv-runtime.gen{border-color:var(--color-accent)}
+.hv-runtime-models li.gen::before{border-color:var(--color-accent);background:var(--color-accent);animation:hv-pulse 1.6s ease-in-out infinite}
+.hv-work{grid-column:1/-1;display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-3) var(--space-4);background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-l)}
+.hv-work.gen{border-color:var(--color-accent);background:var(--color-accent-soft)}
+.hv-work.warn{border-color:var(--color-warn);background:var(--color-warn-soft)}
+.hv-work header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:var(--space-1) var(--space-3)}
+.hv-work h3{display:flex;align-items:center;gap:var(--space-2);margin:0;font:var(--weight-bold) var(--text-m)/var(--leading-tight) var(--font-sans)}
+.hv-work h3 i{width:9px;height:9px;border-radius:50%;flex:none;background:var(--color-text-faint)}
+.hv-work.gen h3 i{background:var(--color-accent);animation:hv-pulse 1.6s ease-in-out infinite}
+.hv-work.warn h3 i{background:var(--color-warn)}
+.hv-work-gpu{font:var(--weight-bold) var(--text-s)/1.2 var(--font-mono);color:var(--color-text)}
+.hv-work .hv-note{margin:0}
+.hv-work ul{display:flex;flex-direction:column;gap:var(--space-2);margin:0;padding:0;list-style:none}
+.hv-work li{display:flex;align-items:flex-start;gap:var(--space-2);min-width:0}
+.hv-work li i{flex:none;width:8px;height:8px;margin-top:6px;border-radius:50%;border:1px solid var(--color-warn)}
+.hv-work li.on i{border-color:var(--color-accent);background:var(--color-accent);animation:hv-pulse 1.6s ease-in-out infinite}
+.hv-work li div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.hv-work li b{font:var(--weight-medium) var(--text-s)/1.3 var(--font-mono);overflow-wrap:anywhere}
+.hv-work li small{font:var(--text-xs)/1.4 var(--font-sans);color:var(--color-text-dim)}
+.hv-work-note{margin:0;font:var(--text-xs)/1.4 var(--font-sans);color:var(--color-text-faint)}
+.hv-work-procs{display:flex;flex-direction:column;gap:var(--space-1);padding-top:var(--space-2);border-top:1px solid var(--color-border)}
+.hv-work-procs ol{display:flex;flex-direction:column;gap:var(--space-1);margin:0;padding:0;list-style:none}
+.hv-work-procs li{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"name pct" "who pct" "bar bar";column-gap:var(--space-3);align-items:baseline}
+.hv-work-procs b{grid-area:name;font:var(--weight-medium) var(--text-s)/1.3 var(--font-mono);overflow-wrap:anywhere}
+.hv-work-procs small{grid-area:who;font:var(--text-xs)/1.3 var(--font-sans);color:var(--color-text-dim)}
+.hv-work-pct{grid-area:pct;font:var(--weight-bold) var(--text-s)/1.2 var(--font-mono);color:var(--color-text)}
+.hv-work-bar{grid-area:bar;display:block;height:4px;margin-top:3px;border-radius:2px;background:var(--color-border);overflow:hidden}
+.hv-work-bar i{display:block;height:100%;background:var(--color-accent)}
+@keyframes hv-pulse{50%{opacity:.35}}
+@media(prefers-reduced-motion:reduce){.hv-work h3 i,.hv-work li.on i,.hv-runtime-models li.gen::before{animation:none}}
 
 /* --- add / edit device dialog ---------------------------------------------------------------- */
 .had{width:min(760px,calc(100vw - 24px));max-height:calc(100dvh - 24px);padding:0;overflow:auto;background:var(--color-surface);color:var(--color-text);border:1px solid var(--color-border-strong);border-radius:var(--radius-l);box-shadow:var(--shadow-raised);font-family:var(--font-sans)}

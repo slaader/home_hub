@@ -141,8 +141,9 @@ export function createRuntimePoller({endpoints,tokens,fetcher=fetch,intervalMs=D
    entry.runtimes.push({id,name:e.name||KIND_NAMES[kind]||new URL(e.url).host,kind:kind||'',source:'přímo z runtimu',observedAt:seen,
     // Refused: the runtime is not running, so nothing it had is in memory. Any other failure says nothing.
     status:fresh?'running':st==='off'?'stopped':'unknown',url:e.url,version:r?.version||null,
-    models:(r?.models||[]).map(m=>fresh?m:{...m,state:st==='off'?'unloaded':'unknown',ttlRemainingSeconds:null}),
-    stats:fresh?r?.stats||[]:[]});
+    // How busy it is says something only about now: a stale read drops it (unknown, not idle).
+    models:(r?.models||[]).map(m=>{if(fresh)return m;const {active,queued,since,...rest}=m;return {...rest,state:st==='off'?'unloaded':'unknown',ttlRemainingSeconds:null};}),
+    stats:fresh?r?.stats||[]:[],...(fresh&&r?.activity?{activity:r.activity}:{})});
   }
   return out;
  }

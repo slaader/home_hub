@@ -153,7 +153,7 @@ async function publishRuntime(state,hub,input,principal){
 // --- integration "home.thermo": the Thermo pull client -----------------------------------------------
 export const THERMO_INTEGRATION='home.thermo';
 // What the overview reads while Thermo is turned off: no readings, no disks, no live state.
-const quietThermo=poller=>({interval:()=>poller.interval?.()||{intervalSeconds:15,lastPollAt:null},status:()=>({}),live:()=>({}),seconds:()=>[],minutes:()=>[],disks:()=>({})});
+const quietThermo=poller=>({interval:()=>poller.interval?.()||{intervalSeconds:15,lastPollAt:null},status:()=>({}),live:()=>({}),seconds:()=>[],minutes:()=>[],disks:()=>({}),gpuProcesses:()=>({})});
 const relLabel=(root,file)=>{const rel=path.relative(root,file);return rel&&!rel.startsWith('..')&&!path.isAbsolute(rel)?rel:path.basename(file);};
 // Hosts, their last reading and their errors, from the poller's own state. The hosts file is read for
 // its ids only; logins never leave it.
@@ -209,6 +209,8 @@ export function telemetrySources({thermo,windows,windowsIds=[],feeds=[]}){
   for(const f of all)for(const [id,v] of Object.entries(f.poller?.[name]?.()||{}))if(f.ids.has(id))out[id]=v;return out;};
  return {interval:()=>thermo?.interval?.()||{intervalSeconds:15,lastPollAt:null},
   status:()=>merge('status'),live:()=>merge('live'),disks:()=>merge('disks'),native:()=>merge('native'),targets:()=>merge('targets'),connections:()=>merge('connections'),
+  // The busiest processes on each Mac's GPU (Thermo's snapshot); the other providers do not report them.
+  gpuProcesses:()=>merge('gpuProcesses'),
   seconds:(id,since)=>pick(id)?.seconds?.(id,since)||[],minutes:id=>pick(id)?.minutes?.(id)||[],
   // Without a host list on every side, nobody is blamed for a missing login.
   hosts:()=>{const a=thermo?.hosts?.(),lists=all.map(f=>f.poller?.hosts?.());if(!Array.isArray(a)||lists.some(l=>!Array.isArray(l)))return undefined;

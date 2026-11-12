@@ -1,7 +1,8 @@
-// Home Hub → Thermo consumer (build 96 pull API). One persistent, pull-only session per Mac:
-// login with an account (username/password/label) once, keep the issued token, then page
-// samples/minutes/disks over framed JSON on TLS. Never cadence-subscribe: cadenceMS 0 means
-// the server pushes no snapshots, which is what the hub wants.
+// Home Hub → Thermo consumer (build 96 pull API). One persistent session per Mac: login with an
+// account (username/password/label) once, keep the issued token, then page samples/minutes/disks over
+// framed JSON on TLS. The session asks for Thermo's slow snapshot (cadenceMS 30000: one every 30 s) only
+// for the processes on the GPU (gpuConsumers, averaged over the last 5 s). Never the live cadence (250):
+// that one turns on Thermo's scheduler trace. config.gpuProcesses === false keeps a session pull-only (0).
 import tls from 'node:tls';
 import {readFile, writeFile, mkdir, rename, readdir} from 'node:fs/promises';
 import path from 'node:path';
@@ -15,6 +16,17 @@ export const TELEMETRY_AGENT_NAME='Thermo';
 export const TELEMETRY_REPO_URL='https://github.com/OWNER/home-hub-telemetry';
 // A machine whose newest reading is older than this is "stale", not "ok" (AGENTS.md: stale after 3 minutes).
 export const TELEMETRY_STALE_SECONDS=180;
+// The processes on the GPU (Thermo's snapshot → gpuConsumers): the busiest few with their share of the GPU
+// in per cent, and the share Thermo could attribute to a process at all. Older than this is not "now".
+export const GPU_PROCESSES_LIMIT=5,GPU_PROCESSES_STALE_MS=90000,GPU_SNAPSHOT_CADENCE_MS=30000;
+export function gpuProcessesFrom(snapshot,at=Date.now()){
+ if(!snapshot||typeof snapshot!=='object'||!Array.isArray(snapshot.gpuConsumers))return null;
+ const pct=v=>typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=100000?Math.round(v*10)/10:null;
+ const rows=snapshot.gpuConsumers.filter(r=>r&&typeof r==='object'&&Number.isSafeInteger(r.owner?.pid)&&r.owner.pid>0&&pct(r.percent)!==null)
+  .map(r=>({pid:r.owner.pid,name:String(r.name??'').replace(/[\u0000-\u001f\u007f]/g,'').slice(0,80)||`pid ${r.owner.pid}`,percent:pct(r.percent)}))
+  .sort((a,b)=>b.percent-a.percent).slice(0,GPU_PROCESSES_LIMIT);
+ return {at,gpu:pct(snapshot.gpu),attributedPercent:pct(snapshot.gpuAttributedPercent),rows};
+}
 
 const MAX_FRAME=1_048_576;
 export function encodeFrame(obj){const body=Buffer.from(JSON.stringify(obj));if(!body.length||body.length>MAX_FRAME)throw new Error('invalid');const header=Buffer.allocUnsafe(4);header.writeUInt32BE(body.length,0);return Buffer.concat([header,body]);}
@@ -80,7 +92,7 @@ export async function checkThermoLogin(config,{timeoutMs=8000}={}){
 
 // A single host session. connect() resolves once authenticated; requests queue while offline
 // and fail fast after `staleMs` so the poller can mark the source stale instead of hanging.
-export function createThermoSession({config,onMinute,onDisk,onState=(()=>{})}){
+export function createThermoSession({config,onMinute,onDisk,onSnapshot,onState=(()=>{})}){
  const pending=new Map();let socket=null,current=null,connecting=null,deadUntil=0,denied=false,deniedUntil=0,closed=false,lastPull=0;
  // A password denial backs off for 5 min instead of locking the host out forever.
  const DENY_BACKOFF_MS=5*60*1000;
@@ -89,7 +101,7 @@ export function createThermoSession({config,onMinute,onDisk,onState=(()=>{})}){
  // 'busy' to a rare retry instead of a wasted round-trip each cycle.
  const pace=()=>{const wait=Math.max(0,220-(Date.now()-lastPull));lastPull=Date.now()+wait;return wait?new Promise(r=>setTimeout(r,wait)):Promise.resolve();};
  function hello(){
-  const base={major:1,minor:0,windowSeconds:5,cadenceMS:0,nonce:nextNonce()};
+  const base={major:1,minor:0,windowSeconds:5,cadenceMS:config.gpuProcesses===false?0:GPU_SNAPSHOT_CADENCE_MS,nonce:nextNonce()};
   return config.token?{...base,type:'hello',token:config.token}:{...base,type:'login',username:config.username,password:config.password,label:config.label};
  }
  function settle(nonce,error,value){const w=pending.get(nonce);if(!w)return;pending.delete(nonce);clearTimeout(w.timer);error?w.reject(error):w.resolve(value);}
@@ -135,6 +147,7 @@ export function createThermoSession({config,onMinute,onDisk,onState=(()=>{})}){
      else if(frame?.type==='busy')settle(frame.nonce,new Error('busy'));
      else if(frame?.type==='minutes'){const reply=frame.minutes||{};if(!pending.has(frame.nonce)&&Array.isArray(reply.rows))for(const row of reply.rows)onMinute?.(config.id,row);settle(frame.nonce,null,reply);}
      else if(frame?.type==='disks'){const reply=frame.disks||{};if(reply.disks)onDisk?.(config.id,reply);settle(frame.nonce,null,reply);}
+     else if(frame?.type==='snapshot'&&frame.snapshot)onSnapshot?.(config.id,frame.snapshot);
     }}catch{try{sock.destroy();}catch{}}
    };
    const carry={buffer:Buffer.alloc(0)};
@@ -184,7 +197,7 @@ export function createThermoSession({config,onMinute,onDisk,onState=(()=>{})}){
 // from memory + those files until Postgres rollups take over.
 // extraHosts: async () => more host configs (devices added on the Home page); addHost/removeHost change them live.
 export function createThermoPoller({hostsFile,extraHosts=async()=>[],stateDirectory,intervalMs=15000,now=Date.now,log=()=>{}}){
- const sessions=new Map(),status=new Map(),minutes=new Map(),disks=new Map(),latest=new Map();
+ const sessions=new Map(),status=new Map(),minutes=new Map(),disks=new Map(),latest=new Map(),gpu=new Map();
  const seconds=new Map();  // host → [{t,cpu,gpu,cpuTemp,gpuTemp,memUsed,memTotal,power}] ~35 min
  const cursors=new Map();let timer=null;
  const minuteKey=host=>`minutes-${host}`;
@@ -307,16 +320,17 @@ export function createThermoPoller({hostsFile,extraHosts=async()=>[],stateDirect
   if(paused)return;paused=true;clearInterval(timer);timer=null;
   await polling?.catch(()=>{});
   for(const s of sessions.values())s.close();
-  sessions.clear();status.clear();latest.clear();seconds.clear();disks.clear();
+  sessions.clear();status.clear();latest.clear();seconds.clear();disks.clear();gpu.clear();
  }
  // On again: the same as a start, without reading the files again (hosts are read afresh).
  async function resume(){if(!paused)return;paused=false;if(started)await run();}
  function open(config){
-  sessions.set(config.id,createThermoSession({config,onMinute:(id,row)=>{rememberMinutes(id,[row]);void persistMinutes(id,[row]);},onDisk:(id,reply)=>disks.set(id,{...reply,fetchedAt:now()}),onState:(id,state)=>status.set(id,{state,checkedAt:new Date(now()).toISOString()})}));
+  sessions.set(config.id,createThermoSession({config,onMinute:(id,row)=>{rememberMinutes(id,[row]);void persistMinutes(id,[row]);},onDisk:(id,reply)=>disks.set(id,{...reply,fetchedAt:now()}),
+   onSnapshot:(id,snapshot)=>{const value=gpuProcessesFrom(snapshot,now());if(value)gpu.set(id,value);},onState:(id,state)=>status.set(id,{state,checkedAt:new Date(now()).toISOString()})}));
  }
  // A device added or removed on the Home page: start or end its session without restarting the hub.
  function addHost(config){if(sessions.has(config.id))sessions.get(config.id).close();open(config);if(timer)void poll().catch(()=>{});}
- function removeHost(id){sessions.get(id)?.close();sessions.delete(id);status.delete(id);latest.delete(id);seconds.delete(id);disks.delete(id);}
+ function removeHost(id){sessions.get(id)?.close();sessions.delete(id);status.delete(id);latest.delete(id);seconds.delete(id);disks.delete(id);gpu.delete(id);}
  return {start,stop:()=>{clearInterval(timer);for(const s of sessions.values())s.close();},poll,refresh,setIntervalMs,addHost,removeHost,pause,resume,paused:()=>paused,
   // Host ids the poller has a login for (the hosts file plus devices connected on the overview).
   hosts:()=>[...sessions.keys()],
@@ -324,6 +338,8 @@ export function createThermoPoller({hostsFile,extraHosts=async()=>[],stateDirect
   status:()=>Object.fromEntries(status),
   live:()=>Object.fromEntries(latest),
   disks:()=>Object.fromEntries(disks),
+  // The busiest GPU processes per host from the newest snapshot that is still fresh.
+  gpuProcesses:()=>Object.fromEntries([...gpu].filter(([,v])=>now()-v.at<=GPU_PROCESSES_STALE_MS)),
   minutes:host=>minutes.get(host)||[],
   // 1-second readings we drained ourselves; window since unix seconds.
   seconds:(host,sinceUnix)=>{const ring=seconds.get(host)||[];return sinceUnix?ring.filter(r=>r.t>=sinceUnix):[...ring];},

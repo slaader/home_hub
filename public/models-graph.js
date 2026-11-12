@@ -26,7 +26,7 @@ const when=iso=>iso?new Intl.DateTimeFormat(locale(),{day:'numeric',month:'numer
 function palette(){
  const p={text:css('--color-text')||'#eceaf4',dim:css('--color-text-dim')||'#a39fb5',faint:css('--color-text-faint')||'#6f6b82',border:css('--color-border')||'#2b2937',strong:css('--color-border-strong')||'#403d52',
   surface:css('--color-surface')||'#14131c',sunken:css('--color-surface-sunken')||'#100f17',raised:css('--color-surface-raised')||'#1a1924',bad:css('--color-bad')||'#ff7a85',good:css('--color-good')||'#5fd39a',
-  focus:css('--color-focus')||'#9d8cff',flow:css('--md-flow')||'#ffb27a',cross:css('--md-cross')||'#b9a8ff',sans:css('--font-sans')||'system-ui, sans-serif',mono:css('--font-mono')||'ui-monospace, monospace',kinds:{}};
+  focus:css('--color-focus')||'#9d8cff',warn:css('--color-warn')||'#f2c46d',flow:css('--md-flow')||'#ffb27a',cross:css('--md-cross')||'#b9a8ff',sans:css('--font-sans')||'system-ui, sans-serif',mono:css('--font-mono')||'ui-monospace, monospace',kinds:{}};
  for(const [k,v] of Object.entries(KIND_TOKEN))p.kinds[k]=css(v)||'#9a96aa';
  return p;
 }
@@ -41,7 +41,7 @@ export function layout(graph,width=MIN_WIDTH){
  const x={client:12};x.door=x.client+widths.client+gap;x.engine=x.door+widths.door+gap;x.model=x.engine+widths.engine+gap;
  const order={client:(a,b)=>(b.attributed===true)-(a.attributed===true)||b.requests-a.requests||a.label.localeCompare(b.label),
   door:(a,b)=>b.requests-a.requests||a.label.localeCompare(b.label),engine:(a,b)=>(a.known===true)-(b.known===true)||b.requests-a.requests||a.label.localeCompare(b.label),
-  model:(a,b)=>(b.state==='loaded')-(a.state==='loaded')||b.requests-a.requests||a.label.localeCompare(b.label)};
+  model:(a,b)=>(b.active>0)-(a.active>0)||(b.state==='loaded')-(a.state==='loaded')||b.requests-a.requests||a.label.localeCompare(b.label)};
  const boxes=new Map(),bands=[];let y=HEAD;
  for(const lane of lanes){
   const cols=Object.fromEntries(COLUMNS.map(c=>[c,graph.nodes.filter(n=>n.lane===lane.id&&n.column===c).sort(order[c])]));
@@ -68,6 +68,8 @@ export function describeNode(n){
  if(n.column==='model')parts.push(t(n.state==='loaded'?'načtený':n.state==='loading'?'načítá se':n.history?'jen v historii':'nenačtený'),n.sizeGb!=null?`${n.sizeGb} GB`:null);
  else if(n.known)parts.push(t('známý, bez živých statistik'));
  else if(n.column!=='client')parts.push(t(n.state==='running'?'běží':n.state==='stopped'?'zastavený':'stav neznámý'));
+ if(n.active)parts.push(n.active>1?t('generuje ×{n}',{n:n.active}):t('generuje'));
+ if(n.queued)parts.push(tp(n.queued,'{n} ve frontě|{n} ve frontě|{n} ve frontě'));
  if(n.sub)parts.push(n.sub==='loopback'?t('loopback: tento stroj nebo SSH tunel'):n.sub);
  parts.push(tp(n.requests,'{n} požadavek|{n} požadavky|{n} požadavků'),t('{n} tokenů',{n:fmt(n.tokens)}));
  if(n.recent)parts.push(t('{n} za posledních 15 min',{n:n.recent}));
@@ -94,7 +96,8 @@ export function wiringDiagram({onSelect}={}){
   canvas.width=Math.round(geo.width*dpr);canvas.height=Math.round(geo.height*dpr);canvas.style.width=`${geo.width}px`;canvas.style.height=`${geo.height}px`;
   ctx.setTransform(dpr,0,0,dpr,0,0);draw(performance.now());
  }
- const animated=()=>!reduced()&&!document.hidden&&graph.edges.some(e=>e.recent>0);
+ // Motion: recent traffic along the lines, and the pulse of a node that generates right now.
+ const animated=()=>!reduced()&&!document.hidden&&(graph.edges.some(e=>e.recent>0)||graph.nodes.some(n=>n.active>0));
  function loop(now){frame=0;if(destroyed)return;draw(now);if(animated())frame=requestAnimationFrame(loop);}
  function kick(){if(!frame&&animated())frame=requestAnimationFrame(loop);else if(!animated())draw(performance.now());}
  const activeIds=()=>{const target=hover||(focus>=0?{node:sortedNodes()[focus]?.id}:null)||(selected?{node:selected}:null);return target?pathOf(graph,target):null;};
@@ -136,6 +139,10 @@ export function wiringDiagram({onSelect}={}){
    if(right){ctx.fillStyle=c.faint;ctx.fillText(right,b.x+b.w-(n.state==='loaded'||n.state==='loading'?16:6)-rw+8,b.y+b.h/2+1);}
    ctx.font=`${n.column==='model'?'500 11px '+c.mono:'500 12px '+c.sans}`;ctx.fillStyle=known||n.state==='unknown'?c.dim:c.text;
    ctx.fillText(truncate(n.column==='model'?shortName(n.label):n.label,b.w-(kind?14:10)-rw-(n.state==='loaded'?12:0)),b.x+(kind?10:8),b.y+b.h/2+1);
+   // Generating now: a ring in the traffic colour that breathes (still under reduced motion); waiting: dashed.
+   if(n.active>0||n.queued>0){const pulse=n.active>0&&!reduced()?.55+.45*Math.sin(now/260):1;
+    ctx.globalAlpha=(on?1:.35)*pulse;ctx.strokeStyle=n.active>0?c.flow:c.warn;ctx.lineWidth=n.active>0?2:1.5;ctx.setLineDash(n.active>0?[]:[4,3]);
+    ctx.beginPath();ctx.roundRect(b.x-3.5,b.y-3.5,b.w+7,b.h+7,9);ctx.stroke();ctx.setLineDash([]);ctx.globalAlpha=on?1:.35;}
    if(selected===n.id||focusId===n.id){ctx.strokeStyle=c.focus;ctx.lineWidth=2;ctx.beginPath();ctx.roundRect(b.x-2,b.y-2,b.w+4,b.h+4,8);ctx.stroke();}
    ctx.globalAlpha=1;
   }

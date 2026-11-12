@@ -10,6 +10,7 @@ import {WINRM_PROVIDER,WINRM_NAME,WINRM_PORT} from './winrm-telemetry.mjs';
 import {NODE_EXPORTER_PROVIDER,NODE_EXPORTER_NAME,NODE_EXPORTER_PORT,LINUX_SSH_PROVIDER,LINUX_SSH_NAME} from './linux-telemetry.mjs';
 import {PROMETHEUS_PROVIDER,PROMETHEUS_NAME,PROMETHEUS_PORT} from './prometheus-telemetry.mjs';
 import {isFeed,feedErrors,feedOfDevice} from './telemetry-providers.mjs';
+import {inferKind,liveState,placements,workOf,activityOf} from './models-data.mjs';
 
 const number=(v,max=Number.MAX_SAFE_INTEGER)=>typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=max?v:null;
 const text=(v,n=160)=>typeof v==='string'?v.replace(/[\u0000-\u001f\u007f]/g,'').slice(0,n):'';
@@ -226,17 +227,46 @@ export function telemetryFor(def,thermo,nowSec){
 // Local LLM runtimes on a machine, as a provider reported them (extension point home.runtimes, see
 // docs/plugins.md). Core reads no runtime itself: it only bounds and cleans what a provider hands over. A
 // machine no provider reports on carries runtimes: null, and its page then has no such section at all.
+// How busy a runtime and each model is (activity / active, queued, since) only where its provider says, and
+// only while it is not stale. A model's kind (llm, image, …) is the provider's or inferred from its name.
 const RUNTIME_STATES=['running','stopped','unknown'];
+const sinceOf=v=>{const t=Date.parse(v);return Number.isFinite(t)?new Date(t).toISOString():null;};
 export function runtimesFor(entry){
  if(!entry||typeof entry!=='object'||!Array.isArray(entry.runtimes))return null;
  const sources=Array.isArray(entry.sources)?[...new Set(entry.sources.map(x=>text(x,40)).filter(Boolean))].slice(0,4):[];
  return {source:text(entry.source,40)||sources[0]||'',...(sources.length>1?{sources}:{}),observedAt:text(entry.observedAt,40)||null,
-  runtimes:entry.runtimes.filter(r=>r&&typeof r==='object').slice(0,20).map(r=>({id:text(r.id,60),name:text(r.name,60)||text(r.id,60),kind:text(r.kind,40),
-   status:RUNTIME_STATES.includes(r.status)?r.status:'unknown',url:text(r.url,120)||null,version:text(r.version,40)||null,
-   ...(r.source?{source:text(r.source,40)}:{}),
-   models:Array.isArray(r.models)?r.models.filter(m=>m&&typeof m==='object').slice(0,30).map(m=>({id:text(m.id,120),state:text(m.state,16),sizeGb:number(m.sizeGb,100000),
-    contextTokens:number(m.contextTokens,1e9),ttlRemainingSeconds:number(m.ttlRemainingSeconds,1e9)})):[],
-   stats:Array.isArray(r.stats)?r.stats.filter(x=>x&&typeof x==='object').slice(0,12).map(x=>({label:text(x.label,40),value:text(String(x.value??''),40)})):[]}))};
+  runtimes:entry.runtimes.filter(r=>r&&typeof r==='object').slice(0,20).map(r=>{
+   const status=RUNTIME_STATES.includes(r.status)?r.status:'unknown',live=status!=='unknown',activity=live?activityOf(r.activity):null;
+   return {id:text(r.id,60),name:text(r.name,60)||text(r.id,60),kind:text(r.kind,40),
+   status,url:text(r.url,120)||null,version:text(r.version,40)||null,
+   ...(r.source?{source:text(r.source,40)}:{}),...(r.mode==='cli'?{mode:'cli'}:{}),...(activity?{activity}:{}),
+   models:Array.isArray(r.models)?r.models.filter(m=>m&&typeof m==='object').slice(0,30).map(m=>{const work=live?activityOf(m):null;
+    return {id:text(m.id,120),state:text(m.state,16),kind:inferKind(m,r),sizeGb:number(m.sizeGb,100000),
+    contextTokens:number(m.contextTokens,1e9),ttlRemainingSeconds:number(m.ttlRemainingSeconds,1e9),
+    ...(work?{active:work.active,queued:work.queued,...(work.active&&sinceOf(m.since)?{since:sinceOf(m.since)}:{})}:{})};}):[],
+   stats:Array.isArray(r.stats)?r.stats.filter(x=>x&&typeof x==='object').slice(0,12).map(x=>({label:text(x.label,40),value:text(String(x.value??''),40)})):[]};})};
+}
+// The busiest processes on a machine's GPU right now, as its telemetry agent measured them (Thermo's snapshot:
+// share of the GPU in per cent over a few seconds). A process whose id a runtime or a model of this machine
+// lists (home.runtimes → pids) is named by it: "Python" becomes the oMLX or the mflux job it is. null when
+// the agent reports none (another agent, or nothing fresh).
+const pidsOf=v=>Array.isArray(v)?v.filter(p=>Number.isSafeInteger(p)&&p>0).slice(0,16):[];
+export function gpuProcessesFor(thermo,thermoId,raw){
+ const g=thermoId?thermo?.gpuProcesses?.()?.[thermoId]:null;if(!g||!Array.isArray(g.rows))return null;
+ const owners=new Map();
+ for(const r of Array.isArray(raw?.runtimes)?raw.runtimes:[]){if(!r||typeof r!=='object'||r.status==='unknown')continue;const runtime=text(r.name,60)||text(r.id,60);
+  for(const pid of pidsOf(r.pids))owners.set(pid,{runtime});
+  for(const m of Array.isArray(r.models)?r.models:[])for(const pid of pidsOf(m?.pids))owners.set(pid,{runtime,model:text(m.id,120)});}
+ return {observedAt:Number.isFinite(g.at)?new Date(g.at).toISOString():null,gpu:number(g.gpu,100000),attributedPercent:number(g.attributedPercent,100000),
+  rows:g.rows.slice(0,5).map(p=>({pid:p.pid,name:text(p.name,80),percent:number(p.percent,100000),...(owners.get(p.pid)||{})}))};
+}
+// What the GPU of a machine works on, from what its runtimes say (models-data → workOf): requests and jobs
+// running or waiting per model, a request through a gateway counted once. null without runtimes.
+export function workFor(entry,machine){
+ if(!entry||typeof entry!=='object'||!Array.isArray(entry.runtimes))return null;
+ const live=liveState({[machine.id]:entry},[{id:machine.id,name:machine.name}]);
+ const {items,active,queued,watching,blind}=workOf(live,placements(live));
+ return {items:items.map(({machine:_,...x})=>x),active,queued,watching:watching.map(r=>r.name),blind:blind.map(r=>r.name)};
 }
 // Several home.runtimes providers (the direct adapters of core, a plugin's bridge, …) may report one machine.
 // reports = their values, in registry order. Per machine the runtimes are joined and each runtime appears
@@ -250,12 +280,22 @@ export function runtimesFor(entry){
 const endpointKey=url=>{try{const u=new URL(url),host=['localhost','[::1]'].includes(u.hostname)||/^127\./.test(u.hostname)?'loopback':u.hostname;
  return `${host}:${u.port||(u.protocol==='https:'?'443':'80')}`;}catch{return null;}};
 const richness=r=>(r.status!=='unknown'?1000:0)+(Array.isArray(r.models)?r.models.length*2+r.models.reduce((a,m)=>a+['sizeGb','contextTokens','ttlRemainingSeconds'].filter(k=>m?.[k]!=null).length,0):0)+(Array.isArray(r.stats)?r.stats.length*3:0)+(r.version?2:0);
+// Besides sizes and figures, the other entry fills what only it knows: the wiring fields of the LLM & Diffusion
+// page (role, memory; a model's name, kind, engine, via, target, …) and, while it is not stale, how busy the
+// runtime and its models are (activity; active, queued, since).
+const MODEL_FILL=['name','kind','capabilities','engine','via','target','lastRequestAt','ttlSeconds','pids'],BUSY=['active','queued','since'];
 function fillRuntime(base,other){
- const theirs=new Map((other.models||[]).filter(m=>m&&typeof m.id==='string').map(m=>[m.id,m]));
- const models=(base.models||[]).map(m=>{const o=theirs.get(m?.id);if(!o)return m;const out={...m};for(const k of ['sizeGb','contextTokens','ttlRemainingSeconds'])if(out[k]==null&&o[k]!=null&&(k!=='ttlRemainingSeconds'||o.state===m.state))out[k]=o[k];return out;});
- if(other.status!=='unknown')for(const o of theirs.values())if(!models.some(m=>m?.id===o.id))models.push(o);
+ const theirs=new Map((other.models||[]).filter(m=>m&&typeof m.id==='string').map(m=>[m.id,m])),live=other.status!=='unknown';
+ const models=(base.models||[]).map(m=>{const o=theirs.get(m?.id);if(!o)return m;const out={...m};for(const k of ['sizeGb','contextTokens','ttlRemainingSeconds'])if(out[k]==null&&o[k]!=null&&(k!=='ttlRemainingSeconds'||o.state===m.state))out[k]=o[k];
+  for(const k of MODEL_FILL)if(out[k]==null&&o[k]!=null)out[k]=o[k];
+  if(live&&out.active==null&&out.queued==null&&(o.active!=null||o.queued!=null))for(const k of BUSY)if(o[k]!=null)out[k]=o[k];
+  return out;});
+ if(live)for(const o of theirs.values())if(!models.some(m=>m?.id===o.id))models.push(o);
  const labels=new Set((base.stats||[]).map(x=>x?.label));
  return {...base,version:base.version||other.version||null,url:base.url||other.url||null,models:models.slice(0,30),
+  ...(base.role==null&&other.role!=null?{role:other.role}:{}),...(base.memory==null&&other.memory!=null?{memory:other.memory}:{}),
+  ...(base.mode==null&&other.mode!=null?{mode:other.mode}:{}),...(base.activity==null&&live&&other.activity!=null?{activity:other.activity}:{}),
+  ...(base.pids==null&&live&&other.pids!=null?{pids:other.pids}:{}),
   stats:[...(base.stats||[]),...(other.stats||[]).filter(x=>x&&!labels.has(x.label))].slice(0,Math.max(4,(base.stats||[]).length)),
   _from:[...new Set([...(base._from||[base.source]),...(other._from||[other.source])])],_observedAt:base._observedAt};
 }
@@ -375,7 +415,7 @@ export function buildHome({site,snapshots:computeLatest={},thermo,router=null,pr
   // No live router feed yet: show the freshly collected census, marked stale with its time.
   const census=def.kind==='router'&&Array.isArray(descriptors[def.id]?.clients)?descriptors[def.id].clients:null;
   if(def.kind==='router'&&!routerQuad&&census){routerQuad={clients:census.length,wifi:census.filter(c=>c.connection==='wifi'||c.connection==='wireless').length,power:null,temp:null};online='stale';lastSeen=collected?.collectedAt||null;}
-  const reported=runtimesFor(Object.hasOwn(runtimes||{},def.id)?runtimes[def.id]:null);
+  const raw=Object.hasOwn(runtimes||{},def.id)?runtimes[def.id]:null,reported=runtimesFor(raw);
   return {...def,hostname:def.hostname||'',ip:def.ip,online,lastSeen,
    thermo:thermoStatus||null,bridge:entry.bridge||null,
    quad:live||routerQuad,
@@ -389,6 +429,10 @@ export function buildHome({site,snapshots:computeLatest={},thermo,router=null,pr
    // What only Windows telemetry reports (per-core load, disk and network rates, each GPU); null elsewhere.
    native:isFeed(def.provider)?thermo?.native?.()?.[def.thermo]||null:null,
    runtimes:reported,
+   // What its models work on right now (requests and jobs running or waiting), next to the GPU's own reading.
+   work:reported?workFor(raw,def):null,
+   // The busiest processes on its GPU (the telemetry agent's), named by the runtime or job they belong to.
+   gpuProcesses:def.thermo?gpuProcessesFor(thermo,def.thermo,raw):null,
    // A machine that reports LLM runtimes works on its GPU; anywhere else the CPU says more.
    spark:def.thermo?sparkFor(thermo,def.thermo,nowSec,reported?.runtimes.length?'gpu':'cpu'):null,
    stack:mergeStack(def.id,[...services,...runtimeServices(reported).filter(r=>!services.some(s=>s.id===r.id))],publishedStack||collected?.stack||layouts[def.id]||null)};

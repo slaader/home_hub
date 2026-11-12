@@ -162,22 +162,32 @@ export function telemetryNotice(m,meta,{onConnect}={}){
 // the loaded models, and the rest of its models folded away. m.runtimes = what a home.runtimes provider
 // reported, already bounded by the server. Labels of the figures are the provider's (its own strings).
 const RUNTIME_STATE={running:['ok','běží'],stopped:['dim','zastaveno'],unknown:['dim','stav neznámý']};
+// A command-line tool (mode cli, mflux) is no server: it works while a job runs, else it has nothing to do.
+const CLI_STATE={running:['ok','pracuje'],stopped:['dim','nic neběží'],unknown:['dim','stav neznámý']};
+const minutes=iso=>{const s=(Date.now()-Date.parse(iso))/1000;return Number.isFinite(s)&&s>=0?s<60?t('{n} s',{n:Math.round(s)}):s<5400?t('{n} min',{n:Math.round(s/60)}):t('{n} h',{n:Math.round(s/360)/10}):null;};
+// How busy a model is, in a few words: running (since when) and waiting.
+const busyFacts=x=>{const time=x.since?minutes(x.since):null;return [x.active?time?x.active>1?t('generuje ×{n}, nejdéle {time}',{n:x.active,time}):t('generuje {time}',{time})
+ :x.active>1?t('generuje ×{n}',{n:x.active}):t('generuje'):null,
+ x.queued?tp(x.queued,'{n} ve frontě|{n} ve frontě|{n} ve frontě'):null].filter(Boolean);};
 // A runtime listens on its own machine: ":8081" says more than a loopback address.
 const listen=url=>{try{const u=new URL(url);return ['127.0.0.1','localhost','[::1]'].includes(u.hostname)?`:${u.port||(u.protocol==='https:'?443:80)}`:u.host;}catch{return '';}};
 const kilo=n=>n>=1e6?`${Math.round(n/1e5)/10}M`:n>=1e3?`${Math.round(n/1e3)}k`:String(n);
 function modelRow(x){
- const held=x.state==='loaded';
- const facts=[x.sizeGb!=null?`${x.sizeGb} GB`:null,x.contextTokens?t('kontext {n}',{n:kilo(x.contextTokens)}):null,
-  held&&x.ttlRemainingSeconds!=null?t('uvolní se za {min} min',{min:Math.max(1,Math.round(x.ttlRemainingSeconds/60))}):null,x.state==='loading'?t('načítá se'):null].filter(Boolean);
- return el('li',{class:held?'on':x.state==='loading'?'busy':''},el('span',{},x.id),facts.length?el('small',{},facts.join(' · ')):null);
+ const held=x.state==='loaded',busy=busyFacts(x);
+ const facts=[...busy,x.sizeGb!=null?`${x.sizeGb} GB`:null,x.contextTokens?t('kontext {n}',{n:kilo(x.contextTokens)}):null,
+  held&&!x.active&&x.ttlRemainingSeconds!=null?t('uvolní se za {min} min',{min:Math.max(1,Math.round(x.ttlRemainingSeconds/60))}):null,x.state==='loading'?t('načítá se'):null].filter(Boolean);
+ return el('li',{class:x.active?'on gen':held?'on':x.state==='loading'||x.queued?'busy':''},el('span',{},x.id),facts.length?el('small',{},facts.join(' · ')):null);
 }
 function runtimeCard(r,open){
- const [tone,label]=RUNTIME_STATE[r.status]||RUNTIME_STATE.unknown;
- const held=r.models.filter(x=>x.state==='loaded'||x.state==='loading'),rest=r.models.filter(x=>!held.includes(x));
- // Only a runtime that answers can be said to hold nothing.
- const heading=held.length?tp(held.length,'{n} načtený model|{n} načtené modely|{n} načtených modelů'):r.status==='running'&&r.models.length?t('žádný model není načtený'):r.models.length?t('Modely'):t('žádné modely');
- return el('article',{class:'hv-runtime'},
-  el('header',{},el('h3',{},r.name),el('span',{class:`hv-status ${tone}`},el('i',{'aria-hidden':'true'}),t(label))),
+ const cli=r.mode==='cli',[tone,label]=(cli?CLI_STATE:RUNTIME_STATE)[r.status]||RUNTIME_STATE.unknown;
+ const held=r.models.filter(x=>x.state==='loaded'||x.state==='loading'||x.active||x.queued),rest=r.models.filter(x=>!held.includes(x));
+ // Only a runtime that answers can be said to hold nothing. A tool's models are those its jobs use.
+ const heading=cli?held.length?tp(held.length,'{n} model v práci|{n} modely v práci|{n} modelů v práci'):t('žádná úloha neběží')
+  :held.length?tp(held.length,'{n} načtený model|{n} načtené modely|{n} načtených modelů'):r.status==='running'&&r.models.length?t('žádný model není načtený'):r.models.length?t('Modely'):t('žádné modely');
+ const busy=r.activity?busyFacts(r.activity):[];
+ return el('article',{class:`hv-runtime${r.activity?.active?' gen':''}`},
+  el('header',{},el('h3',{},r.name),el('span',{class:'hv-runtime-flags'},busy.length?el('span',{class:`hv-work-chip${r.activity.active?' on':''}`},busy.join(' · ')):null,
+   el('span',{class:`hv-status ${tone}`},el('i',{'aria-hidden':'true'}),t(label)))),
   el('p',{class:'hv-runtime-meta'},[r.kind&&r.kind.toLowerCase()!==String(r.name).toLowerCase()?r.kind:null,r.version,r.url?listen(r.url):null].filter(Boolean).join(' · ')||' '),
   r.stats.length?el('dl',{class:'hv-runtime-stats'},r.stats.map((x,i)=>el('div',{class:i?'':'main'},el('dt',{},t(x.label)),el('dd',{},x.value)))):null,
   el('div',{class:'hv-runtime-list'},el('span',{class:'hv-k'},heading),
@@ -185,12 +195,48 @@ function runtimeCard(r,open){
    rest.length?el('details',{'data-id':r.id,open:open?'':null},el('summary',{},held.length?tp(rest.length,'{n} další model|{n} další modely|{n} dalších modelů'):tp(rest.length,'{n} model|{n} modely|{n} modelů')),
     el('ul',{class:'hv-runtime-models'},rest.map(modelRow))):null));
 }
+// What the GPU does right now, above the cards: its reading (m.quad.gpu, the telemetry agent's last seconds)
+// and the models whose runtimes say they run a request or a job, or wait for one (m.work, server/home-data.mjs
+// → workFor). Only what is watched can be named; the note says which runtimes cannot tell.
+const KIND_LABEL={llm:'LLM',embedding:'embedding',image:'obrázky · difúze',video:'video · difúze',music:'hudba',audio:'zvuk',other:'jiný model'};
+const GPU_BUSY=15;// per cent; an idle Mac's desktop alone keeps the GPU at a few
+// The three busiest GPU processes (m.gpuProcesses, the agent's snapshot), always: their GPU time and a bar each, and
+// the runtime or job a process belongs to when its id says so. That figure is time in the GPU's queues (100 % = one
+// GPU-second per second, an estimate of the driver's), not a share of the GPU load in the header: the two come from
+// different counters, queues overlap, and the rows can add up to more than the load. The labels say so.
+const pct=v=>v>=10?String(Math.round(v)):String(Math.round(v*10)/10);
+function processList(g,meta){
+ const rows=(g?.rows||[]).filter(p=>p.percent!=null).slice(0,3);if(!rows.length)return null;
+ return el('div',{class:'hv-work-procs'},el('span',{class:'hv-k'},t('Čas na GPU podle procesů')),
+  el('ol',{},rows.map(p=>{const bar=el('i',{'aria-hidden':'true'});bar.style.width=`${Math.max(2,Math.min(100,p.percent))}%`;
+   return el('li',{},el('b',{},p.name),el('small',{},p.model?t('{model} · {runtime}',{model:p.model,runtime:p.runtime}):p.runtime||t('mimo sledované runtimy')),
+    el('span',{class:'hv-work-pct'},`${pct(p.percent)} %`),el('span',{class:'hv-work-bar'},bar));})),
+  g.observedAt?el('p',{class:'hv-work-note'},t('Podle {agent}: čas ve frontách GPU za posledních 5 s, odhad. Není to podíl z vytížení GPU nahoře a součet může být vyšší. Čteno {when}.',{agent:meta?.agent||'Thermo',when:clock(g.observedAt)})):null);
+}
+export function workPanel(m,meta){
+ const w=m.work;if(!w)return null;
+ const gpu=Number.isFinite(m.quad?.gpu)?Math.round(m.quad.gpu):null,running=w.items.filter(x=>x.active),waiting=w.items.filter(x=>!x.active&&x.queued);
+ const hot=gpu!=null&&gpu>=GPU_BUSY,tone=running.length?'gen':hot?'warn':'idle',procs=processList(m.gpuProcesses,meta);
+ const title=running.length?t('GPU generuje'):hot?t('GPU pracuje, ale nic sledovaného negeneruje'):waiting.length?t('Nic negeneruje, úlohy čekají'):t('GPU je v klidu');
+ const lead=running.length?null:hot?(procs?t('Žádný sledovaný runtime ani nástroj teď nic negeneruje. GPU vytěžují procesy níže.')
+   :t('Žádný sledovaný runtime ani nástroj teď nic negeneruje. GPU vytěžuje něco jiného (hra, render, jiný program), nebo runtime, který neříká, co dělá.'))
+  :waiting.length?null:t('Žádný model teď nic negeneruje.');
+ const where=x=>x.gateways?.length?t('{runtime} přes {gateways}',{runtime:x.runtimeName,gateways:x.gateways.join(', ')}):x.runtimeName;
+ const row=x=>el('li',{class:x.active?'on':'wait'},el('i',{'aria-hidden':'true'}),
+  el('div',{},el('b',{},x.name||x.id),el('small',{},[t(KIND_LABEL[x.kind]||KIND_LABEL.other),where(x),...busyFacts(x)].filter(Boolean).join(' · '))));
+ const note=[w.watching.length?t('Co se generuje, hlásí: {list}.',{list:w.watching.join(', ')}):null,w.blind.length?t('Neříká, jestli zrovna generuje: {list}.',{list:w.blind.join(', ')}):null].filter(Boolean).join(' ');
+ return el('section',{class:`hv-work ${tone}`,'aria-label':t('Co teď dělá GPU')},
+  el('header',{},el('h3',{},el('i',{'aria-hidden':'true'}),title),gpu!=null?el('span',{class:'hv-work-gpu'},t('Vytížení GPU {pct} %',{pct:gpu})):null),
+  lead?el('p',{class:'hv-note'},lead):null,
+  w.items.length?el('ul',{},w.items.map(row)):null,
+  note?el('p',{class:'hv-work-note'},note):null,procs);
+}
 // open: ids of the runtimes whose folded model list is open (kept across a refresh).
 export function runtimesSection(m,meta,{open=[]}={}){
  const data=m.runtimes;if(!data)return null;
  const old=data.observedAt&&Date.now()-Date.parse(data.observedAt)>(meta?.staleAfterSeconds||180)*1000;
  const source=[(data.sources?.length?data.sources:[data.source]).filter(Boolean).map(x=>t(x)).join(' + ')||null,data.observedAt?(old?t('stará data · naposledy {when}',{when:clock(data.observedAt)}):t('čteno {when}',{when:clock(data.observedAt)})):null].filter(Boolean).join(' · ');
- return el('div',{class:'hv-runtimes'},
+ return el('div',{class:'hv-runtimes'},workPanel(m,meta),
   data.runtimes.length?data.runtimes.map(r=>runtimeCard(r,open.includes(r.id))):el('p',{class:'hv-note'},t('Poskytovatel teď na tomhle stroji žádný runtime nehlásí.')),
   source?el('p',{class:`hv-source${old?' warn':''}`},source):null);
 }

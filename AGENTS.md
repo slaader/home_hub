@@ -51,14 +51,14 @@ The run ends with one line per half and a total, and exits non-zero when either 
 an overlay it looks like this (the `overlay` numbers are that household's):
 
 ```
-core     tests 582  pass 581  fail 0  skipped 1
-overlay  tests 76  pass 76  fail 0
-total    tests 658  pass 657  fail 0
+core     tests 587  pass 586  fail 0  skipped 1
+overlay  tests 78  pass 78  fail 0
+total    tests 665  pass 664  fail 0
 ```
 
-- **Core: 582 tests in 79 files (2026-11-11), and none may fail, on any machine.** In a tree that has
+- **Core: 587 tests in 79 files (2026-11-12), and none may fail, on any machine.** In a tree that has
   `local/`, one is reported as skipped: `public edition: no overlay in the tree…` checks an export, and it
-  runs there, so an export passes 582 of 582 with no `overlay` line.
+  runs there, so an export passes 587 of 587 with no `overlay` line.
 - **Overlay: whatever the household added.** Its count, and which of its tests need files that are not in
   git (data, generated media, a runtime on another machine), are written down in `local/AGENTS.md`. A failing
   overlay test that is not on that list is a real failure.

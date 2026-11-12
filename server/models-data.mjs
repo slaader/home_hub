@@ -64,10 +64,16 @@ export const modelKey=id=>text(id,160).toLowerCase().split('/').pop().split('--'
 
 // ── Live state ──────────────────────────────────────────────────────────────────────────────────
 const ROLE_HINT=/llama-swap|gateway|litellm|proxy|router|openrouter|front.?door/i;
+// How busy a model or runtime is right now, where its provider says: requests (or jobs) being worked on and
+// those waiting. null = not reported (unknown), never read as idle.
+const busy=v=>typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=100000?Math.round(v):null;
+export function activityOf(a){if(!plain(a))return null;const active=busy(a.active),queued=busy(a.queued);return active===null&&queued===null?null:{active:active??0,queued:queued??0};}
 function cleanModel(m){
  const id=text(m.id,160);if(!id)return null;
  const caps=Array.isArray(m.capabilities)?m.capabilities.slice(0,10).map(c=>text(c,30)).filter(Boolean):[];
+ const work=activityOf(m),since=timeMs(m.since);
  return {id,name:text(m.name,160)||id,state:MODEL_STATES.includes(m.state)?m.state:m.state==='idle'?'unloaded':'unknown',
+  active:work?.active??null,queued:work?.queued??null,since:work?.active&&since!=null?iso(since):null,
   sizeGb:num(m.sizeGb,100000),contextTokens:num(m.contextTokens,1e9),ttlRemainingSeconds:num(m.ttlRemainingSeconds,1e9),ttlSeconds:num(m.ttlSeconds,1e9),
   lastRequestAt:timeMs(m.lastRequestAt)!=null?iso(timeMs(m.lastRequestAt)):null,capabilities:caps,engine:text(m.engine,60)||null,
   via:text(m.via,60)||null,target:text(m.target,160)||null,kind:MODEL_KINDS.includes(m.kind)?m.kind:null};
@@ -78,8 +84,11 @@ function cleanRuntime(r){
  const mem=plain(r.memory)?{usedGb:num(r.memory.usedGb,100000),capacityGb:num(r.memory.capacityGb,100000),basis:r.memory.basis==='budget'?'budget':'resident'}:null;
  const seen=new Set();
  return {id,name:text(r.name,60)||id,kind:text(r.kind,80),status:['running','stopped','unknown'].includes(r.status)?r.status:'unknown',url:text(r.url,160)||null,version:text(r.version,60)||null,role,
+  mode:r.mode==='cli'?'cli':'server',activity:r.status==='unknown'?null:activityOf(r.activity),
   memory:mem&&(mem.usedGb!=null||mem.capacityGb!=null)?mem:null,
-  models:(Array.isArray(r.models)?r.models:[]).filter(plain).map(cleanModel).filter(m=>m&&!seen.has(m.id)&&seen.add(m.id)).slice(0,LIMITS.models)};
+  // A runtime not heard from lately says nothing about now: none of its models is busy or idle.
+  models:(Array.isArray(r.models)?r.models:[]).filter(plain).map(cleanModel).filter(m=>m&&!seen.has(m.id)&&seen.add(m.id)).slice(0,LIMITS.models)
+   .map(m=>r.status==='unknown'?{...m,active:null,queued:null,since:null}:m)};
 }
 // merged = Object.assign of every home.runtimes provider; machines = [{id, name, ramGb, ip}] the hub knows.
 // → [{machine, name, ramGb, source, observedAt, runtimes[]}], machines in the hub's order, unknown ones after.
@@ -102,22 +111,39 @@ export function placements(live){
   const aliases=new Map(),merged=new Set();// "runtime\0model" → [{runtime, alias, lastRequestAt}]; merged = gateway entries folded in
   for(const r of m.runtimes)if(r.role==='gateway')for(const x of r.models){
    const engine=x.via&&byRuntime.get(x.via),hit=engine&&x.target&&engine.models.find(y=>y.id===x.target);
-   if(hit){const k=`${engine.id}\u0000${hit.id}`;aliases.set(k,[...(aliases.get(k)||[]),{runtime:r.id,alias:x.id,lastRequestAt:x.lastRequestAt,ttlRemainingSeconds:x.ttlRemainingSeconds,ttlSeconds:x.ttlSeconds}]);merged.add(x);}
+   if(hit){const k=`${engine.id}\u0000${hit.id}`;aliases.set(k,[...(aliases.get(k)||[]),{runtime:r.id,alias:x.id,lastRequestAt:x.lastRequestAt,ttlRemainingSeconds:x.ttlRemainingSeconds,ttlSeconds:x.ttlSeconds,active:x.active,queued:x.queued,since:x.since}]);merged.add(x);}
   }
   for(const r of m.runtimes)for(const x of r.models){
    if(merged.has(x))continue;
    const al=aliases.get(`${r.id}\u0000${x.id}`)||[];
    const last=[x.lastRequestAt,...al.map(a=>a.lastRequestAt)].map(timeMs).filter(v=>v!=null);
    const viaRuntime=r.role==='gateway'&&x.via&&byRuntime.has(x.via)?x.via:null;
+   // One request sent through a gateway is in flight at the gateway and at the engine at once: the larger
+   // count of the two, never their sum. Unknown at both stays unknown.
+   const fold=key=>{const own=x[key],theirs=al.map(a=>a[key]).filter(v=>v!=null);return own==null&&!theirs.length?null:Math.max(own??0,theirs.reduce((n,v)=>n+v,0));};
+   const active=fold('active'),queued=fold('queued'),starts=[x.since,...al.map(a=>a.since)].map(timeMs).filter(v=>v!=null);
    out.push({machine:m.machine,machineName:m.name,runtime:r.id,runtimeName:r.name,role:r.role,runtimeStatus:r.status,
     engine:r.role==='gateway'?(x.via||x.engine||null):(x.engine||r.kind||r.name),viaRuntime,
     gateways:[...new Set(al.map(a=>a.runtime))],aliases:al.map(a=>a.alias),
     id:x.id,name:x.name,key:modelKey(x.id),kind:inferKind(x,r),state:x.state,sizeGb:x.sizeGb,contextTokens:x.contextTokens,
     ttlRemainingSeconds:x.ttlRemainingSeconds??al.map(a=>a.ttlRemainingSeconds).find(v=>v!=null)??null,ttlSeconds:x.ttlSeconds??al.map(a=>a.ttlSeconds).find(v=>v!=null)??null,
-    lastRequestAt:last.length?iso(Math.max(...last)):null,capabilities:x.capabilities});
+    lastRequestAt:last.length?iso(Math.max(...last)):null,capabilities:x.capabilities,
+    active,queued,since:active&&starts.length?iso(Math.min(...starts)):null,mode:r.mode});
   }
  }
  return out;
+}
+// What the models of one or more machines work on right now (the machine page's "what the GPU does" and the
+// LLM & Diffusion page): placements with a request or job running or waiting, running first, oldest first.
+// watching: the runtimes that say how busy they are; blind: those that do not (their work cannot be seen).
+export function workOf(live,list){
+ const items=list.filter(p=>p.active||p.queued).map(p=>({machine:p.machine,runtime:p.runtime,runtimeName:p.runtimeName,gateways:p.gateways,mode:p.mode||'server',
+  id:p.id,name:p.name,kind:p.kind,active:p.active||0,queued:p.queued||0,since:p.since}))
+  .sort((a,b)=>(b.active>0)-(a.active>0)||(timeMs(a.since)??Infinity)-(timeMs(b.since)??Infinity)||a.id.localeCompare(b.id));
+ const runtimes=live.flatMap(m=>m.runtimes.map(r=>({machine:m.machine,id:r.id,name:r.name,role:r.role,status:r.status,activity:r.activity})));
+ return {items:items.slice(0,24),active:items.reduce((n,x)=>n+x.active,0),queued:items.reduce((n,x)=>n+x.queued,0),
+  watching:runtimes.filter(r=>r.activity).map(r=>({machine:r.machine,id:r.id,name:r.name})),
+  blind:runtimes.filter(r=>!r.activity&&r.status==='running').map(r=>({machine:r.machine,id:r.id,name:r.name}))};
 }
 
 // ── Requests ────────────────────────────────────────────────────────────────────────────────────
@@ -180,6 +206,7 @@ export function overview(live,list,requests,{range='24h',now=Date.now()}={}){
  return {machines:live.filter(m=>m.runtimes.length).length,
   runtimes:{total:runtimes.length,up:runtimes.filter(r=>r.status==='running').length,down:runtimes.filter(r=>r.status==='stopped').length,unknown:runtimes.filter(r=>r.status==='unknown').length},
   models:{total:list.length,loaded:list.filter(p=>p.state==='loaded').length,loading:list.filter(p=>p.state==='loading').length,
+   generating:list.filter(p=>p.active>0).length,queued:list.filter(p=>p.queued>0).length,
    byKind:Object.fromEntries(MODEL_KINDS.map(k=>[k,list.filter(p=>p.kind===k).length]).filter(([,n])=>n))},
   memory:machineMemory(live,list),
   range,requests:requests.length,inputTokens:requests.reduce((n,r)=>n+r.inputTokens,0),outputTokens:requests.reduce((n,r)=>n+r.outputTokens,0),
@@ -199,13 +226,15 @@ export function modelGroups(list,requests=[]){
   const placementsOut=g.placements.map(p=>{const u=usage.get(`${p.machine}\u0000${p.runtime}\u0000${p.id}`);const last=Math.max(timeMs(p.lastRequestAt)||0,u?.last||0);
    return {machine:p.machine,machineName:p.machineName,runtime:p.runtime,runtimeName:p.runtimeName,role:p.role,runtimeStatus:p.runtimeStatus,engine:p.engine,gateways:p.gateways,aliases:p.aliases,
     id:p.id,state:p.state,sizeGb:p.sizeGb,contextTokens:p.contextTokens,ttlRemainingSeconds:p.ttlRemainingSeconds,ttlSeconds:p.ttlSeconds,lastRequestAt:last?iso(last):null,
-    requests:u?.requests||0,tokens:u?.tokens||0,capabilities:p.capabilities};}).sort((a,b)=>STATE_RANK[b.state]-STATE_RANK[a.state]||a.machine.localeCompare(b.machine));
-  const last=placementsOut.map(p=>timeMs(p.lastRequestAt)).filter(Boolean);
+    requests:u?.requests||0,tokens:u?.tokens||0,capabilities:p.capabilities,active:p.active??null,queued:p.queued??null,since:p.since||null};}).sort((a,b)=>STATE_RANK[b.state]-STATE_RANK[a.state]||a.machine.localeCompare(b.machine));
+  const last=placementsOut.map(p=>timeMs(p.lastRequestAt)).filter(Boolean),watched=placementsOut.filter(p=>p.active!=null||p.queued!=null);
+  const starts=placementsOut.filter(p=>p.active).map(p=>timeMs(p.since)).filter(v=>v!=null);
   return {key:g.key,name:g.placements[0].id,kind,state:placementsOut[0].state,machines:[...new Set(placementsOut.map(p=>p.machine))],
+   active:watched.length?watched.reduce((n,p)=>n+(p.active||0),0):null,queued:watched.length?watched.reduce((n,p)=>n+(p.queued||0),0):null,since:starts.length?iso(Math.min(...starts)):null,
    sizeGb:Math.max(0,...placementsOut.map(p=>p.sizeGb||0))||null,contextTokens:Math.max(0,...placementsOut.map(p=>p.contextTokens||0))||null,
    ttlRemainingSeconds:placementsOut.find(p=>p.state==='loaded'&&p.ttlRemainingSeconds!=null)?.ttlRemainingSeconds??null,
    lastRequestAt:last.length?iso(Math.max(...last)):null,requests:placementsOut.reduce((n,p)=>n+p.requests,0),tokens:placementsOut.reduce((n,p)=>n+p.tokens,0),placements:placementsOut};
- }).sort((a,b)=>STATE_RANK[b.state]-STATE_RANK[a.state]||b.requests-a.requests||a.name.localeCompare(b.name));
+ }).sort((a,b)=>(b.active>0)-(a.active>0)||(b.queued>0)-(a.queued>0)||STATE_RANK[b.state]-STATE_RANK[a.state]||b.requests-a.requests||a.name.localeCompare(b.name));
 }
 
 // ── Clients ─────────────────────────────────────────────────────────────────────────────────────
@@ -261,11 +290,12 @@ export function buildGraph(live,list,requests,{machines=[],known=[],now=Date.now
  const node=(id,data)=>{if(!nodes.has(id))nodes.set(id,{id,requests:0,tokens:0,recent:0,lastAt:null,...data});return nodes.get(id);};
  const edge=(from,to)=>{const id=`${from}→${to}`;if(!edges.has(id))edges.set(id,{id,from,to,requests:0,tokens:0,recent:0,tokensRecent:0,lastAt:null});return edges.get(id);};
  const bump=(x,r)=>{x.requests++;x.tokens+=r.inputTokens+r.outputTokens;if(now-r.at<=RECENT_MS){x.recent++;if('tokensRecent' in x)x.tokensRecent+=r.inputTokens+r.outputTokens;}x.lastAt=Math.max(x.lastAt||0,r.at);};
- const runtimeNode=(m,r)=>node(`rt:${m.machine}:${r.id}`,{column:r.role==='gateway'?'door':'engine',lane:m.machine,label:r.name,sub:r.kind||null,state:r.status,machine:m.machine,runtime:r.id,role:r.role});
+ const runtimeNode=(m,r)=>node(`rt:${m.machine}:${r.id}`,{column:r.role==='gateway'?'door':'engine',lane:m.machine,label:r.name,sub:r.kind||null,state:r.status,machine:m.machine,runtime:r.id,role:r.role,active:r.activity?.active??null,queued:r.activity?.queued??null});
  const engineInside=(machine,name,gateway)=>node(`en:${machine}:${name}`,{column:'engine',lane:machine,label:name,sub:gateway,state:'running',machine,runtime:null,role:'embedded'});
- const modelNode=p=>node(`md:${p.machine}:${p.runtime}:${p.id}`,{column:'model',lane:p.machine,label:p.id,sub:p.aliases.length?p.aliases.join(', '):null,state:p.state,kind:p.kind,machine:p.machine,runtime:p.runtime,model:p.id,key:p.key,sizeGb:p.sizeGb});
+ const modelNode=p=>node(`md:${p.machine}:${p.runtime}:${p.id}`,{column:'model',lane:p.machine,label:p.id,sub:p.aliases.length?p.aliases.join(', '):null,state:p.state,kind:p.kind,machine:p.machine,runtime:p.runtime,model:p.id,key:p.key,sizeGb:p.sizeGb,active:p.active??null,queued:p.queued??null});
  // Static structure: every runtime, the path each model is served on.
- const shown=list.filter(p=>p.state==='loaded'||p.state==='loading').concat(list.filter(p=>p.state!=='loaded'&&p.state!=='loading')).slice(0,LIMITS.graphModels);
+ const inMemory=p=>p.active>0||p.queued>0||p.state==='loaded'||p.state==='loading';
+ const shown=list.filter(inMemory).concat(list.filter(p=>!inMemory(p))).slice(0,LIMITS.graphModels);
  for(const m of live)for(const r of m.runtimes)runtimeNode(m,r);
  const pathOf=p=>{// [door?, engine?, model] node ids
   const m=live.find(x=>x.machine===p.machine),r=m.runtimes.find(x=>x.id===p.runtime),md=modelNode(p).id,ids=[];

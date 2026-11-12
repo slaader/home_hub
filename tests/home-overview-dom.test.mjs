@@ -4,13 +4,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {installDom,fire} from './fixtures/mini-dom.mjs';
+import {installDom,fire,Element} from './fixtures/mini-dom.mjs';
+// The CSSOM a view writes to (a bar's width), as the other UI tests stub it.
+if(!('style' in Element.prototype))Object.defineProperty(Element.prototype,'style',{get(){return this._style??={};},set(v){this._style=v;},configurable:true});
 
 const bus=new EventTarget();
 globalThis.addEventListener??=bus.addEventListener.bind(bus);
 globalThis.dispatchEvent??=bus.dispatchEvent.bind(bus);
 const {dropAt,orderAfterDrop,keyTarget,tileDrag,MOUSE_SLOP,TOUCH_SLOP,HOLD_MS}=await import('../public/home-drag.js');
-const {runtimesSection}=await import('../public/home-telemetry.js');
+const {runtimesSection,workPanel}=await import('../public/home-telemetry.js');
 
 const rect=(id,left,top)=>({id,left,top,right:left+200,bottom:top+300});
 
@@ -195,6 +197,47 @@ test('local LLM runtimes: one compact card per runtime a provider reported, noth
  // A provider that is there but reports no runtime on this machine.
  const none=runtimesSection({runtimes:{source:'',observedAt:null,runtimes:[]}},{});
  assert.equal(byTag(none,'article').length,0);assert.deepEqual(texts(none,'hv-note'),['The provider reports no runtime on this machine right now.']);assert.equal(texts(none,'hv-source').length,0);
+});
+
+test('what the GPU does: the models at work with their kind and runtime, said plainly when idle or busy with something unwatched',()=>{
+ installDom();
+ assert.equal(workPanel({work:null}),null,'no runtimes: no such part');
+ const since=new Date(Date.now()-185000).toISOString();
+ const work={items:[{runtime:'mflux',runtimeName:'mflux',gateways:[],mode:'cli',id:'seedvr2-3b',name:'seedvr2-3b · upscale-seedvr2',kind:'image',active:1,queued:0,since},
+  {runtime:'omlx',runtimeName:'oMLX',gateways:['llama-swap'],id:'Qwen3.8-27B-8bit',name:'Qwen3.8-27B-8bit',kind:'llm',active:2,queued:1,since},
+  {runtime:'mflux',runtimeName:'mflux',gateways:[],id:'seedvr2-7b',name:'seedvr2-7b',kind:'image',active:0,queued:1,since:null}],active:3,queued:2,watching:['llama-swap','oMLX','mflux'],blind:['mlx-serve']};
+ const busy=workPanel({work,quad:{gpu:61.6}});
+ assert.equal(busy.getAttribute('class'),'hv-work gen');assert.equal(byTag(busy,'h3')[0].textContent,'The GPU is generating');assert.deepEqual(texts(busy,'hv-work-gpu'),['GPU load 62 %']);
+ assert.deepEqual(byTag(busy,'li').map(n=>[n.getAttribute('class'),byTag(n,'b')[0].textContent,byTag(n,'small')[0].textContent]),[
+  ['on','seedvr2-3b · upscale-seedvr2','images · diffusion · mflux · generating for 3 min'],
+  ['on','Qwen3.8-27B-8bit','LLM · oMLX via llama-swap · generating ×2, the longest for 3 min · 1 queued'],
+  ['wait','seedvr2-7b','images · diffusion · mflux · 1 queued']]);
+ assert.deepEqual(texts(busy,'hv-work-note'),['Reported by: llama-swap, oMLX, mflux. Cannot tell whether it is generating: mlx-serve.']);
+ const quiet={items:[],active:0,queued:0,watching:['llama-swap'],blind:[]};
+ const idle=workPanel({work:quiet,quad:{gpu:3}});
+ assert.equal(byTag(idle,'h3')[0].textContent,'The GPU is idle');assert.deepEqual(texts(idle,'hv-note'),['No model is generating anything now.']);
+ const hot=workPanel({work:quiet,quad:{gpu:80}});
+ assert.equal(hot.getAttribute('class'),'hv-work warn');assert.equal(byTag(hot,'h3')[0].textContent,'The GPU is busy, but nothing watched is generating');
+ // The top three GPU processes, always; with them the busy-but-unwatched case points at them.
+ const gpuProcesses={observedAt:new Date().toISOString(),rows:[{pid:1,name:'Game',percent:71.4},{pid:2,name:'Python',percent:6.25,runtime:'mflux',model:'seedvr2-3b'},{pid:3,name:'Python',percent:2,runtime:'oMLX'},{pid:4,name:'WindowServer',percent:1}]};
+ const named=workPanel({work:quiet,quad:{gpu:80},gpuProcesses},{agent:'Thermo'});
+ assert.deepEqual(texts(named,'hv-note'),['No watched runtime or tool is generating anything now. The processes below are using the GPU.']);
+ const procs=byTag(byTag(named,'ol')[0],'li');
+ assert.deepEqual(procs.map(n=>[byTag(n,'b')[0].textContent,byTag(n,'small')[0].textContent,texts(n,'hv-work-pct')[0]]),[['Game','not a watched runtime','71 %'],['Python','seedvr2-3b · mflux','6.3 %'],['Python','oMLX','2 %']],'three, with what each belongs to');
+ assert.deepEqual(procs.map(n=>byTag(byTag(n,'span').find(x=>x.getAttribute('class')==='hv-work-bar'),'i')[0].style.width),['71.4%','6.25%','2%'],'the bar is GPU time (100 % = one GPU-second per second)');
+ assert.equal(texts(byTag(named,'div').find(x=>x.getAttribute('class')==='hv-work-procs'),'hv-k')[0],'GPU time by process','the rows are named GPU time, not GPU load');
+ assert.match(texts(named,'hv-work-note').at(-1),/^From Thermo: time in the GPU queues over the last 5 s, an estimate\. It is not a share of the GPU load above, and the rows can add up to more\. Read /);
+ assert.equal(byTag(workPanel({work,quad:{gpu:61.6},gpuProcesses}),'ol').length,1,'also while a model generates');
+ assert.equal(texts(workPanel({work:quiet}),'hv-work-gpu').length,0,'without telemetry no GPU figure is made up');
+ // The cards say it too: a busy runtime has a chip, a busy model a pulsing row; a tool says "working" / "nothing running".
+ const node=runtimesSection({work,quad:{gpu:61.6},runtimes:{source:'a provider',observedAt:new Date().toISOString(),runtimes:[
+  {id:'omlx',name:'oMLX',kind:'MLX',status:'running',url:null,version:null,stats:[],activity:{active:2,queued:1},models:[{id:'Qwen3.8-27B-8bit',state:'loaded',active:2,queued:1,since,sizeGb:27.5,contextTokens:null,ttlRemainingSeconds:300}]},
+  {id:'mflux',name:'mflux',kind:'MLX · CLI',mode:'cli',status:'stopped',url:null,version:null,stats:[],activity:{active:0,queued:0},models:[]}]}},{staleAfterSeconds:180});
+ assert.equal(byTag(node,'section')[0].getAttribute('class'),'hv-work gen','the panel comes first');
+ const [omlx,mflux]=byTag(node,'article');
+ assert.deepEqual(texts(omlx,'hv-work-chip'),['generating ×2 · 1 queued'],'a runtime says how many, not since when');assert.equal(omlx.getAttribute('class'),'hv-runtime gen');
+ assert.deepEqual(byTag(omlx,'li').map(n=>[n.getAttribute('class'),n.textContent]),[['on gen','Qwen3.8-27B-8bitgenerating ×2, the longest for 3 min · 1 queued · 27.5 GB']],'no unload countdown while it works');
+ assert.deepEqual([texts(mflux,'hv-status')[0],texts(mflux,'hv-k')[0],texts(mflux,'hv-work-chip').length],['nothing running','no job is running',0]);
 });
 
 test('the page promises no runtimes from the telemetry agent, and draws the section only for a provider',async()=>{

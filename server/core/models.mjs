@@ -6,7 +6,8 @@
 //   runtimes.requests  (state, hub) => {id, read({from, to, limit}) → Promise<items[]>}  request history
 // and the stacks the site configuration and runtime_publish describe. Without any provider the page says how
 // to connect one. Shaping is in server/models-data.mjs.
-import {liveState,placements,overview,modelGroups,clientsOf,buildGraph,knownTools,history,cleanRequest,requestKey,MODEL_RANGES,LIMITS,UNATTRIBUTED} from '../models-data.mjs';
+import {liveState,placements,overview,modelGroups,clientsOf,buildGraph,knownTools,history,cleanRequest,requestKey,workOf,MODEL_RANGES,LIMITS,UNATTRIBUTED} from '../models-data.mjs';
+import {mergeRuntimeReports} from '../home-data.mjs';
 import {provenance} from '../provenance.mjs';
 import {toolError} from '../mcp.mjs';
 
@@ -57,7 +58,9 @@ export function createModels(hub){
  }
  async function live(){
   const machines=await machinesOf(hub),runtimes=await provided(hub,'home.runtimes');
-  const merged=Object.assign({},...runtimes.map(p=>p.value&&typeof p.value==='object'?p.value:{}));
+  // Joined per machine the way the machine pages join them: one entry per runtime, the richer kept and its
+  // gaps (wiring fields, how busy it is) filled from the other.
+  const merged=mergeRuntimeReports(runtimes.map(p=>p.value&&typeof p.value==='object'?p.value:{}));
   const state=liveState(merged,machines);
   const sources=runtimes.map(p=>{const v=p.value&&typeof p.value==='object'?p.value:{};const ids=Object.keys(v);
    return {module:p.module,core:p.core,source:ids.map(id=>v[id]?.source).find(Boolean)||p.module,machines:ids.length,lastAt:ids.map(id=>v[id]?.observedAt).filter(Boolean).sort().at(-1)||null,failed:Boolean(p.failed)};});
@@ -73,8 +76,9 @@ export function createModels(hub){
     requests:req.sources.map(s=>({module:s.module,id:s.id,count:s.count,lastAt:s.lastAt||null,failed:s.failed}))},
    overview:overview(state,list,inRange,{range,now}),
    machines:state.map(m=>({machine:m.machine,name:m.name,ramGb:m.ramGb,source:m.source,observedAt:m.observedAt,
-    runtimes:m.runtimes.map(r=>({id:r.id,name:r.name,kind:r.kind,role:r.role,status:r.status,version:r.version,url:r.url,memory:r.memory,models:r.models.length,loaded:r.models.filter(x=>x.state==='loaded').length}))})),
+    runtimes:m.runtimes.map(r=>({id:r.id,name:r.name,kind:r.kind,role:r.role,mode:r.mode,status:r.status,version:r.version,url:r.url,memory:r.memory,activity:r.activity,models:r.models.length,loaded:r.models.filter(x=>x.state==='loaded').length}))})),
    models:modelGroups(list,inRange),
+   work:workOf(state,list),
    clients:clientsOf(inRange,list,machines,{now}),
    graph:buildGraph(state,list,inRange,{machines,known,now}),
    known,
@@ -94,9 +98,9 @@ export function createModels(hub){
 const modelsError=e=>e.message==='invalid'?[400,'INVALID_QUERY','Neplatný rozsah: 24h, 7d nebo 30d.']:[503,'MODELS_UNAVAILABLE','Data modelů jsou dočasně nedostupná.'];
 // What the MCP tool returns: the overview, every model with its placements, the clients; the graph on request.
 export function toolView(data,{graph=false}={}){
- return {generatedAt:data.generatedAt,range:data.range,empty:data.empty,overview:data.overview,
-  models:data.models.map(g=>({name:g.name,kind:g.kind,state:g.state,requests:g.requests,lastRequestAt:g.lastRequestAt,
-   placements:g.placements.map(p=>({machine:p.machine,runtime:p.runtime,via:p.gateways,aliases:p.aliases,engine:p.engine,state:p.state,sizeGb:p.sizeGb,contextTokens:p.contextTokens,ttlRemainingSeconds:p.ttlRemainingSeconds,lastRequestAt:p.lastRequestAt}))})),
+ return {generatedAt:data.generatedAt,range:data.range,empty:data.empty,overview:data.overview,work:data.work,
+  models:data.models.map(g=>({name:g.name,kind:g.kind,state:g.state,active:g.active,queued:g.queued,requests:g.requests,lastRequestAt:g.lastRequestAt,
+   placements:g.placements.map(p=>({machine:p.machine,runtime:p.runtime,via:p.gateways,aliases:p.aliases,engine:p.engine,state:p.state,active:p.active,queued:p.queued,since:p.since,sizeGb:p.sizeGb,contextTokens:p.contextTokens,ttlRemainingSeconds:p.ttlRemainingSeconds,lastRequestAt:p.lastRequestAt}))})),
   clients:data.clients.map(c=>({client:c.client,clientMachine:c.clientMachine,via:c.via,requests:c.requests,inputTokens:c.inputTokens,outputTokens:c.outputTokens,lastAt:c.lastAt,targets:c.targets})),
   known:data.known.map(k=>({machine:k.machine,role:k.role,title:k.title,kind:k.kind,state:k.state,models:k.models})),
   providers:data.providers,...(graph?{graph:data.graph}:{})};
@@ -111,9 +115,9 @@ export default {
   {method:'GET',path:'/api/models',error:modelsError,handler:async({query,json,state})=>json(200,await state.read(modelsQuery(query)))},
   {method:'GET',path:'/api/models/history',error:modelsError,handler:async({query,json,state})=>json(200,await state.readHistory(modelsQuery(query)))},
  ],
- mcpInstructions:['Local AI models: models_overview says which LLM, embedding and diffusion models are loaded on which machine and runtime, their memory, request counts and which clients called them.'],
+ mcpInstructions:['Local AI models: models_overview says which LLM, embedding and diffusion models are loaded on which machine and runtime, what generates now, their memory, request counts and which clients called them.'],
  mcpTools:[{name:'models_overview',scope:'read',title:'LLM & Diffusion: models across machines',
-  description:'Local language, embedding and generative (image, video, music, audio) models on every machine the hub watches: each model with its placements (machine, runtime, the gateway it is reached through, state, size, context, TTL left, last request), the overview (machines, runtimes up and down, models loaded, resident memory per machine against its RAM and pools, requests, tokens and median tokens/s in the range), the clients that sent requests and where they ran ("Unattributed" and a null clientMachine where the data does not say), and tools the stack names without live stats. Pass graph:true for the wiring diagram (nodes and weighted edges). Read-only.',
+  description:'Local language, embedding and generative (image, video, music, audio) models on every machine the hub watches: each model with its placements (machine, runtime, the gateway it is reached through, state, size, context, TTL left, last request), the overview (machines, runtimes up and down, models loaded, resident memory per machine against its RAM and pools, requests, tokens and median tokens/s in the range), the clients that sent requests and where they ran ("Unattributed" and a null clientMachine where the data does not say), and tools the stack names without live stats. work lists what generates or waits right now (active and queued per model, only where a runtime or tool reports it; blind names the runtimes that cannot tell). Pass graph:true for the wiring diagram (nodes and weighted edges). Read-only.',
   inputSchema:{type:'object',properties:{range:{type:'string',enum:Object.keys(MODEL_RANGES),description:'Window for requests and tokens. Default 24h.'},graph:{type:'boolean',description:'Include the wiring diagram.'}},additionalProperties:false},
   annotations:{readOnlyHint:true,openWorldHint:false},
   async run(args,{state}){

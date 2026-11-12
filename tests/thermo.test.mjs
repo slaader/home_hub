@@ -5,7 +5,7 @@ import {generateKeyPairSync, X509Certificate} from 'node:crypto';
 import {mkdtemp, readFile, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {encodeFrame, createThermoSession, createThermoPoller} from '../server/thermo-client.mjs';
+import {encodeFrame, createThermoSession, createThermoPoller, gpuProcessesFrom, GPU_SNAPSHOT_CADENCE_MS} from '../server/thermo-client.mjs';
 
 // Minimal self-signed cert via openssl would need a binary; node can only do keys.
 // We instead reuse node's internal test trick: tls server with a fixed fixture cert.
@@ -40,8 +40,10 @@ function startMockServer(overrides={}){
   });
   function send(obj){try{sock.write(encodeFrame(obj));}catch{}}
   function handle(msg){
-   if(msg.type==='login'){state.logins++;assert.equal(msg.username,'homehub');assert.ok(msg.password.length>=12);assert.ok(msg.label);
-    send({type:'token',token:'tok-'+state.logins,hostID:'HOST-1',name:'mock'});return;}
+   if(msg.type==='login'){state.logins++;state.cadence=msg.cadenceMS;assert.equal(msg.username,'homehub');assert.ok(msg.password.length>=12);assert.ok(msg.label);
+    send({type:'token',token:'tok-'+state.logins,hostID:'HOST-1',name:'mock'});
+    // A slow subscription gets its snapshot: the processes on the GPU among much else.
+    if(msg.cadenceMS===30000&&overrides.snapshot)send({type:'snapshot',snapshot:overrides.snapshot});return;}
    if(msg.type==='hello'){state.hello++;assert.equal(msg.token,'tok-1');
     send({type:'ready',major:1,nonce:msg.nonce,serverContinuous:1});return;}
    if(msg.type==='samples'){state.cursors.push(msg.after||null);
@@ -253,4 +255,28 @@ test('credentials are never sent without a matching pin or a CA-verified certifi
   assert.ok(!wire.includes('secret-password-1234'),'password never written to an unverified peer');
   assert.ok(!wire.includes('cached-token'),'token never written to an unverified peer');
  }finally{await new Promise(r=>server.close(r));}
+});
+
+// The processes on the GPU: Thermo's slow snapshot (one every 30 s, never the live cadence that turns its
+// scheduler trace on), of which only the busiest few with a name and a share are kept.
+test('GPU processes: the session asks for the 30 s snapshot and keeps the busiest processes; off means pull-only',async()=>{
+ assert.equal(GPU_SNAPSHOT_CADENCE_MS,30000);
+ const snapshot={gpu:61.2,gpuAttributedPercent:59.4,processes:[{name:'not kept'}],gpuConsumers:[
+  {owner:{kind:'application',pid:6640,birth:1},name:'Python',percent:52.25},{owner:{kind:'application',pid:5772,birth:1},name:'WindowServer',percent:3.1},
+  {owner:{kind:'application',pid:9,birth:1},name:'bad\u0007name',percent:0.4},{owner:{kind:'application',pid:-1,birth:1},name:'nope',percent:9},
+  {owner:{kind:'application',pid:11,birth:1},name:'a',percent:2},{owner:{kind:'application',pid:12,birth:1},name:'b',percent:1},{owner:{kind:'application',pid:13,birth:1},name:'c',percent:0.1}]};
+ const g=gpuProcessesFrom(snapshot,1000);
+ assert.deepEqual(g,{at:1000,gpu:61.2,attributedPercent:59.4,rows:[{pid:6640,name:'Python',percent:52.3},{pid:5772,name:'WindowServer',percent:3.1},{pid:11,name:'a',percent:2},{pid:12,name:'b',percent:1},{pid:9,name:'badname',percent:0.4}]},'busiest first, five at most, no control characters, no bad pid');
+ assert.equal(gpuProcessesFrom({gpu:3}),null,'an agent that sends no consumers says nothing');
+ const {server,port,state}=await startMockServer({snapshot});
+ const got=[];const config={id:'mock',host:'127.0.0.1',port,username:'homehub',label:'home-hub',password:'test-password-1234',pin:PIN};
+ const session=createThermoSession({config,onSnapshot:(id,s)=>got.push([id,s.gpuConsumers.length])});
+ await session.samples({max:600});
+ for(let i=0;i<50&&!got.length;i++)await new Promise(r=>setTimeout(r,10));
+ assert.equal(state.cadence,30000);assert.deepEqual(got,[['mock',7]]);
+ session.close();
+ const quiet=await startMockServer({snapshot});
+ const off=createThermoSession({config:{id:'q',host:'127.0.0.1',port:quiet.port,username:'homehub',label:'home-hub',password:'test-password-1234',pin:PIN,gpuProcesses:false},onSnapshot:()=>assert.fail('no snapshot asked for')});
+ await off.samples({max:600});assert.equal(quiet.state.cadence,0);off.close();
+ await new Promise(r=>server.close(r));await new Promise(r=>quiet.server.close(r));
 });

@@ -51,6 +51,21 @@
 .md-panel-head h2{margin:0;font-size:var(--text-l);font-weight:var(--weight-semibold)}
 .md-panel-head p{margin:0;font-size:var(--text-s);color:var(--color-text-dim);flex-basis:100%}
 .md-note{margin:0;font-size:var(--text-xs);color:var(--color-text-faint)}
+/* What generates right now (above the overview strip). A running model's dot pulses; a waiting one is hollow. */
+.md-work{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-3) var(--space-4);background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-l)}
+.md-work.on{border-color:var(--color-accent);background:var(--color-accent-soft)}
+.md-work h2{display:flex;align-items:center;gap:var(--space-2);margin:0;font:var(--weight-bold) var(--text-m)/var(--leading-tight) var(--font-sans)}
+.md-work h2 i{width:9px;height:9px;border-radius:50%;flex:none;background:var(--color-text-faint)}
+.md-work.on h2 i{background:var(--color-accent);animation:md-pulse 1.6s ease-in-out infinite}
+.md-work ul{display:flex;flex-direction:column;gap:var(--space-2);margin:0;padding:0;list-style:none}
+.md-work li{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-1) var(--space-2);min-width:0;font-size:var(--text-s)}
+.md-work li>i{flex:none;width:8px;height:8px;border-radius:50%;border:1px solid var(--color-warn)}
+.md-work li.on>i{border-color:var(--color-accent);background:var(--color-accent);animation:md-pulse 1.6s ease-in-out infinite}
+.md-work li b{font-family:var(--font-mono);font-weight:var(--weight-medium);overflow-wrap:anywhere}
+.md-work .md-dim{color:var(--color-text-dim)}
+.md-table td.md-state>.ui-pill+.ui-pill{margin-left:var(--space-1)}
+@keyframes md-pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.md-work h2 i,.md-work li.on>i{animation:none}}
 
 /* Wiring diagram */
 .md-graph-scroll{overflow-x:auto;overflow-y:hidden;border:1px solid var(--color-border);border-radius:var(--radius-m);background:var(--color-surface-sunken);-webkit-overflow-scrolling:touch}

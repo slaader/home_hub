@@ -235,7 +235,7 @@ fine).
 |---|---|---|
 | `home.snapshots` | `{machineId: {snapshot, bridge}}` — what an agent on the machine reports: `snapshot.services[]`, `memory`, `uptimeSeconds`, `collectedAt` | Overview tiles and the machine page stack |
 | `home.services` | `{machineId: services[]}` — reachability probes for a machine without an agent (role `nas`) | The NAS tile's online state and service list |
-| `home.runtimes` | `{machineId: {source, observedAt, runtimes: [{id, name, kind, status: running\|stopped\|unknown, url, version, source?, models: [{id, state, sizeGb, contextTokens, ttlRemainingSeconds}], stats: [{label, value}]}]}}` — local LLM runtimes on a machine (llama-swap, Ollama, LM Studio, llama.cpp, vLLM, …). Core provides it too, from the runtimes it reads directly, and joins every provider's report per machine (below). Core bounds it (20 runtimes, 30 models, 12 stats each). A model's `state` is `loaded`, `loading` or anything else for "not in memory"; the first of `stats` is the figure a card prints large; `label` and `source` go through the plugin's `strings` | The "Local LLM runtimes" section of a machine page, one card per runtime. The telemetry agent does not report runtimes: a machine that neither a provider nor a direct endpoint reports on has no such section. Report `runtimes: []` only when you watch the machine and it runs none. A machine with runtimes shows its GPU on its tile's small chart, any other its CPU |
+| `home.runtimes` | `{machineId: {source, observedAt, runtimes: [{id, name, kind, status: running\|stopped\|unknown, url, version, source?, models: [{id, state, sizeGb, contextTokens, ttlRemainingSeconds}], stats: [{label, value}]}]}}` — local LLM runtimes on a machine (llama-swap, Ollama, LM Studio, llama.cpp, vLLM, …). Core provides it too, from the runtimes it reads directly, and joins every provider's report per machine (below). Core bounds it (20 runtimes, 30 models, 12 stats each). A model's `state` is `loaded`, `loading` or anything else for "not in memory"; the first of `stats` is the figure a card prints large; `label` and `source` go through the plugin's `strings`. Optional, for what runs **now** (only where the runtime says; leave them out when it cannot tell, never send 0 for "unknown"): `activity: {active, queued}` on a runtime, `active`, `queued` and `since` (when the oldest running one began) on a model; `mode: "cli"` marks a command-line tool started per job (mflux), not a server: `running` while a job runs or waits, `stopped` with nothing to do, its models being those of its jobs; a model's `kind` (`llm`, `image`, …); `pids` (process ids on that machine) on a runtime or a model, so the GPU processes its telemetry agent reports can be named by it | The "Local LLM runtimes" section of a machine page, one card per runtime, and above the cards "what the GPU does" (`GET /api/home` → `machines[].work`): the models that generate or wait, next to the GPU reading of its telemetry and its three busiest GPU processes (`machines[].gpuProcesses`). The telemetry agent does not report runtimes: a machine that neither a provider nor a direct endpoint reports on has no such section. Report `runtimes: []` only when you watch the machine and it runs none. A machine with runtimes shows its GPU on its tile's small chart, any other its CPU |
 | `runtimes.requests` | `{id, read({from, to, limit}) → Promise<items[]>}` — request history of local model runtimes. An item: `{machine, runtime, model, at, path, inputTokens, outputTokens, promptTps, generationTps, durationMs, client, clientMachine?, clientAddress?, metricId?}`; `metricId` is the runtime's own record id, when it has one. `path` is the URL path or a kind (`chat`, `embeddings`, `images`, `audio`); `model` is the name the client asked for (a gateway alias is fine); `client` is who sent it when the provider can tell, else empty ("Unattributed"); `clientMachine` is a machine id, only when the provider knows it; `clientAddress` is the address the request came from (a site machine's `ip` names that machine, loopback names none). Core provides it too, from the history it keeps of the llama-swaps it reads (below). Core de-duplicates items two providers both report: by `machine`, `runtime`, `metricId` and `at` when `metricId` is given (the copy that names a client is kept), else by the whole item | The LLM & Diffusion page: requests, tokens and tok/s over time, the clients table and the traffic in the wiring diagram. Without a provider the page shows live state only |
 | `inventory.writer` | `{put(change, by), edit(input)}` or `null` — where inventory edits go instead of the local file. Optional: `remove(change)` and `bulk(change, {by, user})`; without them delete and bulk upsert answer `501` | Inventory map and services catalog |
 | `router.adapter` | `{id, title, read(context)}` — another router's census and health. `read` resolves to an observation `{status, observedAt, model, firmware, routerMac, devices[], hardware[]}` or `null`; core validates and bounds it (`server/router-data.mjs`). Optional `staleAfterSeconds` | `GET /api/router`, the router tile and page |
@@ -252,6 +252,7 @@ whose name says llama-swap, gateway, proxy or router is a front door; a model's 
 | `memory` | runtime | `{usedGb, capacityGb, basis}`: `basis` `resident` (what it holds) or `budget` (what a router has allotted) |
 | `name`, `kind`, `capabilities[]`, `engine` | model | Display name; `kind` one of `llm`, `embedding`, `image`, `video`, `music`, `audio`, `other`; capabilities such as `image`, `audio`, `embedding`; the engine family (`vlm`, `audio_tts`, …) |
 | `lastRequestAt`, `ttlSeconds` | model | When it was last asked for; its unload timeout |
+| `active`, `queued`, `since`; `activity` | model; runtime | What it works on now (see `home.runtimes`). A request sent through a gateway is in flight there and at the engine at once: where the gateway's entry names the engine's model (`via`, `target`), the page counts the larger of the two, never their sum |
 | `via`, `target` | model on a gateway | The engine it is handed to: a runtime id on the same machine, or an engine inside the gateway (`llama.cpp`); `target` is that engine's model id. A gateway entry with both is drawn as an alias of the engine's model, not as a second model |
 
 Plugins can define their own names for each other: `hub.collect(name)` returns every provider's value,
@@ -261,7 +262,10 @@ Plugins can define their own names for each other: `hub.collect(name)` returns e
 
 Core is a `home.runtimes` provider itself: the module `runtimes` (`server/core/runtimes.mjs`) reads the
 runtimes listed in `site.json → runtimes` and those added through `POST /api/runtimes/endpoints` directly,
-GET-only on a fixed list of paths (`server/runtime-adapters.mjs` → `READ_PATHS`). Its entries carry
+GET-only on a fixed list of paths (`server/runtime-adapters.mjs` → `READ_PATHS`), plus llama-swap's event stream
+`GET /api/events` (`EVENT_PATH`), read only up to its first in-flight snapshot and then closed: of each request in
+flight only the model and its start time are kept. That, oMLX's admin stats (requests running and waiting per model)
+and the request gauges of llama.cpp, vLLM and SGLang give `activity`, `active` and `queued`. Its entries carry
 `source: "přímo z runtimu"` on the machine and on each runtime. When a plugin reports the same machine, home
 joins the two (`mergeRuntimeReports` in `server/home-data.mjs`):
 
@@ -270,11 +274,14 @@ joins the two (`mergeRuntimeReports` in `server/home-data.mjs`):
 - The richer one is kept: a known `status` beats `unknown`, then the one with more models, more model facts
   (size, context, TTL), more figures and a version. The first reported wins a tie.
 - Its gaps are filled from the other: version, the size, context and TTL of a model both list, and figures
-  with a label it lacks (up to four figures in all). Models only the other lists are added unless that one is stale.
+  with a label it lacks (up to four figures in all); the wiring fields of the LLM & Diffusion page (`role`,
+  `memory`, a model's `name`, `kind`, `engine`, `via`, `target`, …); and, unless the other is stale, how busy the
+  runtime and its models are (`activity`, `active`, `queued`, `since`). Models only the other lists are added unless that one is stale.
 - The machine gets `sources` (every source that contributed) and the oldest `observedAt` of the entries kept
   (one that only filled gaps does not count).
 
 So a plugin needs to do nothing to coexist with the direct reads: report your runtimes with their real `url`.
+The LLM & Diffusion page joins the providers the same way.
 
 #### `runtimes.requests` from core
 

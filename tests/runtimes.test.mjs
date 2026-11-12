@@ -8,7 +8,7 @@ import {stat,readFile,mkdtemp,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {ADAPTERS,READ_PATHS,createReader,detectKind,readRuntime,parsePrometheus,metric,errorCode} from '../server/runtime-adapters.mjs';
+import {ADAPTERS,READ_PATHS,EVENT_PATH,createReader,detectKind,readRuntime,parsePrometheus,metric,errorCode,inflightSnapshot} from '../server/runtime-adapters.mjs';
 import {runtimeEndpoint,validateSite} from '../server/site-config.mjs';
 import {createRuntimePoller,createTokenStore,createEndpointStore,allEndpoints} from '../server/runtimes-data.mjs';
 import {mergeRuntimeReports,buildHome,runtimesFor} from '../server/home-data.mjs';
@@ -51,6 +51,43 @@ test('llama-swap (older flavour): /api/metrics as a list gives the speed; no ver
  assert.equal(statOf(r,'tokeny/s'),'33.1');
  assert.ok(log.some(x=>x.path==='/api/metrics'),'falls back to the older metrics list');
 });
+// What runs now. llama-swap's event stream opens with messages of other types, then the in-flight snapshot:
+// one request per entry, with headers, the client's address and the path, of which only model and start stay.
+const sse=(...messages)=>messages.map(m=>`event:message\ndata:${JSON.stringify(m)}\n\n`).join('');
+const snapshot=requests=>({type:'inflight',data:JSON.stringify({operation:'snapshot',...(requests.length?{requests}:{})})});
+test('what runs now: llama-swap\'s in-flight snapshot (aliases, a loading model waits), oMLX\'s running and waiting requests; unknown stays unknown',async()=>{
+ const flight=[{id:'a',timestamp:'2026-11-12T00:20:00Z',model:'chat',req_path:'/v1/chat/completions',method:'POST',req_headers:{Authorization:'Bearer sk-secret-123'},remote_ip:'10.0.0.5',elapsed_ms:4200},
+  {id:'b',timestamp:'2026-11-12T00:21:00Z',model:'qwen-27b',req_path:'/v1/chat/completions',method:'POST',req_headers:{},remote_ip:'127.0.0.1',elapsed_ms:1000},
+  {id:'c',timestamp:'2026-11-12T00:21:30Z',model:'coder',req_path:'/v1/messages',method:'POST',req_headers:{},remote_ip:'127.0.0.1',elapsed_ms:10}];
+ const f={...fixture('llama-swap'),[EVENT_PATH]:sse({type:'modelStatus',data:'[]'},snapshot(flight),{type:'inflight',data:JSON.stringify({operation:'add',request:flight[0]})})};
+ f['/running']={running:[{model:'qwen-27b',state:'ready',ttl:1800},{model:'qwen-flash-next',state:'starting',ttl:1800}]};
+ const {get,log}=fakeRuntime(f),r=await ADAPTERS['llama-swap'](get,{now:Date.parse('2026-11-12T00:22:00Z')});
+ const by=id=>r.models.find(m=>m.id===id);
+ assert.deepEqual([by('qwen-27b').active,by('qwen-27b').queued,by('qwen-27b').since],[2,0,'2026-11-12T00:20:00.000Z'],'by its id and by an alias; since the oldest one began');
+ assert.deepEqual([by('qwen-flash-next').state,by('qwen-flash-next').active,by('qwen-flash-next').queued],['loading',0,1],'a request for a model still loading waits for it');
+ assert.deepEqual([by('ornith').active,by('ornith').queued,by('ornith').since],[0,0,undefined],'known to be idle');
+ assert.deepEqual(r.activity,{active:2,queued:1});
+ const kept=JSON.stringify(r);for(const x of ['sk-secret','10.0.0.5','/v1/messages','req_headers'])assert.ok(!kept.includes(x),`${x} is never kept`);
+ assert.ok(log.some(x=>x.path===EVENT_PATH&&x.hasSignal),'the stream is read with a deadline');
+ // No snapshot: an older build without the stream (404) or one that never sends it. Unknown, not idle.
+ for(const events of [undefined,sse({type:'modelStatus',data:'[]'})]){
+  const g={...fixture('llama-swap')};if(events)g[EVENT_PATH]=events;
+  const x=await ADAPTERS['llama-swap'](fakeRuntime(g).get,{now:Date.now()});
+  assert.equal(x.activity,undefined);assert.ok(x.models.every(m=>m.active===undefined&&m.queued===undefined));
+ }
+ // An empty snapshot carries no requests at all: everything idle.
+ const idle=await ADAPTERS['llama-swap'](fakeRuntime({...fixture('llama-swap'),[EVENT_PATH]:sse(snapshot([]))}).get,{now:Date.now()});
+ assert.deepEqual(idle.activity,{active:0,queued:0});
+ assert.equal(inflightSnapshot('not json'),null);assert.equal(inflightSnapshot(JSON.stringify({type:'inflight',data:'{"operation":"add"}'})),null);
+ assert.deepEqual(inflightSnapshot(JSON.stringify(snapshot([{model:'',timestamp:'x'},{model:'m',timestamp:'nope'}]))),[{model:'m',at:null}]);
+ // oMLX: per model from the admin stats; the totals for the runtime. Without the admin API: unknown.
+ const o=fixture('omlx');o['/admin/api/stats']={...o['/admin/api/stats'],active_models:{...o['/admin/api/stats'].active_models,models:[{id:'Qwen3.8-27B-8bit',active_requests:2,waiting_requests:1}],total_active_requests:2,total_waiting_requests:1}};
+ const om=await ADAPTERS.omlx(fakeRuntime(o).get);
+ assert.deepEqual([om.models[0].id,om.models[0].active,om.models[0].queued],['Qwen3.8-27B-8bit',2,1]);assert.ok(om.models.slice(1).every(m=>m.active===0&&m.queued===0));
+ assert.deepEqual(om.activity,{active:2,queued:1});
+ const blind=await ADAPTERS.omlx(fakeRuntime(o,{status:{'/admin/api/stats':401}}).get);
+ assert.equal(blind.activity,undefined);assert.ok(blind.models.every(m=>m.active===undefined));
+});
 test('oMLX (recorded): per-model state, size and context from /v1/models/status; version and totals from the admin stats',async()=>{
  const {get}=fakeRuntime(fixture('omlx'));
  const r=await ADAPTERS.omlx(get);
@@ -88,21 +125,25 @@ test('LM Studio: loaded and not-loaded models with their context length',async()
 test('llama.cpp server: one model with its size and context, build, metrics; router mode with a state per model',async()=>{
  const one=await ADAPTERS['llama-cpp'](fakeRuntime(fixture('llama-cpp')).get);
  assert.equal(one.version,'b6950-1a2b3c4d');
- assert.deepEqual(one.models,[{id:'gemma-3-27b-it-Q4_K_M.gguf',state:'loaded',sizeGb:15.4,contextTokens:16384,ttlRemainingSeconds:null}]);
+ assert.deepEqual(one.models,[{id:'gemma-3-27b-it-Q4_K_M.gguf',state:'loaded',sizeGb:15.4,contextTokens:16384,ttlRemainingSeconds:null,active:1,queued:0}],'the one model it serves is the busy one');
+ assert.deepEqual(one.activity,{active:1,queued:0},'requests processing and deferred');
  assert.equal(statOf(one,'tokeny/s'),'24.7');assert.equal(statOf(one,'zpracovává'),'1');assert.equal(statOf(one,'tokeny ven'),'48k');assert.equal(statOf(one,'sloty'),'4');
  assert.ok(!JSON.stringify(one).includes('/models/'),'the model path from /props is not kept');
  const router=await ADAPTERS['llama-cpp'](fakeRuntime(fixture('llama-cpp-router')).get);
  assert.deepEqual(router.models.map(m=>[m.id,m.state]),[['gpt-oss-20b','loaded'],['qwen2.5-coder-7b','unloaded'],['gemma-3-4b','loading']]);
+ assert.equal(router.activity,undefined,'no metrics: how busy it is stays unknown');assert.ok(router.models.every(m=>m.active===undefined));
 });
 test('vLLM and SGLang: Prometheus metrics by name; a counter becomes tokens per second between two reads',async()=>{
  const f=fixture('vllm'),memo={},t0=Date.parse('2026-11-10T10:00:00Z');
  const first=await ADAPTERS.vllm(fakeRuntime(f).get,{now:t0,memo});
- assert.equal(first.version,'0.11.0');assert.deepEqual(first.models,[{id:'Qwen/Qwen3-8B',state:'loaded',sizeGb:null,contextTokens:40960,ttlRemainingSeconds:null}]);
+ assert.equal(first.version,'0.11.0');assert.deepEqual(first.models,[{id:'Qwen/Qwen3-8B',state:'loaded',sizeGb:null,contextTokens:40960,ttlRemainingSeconds:null,active:2,queued:1}]);
+ assert.deepEqual(first.activity,{active:2,queued:1});
  assert.equal(statOf(first,'tokeny/s'),undefined,'one read gives no rate');
  assert.equal(statOf(first,'zpracovává'),'2');assert.equal(statOf(first,'ve frontě'),'1');assert.equal(statOf(first,'KV cache'),'38 %');assert.equal(statOf(first,'tokeny ven'),'120k');
  const later=await ADAPTERS.vllm(fakeRuntime({...f,...fixture('vllm-later')}).get,{now:t0+30000,memo});
  assert.equal(statOf(later,'tokeny/s'),'50');
  const sg=await ADAPTERS.sglang(fakeRuntime(fixture('sglang')).get,{now:t0,memo:{}});
+ assert.deepEqual(sg.activity,{active:3,queued:0});
  assert.equal(statOf(sg,'tokeny/s'),'412.6');assert.equal(statOf(sg,'zpracovává'),'3');assert.equal(statOf(sg,'KV cache'),'12 %');assert.equal(statOf(sg,'tokeny ven'),'5.3M');
 });
 test('OpenAI-compatible fallback: reachable and its model list, state unknown',async()=>{
@@ -138,7 +179,7 @@ test('no adapter ever requests /upstream/, an unload route, /slots or anything b
  assert.ok(log.length>100);
  for(const r of log){
   assert.equal(r.method,'GET',`${r.method} ${r.path}`);
-  assert.ok(READ_PATHS.includes(r.path),`not allowlisted: ${r.path}`);
+  assert.ok(READ_PATHS.includes(r.path)||r.path===EVENT_PATH,`not allowlisted: ${r.path}`);
   assert.ok(!/upstream|unload|\/load|slots|completions|embeddings|chat/.test(r.path),r.path);
   assert.equal(r.search,'');assert.equal(r.redirect,'error','redirects are never followed');
  }
@@ -147,6 +188,9 @@ test('no adapter ever requests /upstream/, an unload route, /slots or anything b
  const none=[];const get=createReader({base:'http://127.0.0.1:9',fetcher:async u=>{none.push(u);return new Response('{}');}});
  for(const p of ['/upstream/qwen/health','/api/models/unload','/unload','/slots','/v1/chat/completions','/v1/models?x=1','/api/pull'])
   await assert.rejects(get(p),e=>e.code==='path-not-allowed',p);
+ // The event stream only through its own reader (which stops at the snapshot), and nothing else through that one.
+ await assert.rejects(get(EVENT_PATH),e=>e.code==='path-not-allowed');await assert.rejects(get('/v1/models','inflight'),e=>e.code==='path-not-allowed');
+ await assert.rejects(get('/api/inflight/x/cancel','inflight'),e=>e.code==='path-not-allowed');
  assert.deepEqual(none,[]);
  // And the source has no other way out.
  const src=readFileSync(path.join(here,'..','server','runtime-adapters.mjs'),'utf8');
@@ -316,7 +360,7 @@ test('endpoints over HTTP and MCP: add, list with the last read, machine page, t
  const text=JSON.stringify(await (await fetch(h.origin+'/api/runtimes/endpoints',{headers:h.admin})).json())+JSON.stringify(parse(await call(reader.headers,'runtime_endpoints_list',{})));
  assert.ok(!text.includes('abcdefgh12345'));assert.equal(JSON.parse(text.slice(0,text.indexOf('}{')+1)).endpoints.find(e=>e.id==='studio-omlx').hasToken,true);
  // Every request any of this made: a GET on an allowlisted path.
- assert.ok(log.every(r=>r.method==='GET'&&READ_PATHS.includes(r.path)));
+ assert.ok(log.every(r=>r.method==='GET'&&(READ_PATHS.includes(r.path)||r.path===EVENT_PATH)));
 
  // The integration status, one item per endpoint.
  const integration=h.handler.registry.integrations.find(g=>g.id==='runtimes.endpoints');

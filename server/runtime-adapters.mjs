@@ -11,6 +11,9 @@
 //   - Never a model-loading route. llama-swap loads a model on a GET of /upstream/<model>/…, and its
 //     /api/models/unload and /unload change state; none of them is on the list. llama.cpp's /slots is left
 //     out too: some versions return the prompt a slot is working on.
+//   - One stream: llama-swap's GET /api/events (EVENT_PATH) is read only up to its first in-flight snapshot
+//     (which requests run now, for which model, since when) and then closed. Of each request only the model
+//     and its start time are kept; its headers, path and the address it came from are dropped there.
 import {RUNTIME_KINDS} from './site-config.mjs';
 
 export {RUNTIME_KINDS};
@@ -23,6 +26,7 @@ export const READ_PATHS=Object.freeze([
  '/version',                                     // vLLM
  '/v1/models/status','/admin/api/stats',         // oMLX (+ /health, /v1/models)
 ]);
+export const EVENT_PATH='/api/events';            // llama-swap's event stream: read up to the in-flight snapshot, then closed
 export const MAX_BODY=512*1024;
 export const TIMEOUT_MS=3000;
 export const KIND_NAMES=Object.freeze({'llama-swap':'llama-swap',ollama:'Ollama',lmstudio:'LM Studio','llama-cpp':'llama.cpp server',vllm:'vLLM',sglang:'SGLang',omlx:'oMLX','mlx-serve':'mlx-serve',openai:'OpenAI API'});
@@ -56,15 +60,38 @@ export function errorCode(e){
  if(/CERT|TLS|SSL/.test(code)||/certificate/i.test(e?.cause?.message||''))return 'tls';
  return 'error';
 }
-// A reader bound to one runtime's base URL (an origin, nothing after it). get(path, 'json'|'text').
+// A reader bound to one runtime's base URL (an origin, nothing after it). get(path, 'json'|'text'), or
+// get(EVENT_PATH, 'inflight') for llama-swap's in-flight snapshot ([{model, at}]).
 // token: a bearer token stored server-side for this endpoint; sent as Authorization and nowhere else.
 export function createReader({base,token=null,fetcher=fetch,timeoutMs=TIMEOUT_MS,maxBytes=MAX_BODY,onRequest=null}){
  const origin=new URL(base).origin;
+ const headers=accept=>({Accept:accept,'User-Agent':'home-hub-runtimes/1',...(token?{Authorization:`Bearer ${token}`}:{})});
+ // The event stream does not end: read lines until the first in-flight snapshot, then close it.
+ async function inflight(){
+  const url=origin+EVENT_PATH;onRequest?.({method:'GET',url});
+  const stop=new AbortController(),timer=setTimeout(()=>stop.abort(new RuntimeReadError('timeout')),timeoutMs);
+  try{
+   const response=await fetcher(url,{method:'GET',redirect:'error',signal:stop.signal,headers:headers('text/event-stream')});
+   if(!response.ok)throw new RuntimeReadError(response.status===401||response.status===403?'auth':`http-${response.status}`,response.status);
+   const decoder=new TextDecoder();let size=0,buffer='';
+   for await(const chunk of response.body||[]){
+    size+=chunk.length;if(size>maxBytes)throw new RuntimeReadError('too-large');
+    buffer+=decoder.decode(chunk,{stream:true});let at;
+    while((at=buffer.indexOf('\n'))>=0){
+     const line=buffer.slice(0,at).trim();buffer=buffer.slice(at+1);
+     const snapshot=line.startsWith('data:')?inflightSnapshot(line.slice(5)):null;
+     if(snapshot)return snapshot;
+    }
+   }
+   throw new RuntimeReadError('no-snapshot');
+  }finally{clearTimeout(timer);stop.abort();}
+ }
  return async function get(path,as='json'){
+  if(as==='inflight'){if(path!==EVENT_PATH)throw new RuntimeReadError('path-not-allowed');return inflight();}
   if(!READ_PATHS.includes(path))throw new RuntimeReadError('path-not-allowed');
   const url=origin+path;onRequest?.({method:'GET',url});
   const response=await fetcher(url,{method:'GET',redirect:'error',signal:AbortSignal.timeout(timeoutMs),
-   headers:{Accept:as==='json'?'application/json':'text/plain','User-Agent':'home-hub-runtimes/1',...(token?{Authorization:`Bearer ${token}`}:{})}});
+   headers:headers(as==='json'?'application/json':'text/plain')});
   let size=0;const chunks=[];
   if(response.body)for await(const chunk of response.body){size+=chunk.length;if(size>maxBytes)throw new RuntimeReadError('too-large');chunks.push(Buffer.from(chunk));}
   if(!response.ok)throw new RuntimeReadError(response.status===401||response.status===403?'auth':`http-${response.status}`,response.status);
@@ -72,6 +99,13 @@ export function createReader({base,token=null,fetcher=fetch,timeoutMs=TIMEOUT_MS
   if(as==='text')return text;
   try{return JSON.parse(text);}catch{throw new RuntimeReadError('not-json');}
  };
+}
+// One data line of llama-swap's event stream → [{model, at}] when it is the in-flight snapshot, else null.
+// The message is {type:"inflight", data:"<JSON>"}; the snapshot is {operation:"snapshot", requests?:[…]}.
+export function inflightSnapshot(line){
+ let msg,data;try{msg=JSON.parse(line);if(msg?.type!=='inflight')return null;data=typeof msg.data==='string'?JSON.parse(msg.data):msg.data;}catch{return null;}
+ if(data?.operation!=='snapshot')return null;
+ return arr(data.requests).filter(r=>typeof r?.model==='string'&&r.model).slice(0,200).map(r=>{const at=Date.parse(r.timestamp);return {model:str(r.model,120),at:Number.isFinite(at)?at:null};});
 }
 // An optional read: its failure leaves the field empty instead of failing the runtime.
 const optional=p=>p.then(v=>v,()=>null);
@@ -111,7 +145,17 @@ export function modelState(v){
  if(s===false||['unloaded','stopped','not-loaded','not_loaded','idle','',null,undefined].includes(s))return 'unloaded';
  return 'unknown';
 }
-const model=(id,{state='unknown',sizeGb=null,contextTokens=null,ttlRemainingSeconds=null}={})=>({id:str(id,120),state,sizeGb,contextTokens:pos(contextTokens),ttlRemainingSeconds:num(ttlRemainingSeconds)!==null?Math.max(0,Math.round(ttlRemainingSeconds)):null});
+// active / queued: requests the model works on now and those waiting for it, where the runtime says (else
+// left out: unknown, not zero); since: when the oldest of the active ones began.
+const count=v=>{const n=num(v);return n!==null&&n>=0?Math.round(n):null;};
+const model=(id,{state='unknown',sizeGb=null,contextTokens=null,ttlRemainingSeconds=null,active=null,queued=null,since=null}={})=>({id:str(id,120),state,sizeGb,contextTokens:pos(contextTokens),
+ ttlRemainingSeconds:num(ttlRemainingSeconds)!==null?Math.max(0,Math.round(ttlRemainingSeconds)):null,
+ ...(count(active)!==null||count(queued)!==null?{active:count(active)??0,queued:count(queued)??0}:{}),...(count(active)&&Number.isFinite(since)?{since:new Date(since).toISOString()}:{})});
+// What a runtime works on as a whole: {active, queued}, only when it reports it.
+const activityOf=(active,queued)=>count(active)!==null||count(queued)!==null?{activity:{active:count(active)??0,queued:count(queued)??0}}:{};
+// A runtime that serves one model and says only how busy it is: that model is the busy one.
+const attribute=(models,active,queued)=>{const held=models.filter(m=>m.state==='loaded');
+ return held.length===1&&(count(active)!==null||count(queued)!==null)?models.map(m=>m===held[0]?{...m,active:count(active)??0,queued:count(queued)??0}:m):models;};
 const loadedFirst=models=>models.filter(m=>m.id).sort((a,b)=>(b.state==='loaded')-(a.state==='loaded')).slice(0,30);
 
 // --- adapters -----------------------------------------------------------------------------------
@@ -121,9 +165,11 @@ const loadedFirst=models=>models.filter(m=>m.id).sort((a,b)=>(b.state==='loaded'
 // llama-swap. Two flavours exist: newer builds have /api/version, /api/metrics/stats, /api/metrics/activity
 // and Prometheus /metrics; older ones /api/metrics (a list of recent requests). /running says which models
 // hold memory and their TTL; the last request per model (from the metrics) turns that into "unloads in".
+// Newer builds also tell which requests are in flight (the event stream's snapshot): one for a model in
+// memory is being worked on, one for a model still loading waits for it. A client may name an alias.
 export async function readLlamaSwap(get,{now=Date.now()}={}){
  const listed=arr((await get('/v1/models'))?.data);
- const [running,version,totals,activity,prom]=await Promise.all([optional(get('/running')),optional(get('/api/version')),optional(get('/api/metrics/stats')),optional(get('/api/metrics/activity')),optional(get('/metrics','text'))]);
+ const [running,version,totals,activity,prom,flight]=await Promise.all([optional(get('/running')),optional(get('/api/version')),optional(get('/api/metrics/stats')),optional(get('/api/metrics/activity')),optional(get('/metrics','text')),optional(get(EVENT_PATH,'inflight'))]);
  let recent=activity?arr(activity.data):null;
  if(!recent){const legacy=await optional(get('/api/metrics'));recent=Array.isArray(legacy)?legacy:arr(legacy?.data);}
  const runningBy=new Map(arr(running?.running).filter(r=>typeof r?.model==='string').map(r=>[r.model,r]));
@@ -132,14 +178,23 @@ export async function readLlamaSwap(get,{now=Date.now()}={}){
  const models=listed.filter(m=>typeof m?.id==='string').map(m=>{
   const r=runningBy.get(m.id),state=modelState(r?.state??m.status?.value??(r?'ready':'unloaded'));
   const ttl=pos(r?.ttl),end=last.get(m.id);
-  return model(m.id,{state,contextTokens:m.context_length??m.meta?.n_ctx,ttlRemainingSeconds:state==='loaded'&&ttl&&end?ttl-(now-end)/1000:null});
+  const busy=flight?flightOf(flight,m):null;
+  return model(m.id,{state,contextTokens:m.context_length??m.meta?.n_ctx,ttlRemainingSeconds:state==='loaded'&&ttl&&end?ttl-(now-end)/1000:null,
+   ...(busy?{active:state==='loaded'?busy.n:0,queued:state==='loaded'?0:busy.n,since:busy.since}:{})});
  });
  const samples=prom?parsePrometheus(prom):[];
  const speed=pos(totals?.gen_histogram?.p50)??median(recent.map(r=>num(r?.tokens?.tokens_per_second??r?.tokens_per_second)));
  return {version:str(version?.version,40),models:loadedFirst(models),
   stats:stats(stat('tokeny/s',speed?tps(speed):null),stat('požadavky',num(totals?.total_requests)!==null?short(totals.total_requests):null),
    stat('tokeny ven',num(totals?.total_output_tokens)!==null?short(totals.total_output_tokens):null),
-   stat('paměť stroje',memory(metric(samples,'llamaswap_memory_used_bytes'),metric(samples,'llamaswap_memory_total_bytes'))))};
+   stat('paměť stroje',memory(metric(samples,'llamaswap_memory_used_bytes'),metric(samples,'llamaswap_memory_total_bytes')))),
+  ...(flight?activityOf(models.reduce((n,m)=>n+(m.active||0),0),models.reduce((n,m)=>n+(m.queued||0),0)):{})};
+}
+// The in-flight requests that ask for one llama-swap model, by its id or one of its aliases: {n, since}.
+function flightOf(flight,m){
+ const names=new Set([m.id,...arr(m.meta?.llamaswap?.aliases).filter(a=>typeof a==='string')]);
+ const mine=flight.filter(f=>names.has(f.model)),starts=mine.map(f=>f.at).filter(Number.isFinite);
+ return {n:mine.length,since:starts.length?Math.min(...starts):null};
 }
 
 // Ollama: /api/tags (installed), /api/ps (in memory: size, size_vram, expires_at, context_length), /api/version.
@@ -164,7 +219,8 @@ export async function readLmStudio(get){
 }
 
 // llama.cpp server: /v1/models (one model, or several with a status in router mode), /props (context,
-// slots, build), /health, and /metrics when it was started with --metrics.
+// slots, build), /health, and /metrics when it was started with --metrics (requests processing and deferred:
+// how busy it is).
 export async function readLlamaCpp(get,{now=Date.now(),memo=null}={}){
  const listed=arr((await get('/v1/models'))?.data).filter(m=>typeof m?.id==='string');
  const [props,health,prom]=await Promise.all([optional(get('/props')),optional(get('/health')),optional(get('/metrics','text'))]);
@@ -174,10 +230,10 @@ export async function readLlamaCpp(get,{now=Date.now(),memo=null}={}){
   :{state:health&&health.status&&health.status!=='ok'?'loading':'loaded',sizeGb:gb(m.meta?.size),contextTokens:ctx??m.meta?.n_ctx_train}));
  const samples=prom?parsePrometheus(prom):[];
  const speed=metric(samples,'llamacpp:predicted_tokens_seconds')??rate(memo,'gen',metric(samples,'llamacpp:tokens_predicted'),now);
- const out=metric(samples,'llamacpp:tokens_predicted');
- return {version:str(props?.build_info,40),models:loadedFirst(models),
-  stats:stats(stat('tokeny/s',pos(speed)?tps(speed):null),stat('zpracovává',metric(samples,'llamacpp:requests_processing')),stat('tokeny ven',out!==null?short(out):null),
-   stat('sloty',pos(props?.total_slots)))};
+ const out=metric(samples,'llamacpp:tokens_predicted'),processing=metric(samples,'llamacpp:requests_processing'),deferred=metric(samples,'llamacpp:requests_deferred');
+ return {version:str(props?.build_info,40),models:loadedFirst(attribute(models,processing,deferred)),
+  stats:stats(stat('tokeny/s',pos(speed)?tps(speed):null),stat('zpracovává',processing),stat('tokeny ven',out!==null?short(out):null),
+   stat('sloty',pos(props?.total_slots))),...activityOf(processing,deferred)};
 }
 
 // vLLM and SGLang: /v1/models (what is served is in memory) and Prometheus /metrics, read by name.
@@ -187,10 +243,10 @@ async function readPrometheusServer(get,{now=Date.now(),memo=null}={},names){
  const samples=prom?parsePrometheus(prom):[];
  const generated=metric(samples,...names.generated);
  const speed=(names.speed?metric(samples,...names.speed):null)??rate(memo,'gen',generated,now);
- const cache=metric(samples,...names.cache);
- return {version:str(version?.version,40),models:loadedFirst(listed.map(m=>model(m.id,{state:'loaded',contextTokens:m.max_model_len}))),
-  stats:stats(stat('tokeny/s',pos(speed)?tps(speed):null),stat('zpracovává',metric(samples,...names.running)),stat('ve frontě',metric(samples,...names.waiting)),
-   stat('KV cache',cache!==null?`${Math.round(cache*100)} %`:null),stat('tokeny ven',generated!==null?short(generated):null))};
+ const cache=metric(samples,...names.cache),running=metric(samples,...names.running),waiting=metric(samples,...names.waiting);
+ return {version:str(version?.version,40),models:loadedFirst(attribute(listed.map(m=>model(m.id,{state:'loaded',contextTokens:m.max_model_len})),running,waiting)),
+  stats:stats(stat('tokeny/s',pos(speed)?tps(speed):null),stat('zpracovává',running),stat('ve frontě',waiting),
+   stat('KV cache',cache!==null?`${Math.round(cache*100)} %`:null),stat('tokeny ven',generated!==null?short(generated):null)),...activityOf(running,waiting)};
 }
 export const readVllm=(get,ctx)=>readPrometheusServer(get,ctx,{version:true,generated:['vllm:generation_tokens'],speed:null,
  running:['vllm:num_requests_running'],waiting:['vllm:num_requests_waiting'],cache:['vllm:kv_cache_usage_perc','vllm:gpu_cache_usage_perc']});
@@ -198,22 +254,27 @@ export const readSglang=(get,ctx)=>readPrometheusServer(get,ctx,{version:false,g
  running:['sglang:num_running_reqs'],waiting:['sglang:num_queue_reqs'],cache:['sglang:token_usage']});
 
 // oMLX: /health (the engine pool), /v1/models/status (each model: loaded, loading, size, context) or, on
-// builds without it, /v1/models; /admin/api/stats for the version and the totals when the admin API answers.
+// builds without it, /v1/models; /admin/api/stats for the version and the totals when the admin API answers,
+// and how busy each model is (active_models: requests running and waiting).
 export async function readOmlx(get){
  const health=await get('/health');
  const [status,admin]=await Promise.all([optional(get('/v1/models/status')),optional(get('/admin/api/stats'))]);
  const pool=health?.engine_pool||{};
+ const active=admin?.active_models||{};
+ const busy=new Map(arr(active.models).filter(m=>typeof m?.id==='string').map(m=>[m.id,{active:m.active_requests,queued:m.waiting_requests}]));
+ const known=admin?.active_models&&(num(active.total_active_requests)!==null||num(active.total_waiting_requests)!==null);
+ const busyOf=id=>busy.get(id)||(known?{active:0,queued:0}:{});
  let models;
  if(Array.isArray(status?.models))models=status.models.filter(m=>typeof m?.id==='string').map(m=>{const state=m.loaded?'loaded':m.is_loading?'loading':'unloaded';
-  return model(m.id,{state,sizeGb:gb(state==='loaded'?m.actual_size||m.estimated_size:m.estimated_size),contextTokens:m.max_context_window??m.model_context_length});});
- else{const listed=arr((await optional(get('/v1/models')))?.data).filter(m=>typeof m?.id==='string'),count=num(pool.loaded_count);
-  models=listed.map(m=>model(m.id,{state:count===0?'unloaded':count>=listed.length?'loaded':'unknown',contextTokens:m.max_model_len}));}
- const active=admin?.active_models||{};
+  return model(m.id,{state,sizeGb:gb(state==='loaded'?m.actual_size||m.estimated_size:m.estimated_size),contextTokens:m.max_context_window??m.model_context_length,...busyOf(m.id)});});
+ else{const listed=arr((await optional(get('/v1/models')))?.data).filter(m=>typeof m?.id==='string'),loadedCount=num(pool.loaded_count);
+  models=listed.map(m=>model(m.id,{state:loadedCount===0?'unloaded':loadedCount>=listed.length?'loaded':'unknown',contextTokens:m.max_model_len,...busyOf(m.id)}));}
  const engine=admin?.engines?.['mlx-lm']?.version;
  return {version:engine?str(`mlx-lm ${engine}`,40):'',models:loadedFirst(models),
   stats:stats(stat('tokeny/s',pos(admin?.avg_generation_tps)?tps(admin.avg_generation_tps):null),stat('požadavky',num(admin?.total_requests)!==null?short(admin.total_requests):null),
    stat('tokeny ven',num(admin?.total_completion_tokens)!==null?short(admin.total_completion_tokens):null),
-   stat('paměť modelů',memory(active.model_memory_used??pool.current_model_memory,active.model_memory_max??pool.final_ceiling)))};
+   stat('paměť modelů',memory(active.model_memory_used??pool.current_model_memory,active.model_memory_max??pool.final_ceiling))),
+  ...(known?activityOf(active.total_active_requests,active.total_waiting_requests):{})};
 }
 
 // mlx-serve: /v1/models carries each pack's state, resident and on-disk bytes; /api/version its version.

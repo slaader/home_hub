@@ -3,7 +3,7 @@
 // MCP tool. Everything runs on providers given to the hub as plugins; core itself reads no runtime.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {inferKind,requestKind,modelKey,liveState,placements,overview,modelGroups,clientsOf,buildGraph,knownTools,history,buckets,cleanRequest,clientMachineOf,metricsToRequests,metricKey,UNATTRIBUTED} from '../server/models-data.mjs';
+import {inferKind,requestKind,modelKey,liveState,placements,overview,modelGroups,clientsOf,buildGraph,knownTools,history,buckets,cleanRequest,clientMachineOf,metricsToRequests,metricKey,workOf,UNATTRIBUTED} from '../server/models-data.mjs';
 import {modelsQuery,toolView} from '../server/core/models.mjs';
 import {hub} from './hub-helper.mjs';
 
@@ -144,5 +144,41 @@ test('API and MCP: empty without providers, the page data with them, read scope,
  assert.equal(view.overview.requests,1);assert.ok(!('graph' in view));assert.ok(view.models.every(m=>Array.isArray(m.placements)));
  assert.ok(JSON.parse((await rpc('models_overview',{graph:true})).result.content[0].text).graph.nodes.length);
  assert.equal((await rpc('models_overview',{range:'1y'})).result.isError,true);
- assert.deepEqual(Object.keys(toolView(d)).sort(),['clients','empty','generatedAt','known','models','overview','providers','range']);
+ assert.deepEqual(Object.keys(toolView(d)).sort(),['clients','empty','generatedAt','known','models','overview','providers','range','work']);
+});
+
+// What generates now. Two providers report the Studio: the hub's own direct reads (which know how busy each
+// runtime is) and a plugin's bridge (which knows the wiring). The page joins them as the machine page does.
+test('what generates now: two providers joined per runtime; a gateway request counted once; table, overview, graph and MCP agree',async t=>{
+ const direct={studio:{source:'přímo z runtimu',observedAt:new Date().toISOString(),runtimes:[
+  {id:'llama-swap',name:'llama-swap',status:'running',url:'http://127.0.0.1:8081',activity:{active:1,queued:0},models:[{id:'qwen-27b',state:'loaded',active:1,queued:0,since:'2026-11-12T00:20:00Z'},{id:'krea-image',state:'unloaded',active:0,queued:0}]},
+  {id:'omlx',name:'oMLX',status:'running',url:'http://127.0.0.1:8000',activity:{active:1,queued:1},models:[{id:'Qwen3.8-27B-8bit',state:'loaded',active:1,queued:1,since:'2026-11-12T00:20:02Z'}]},
+  {id:'mlx-serve',name:'mlx-serve',status:'running',url:'http://127.0.0.1:11234',models:[{id:'org/Krea-2-Turbo',state:'unloaded'},{id:'org/Magenta-RT',state:'unloaded'}]}]}};
+ const bridge={studio:{source:'plugin compute',observedAt:new Date().toISOString(),runtimes:[
+  {id:'llama-swap',name:'llama-swap',status:'running',url:'http://127.0.0.1:8081/ui/',role:'gateway',memory:{usedGb:46,capacityGb:200,basis:'budget'},models:[
+   {id:'qwen-27b',state:'loaded',sizeGb:46,via:'omlx',target:'Qwen3.8-27B-8bit',ttlSeconds:1800},{id:'krea-image',state:'unloaded',via:'mlx-serve',target:'org/Krea-2-Turbo'}]},
+  {id:'omlx',name:'oMLX',status:'running',url:'http://127.0.0.1:8000/',role:'engine',models:[{id:'Qwen3.8-27B-8bit',state:'loaded',sizeGb:27.5,engine:'vlm'}]},
+  {id:'mlx-serve',name:'mlx-serve',status:'running',url:'http://127.0.0.1:11234/',role:'engine',models:[{id:'org/Krea-2-Turbo',state:'unloaded',capabilities:['image']}]},
+  {id:'mflux',name:'mflux',mode:'cli',status:'running',role:'engine',activity:{active:1,queued:1},models:[{id:'seedvr2-3b',name:'seedvr2-3b · upscale-seedvr2',kind:'image',state:'loaded',active:1,queued:0,since:'2026-11-12T00:19:00Z'},{id:'seedvr2-7b',kind:'image',state:'unloaded',active:0,queued:1}]}]}};
+ const h=await hub(t,{plugins:[{id:'direct-like',provides:{'home.runtimes':()=>direct}},{id:'bridge-like',provides:{'home.runtimes':()=>bridge}}]});
+ const d=await (await fetch(h.origin+'/api/models',{headers:h.admin})).json();
+ assert.deepEqual(d.work.items.map(x=>[x.id,x.runtime,x.kind,x.active,x.queued,x.gateways]),[
+  ['seedvr2-3b','mflux','image',1,0,[]],['Qwen3.8-27B-8bit','omlx','llm',1,1,['llama-swap']],['seedvr2-7b','mflux','image',0,1,[]]],'the wiring of one provider and the counts of the other, joined');
+ assert.deepEqual([d.work.active,d.work.queued],[2,2]);
+ assert.deepEqual(d.work.blind.map(r=>r.id),['mlx-serve']);
+ assert.deepEqual([d.overview.models.generating,d.overview.models.queued],[2,2]);
+ const qwen=d.models.find(g=>g.key==='qwen3.8-27b-8bit');assert.deepEqual([qwen.active,qwen.queued,qwen.since],[1,1,'2026-11-12T00:20:00.000Z']);
+ assert.equal(d.models[0].active>0,true,'busy models first');
+ assert.equal(d.models.find(g=>g.name==='org/Krea-2-Turbo').active,0,'idle as far as its gateway can tell');
+ assert.equal(d.models.find(g=>g.name==='org/Magenta-RT').active,null,'only on a runtime that does not say: unknown, not idle');
+ const node=d.graph.nodes.find(n=>n.model==='seedvr2-3b');assert.deepEqual([node.active,node.queued],[1,0]);
+ assert.equal(d.graph.nodes.find(n=>n.id==='rt:studio:mflux').active,1);
+ assert.ok(!d.known.some(k=>/mflux/i.test(k.title)),'a reported tool is no longer "known, no live stats"');
+ const view=toolView(d);assert.deepEqual(view.work,d.work);assert.equal(view.models.find(m=>m.name==='seedvr2-3b').active,1);
+ // A stale runtime (status unknown) says nothing about now, even if its provider sent counts.
+ const stale=liveState({studio:{runtimes:[{id:'omlx',status:'unknown',activity:{active:2,queued:0},models:[{id:'m',state:'unknown',active:2,since:'2026-11-12T00:00:00Z'}]}]}},MACHINES);
+ assert.deepEqual([stale[0].runtimes[0].activity,stale[0].runtimes[0].models[0].active],[null,null]);
+ // workOf on its own: nothing reported → nothing busy, everything blind.
+ const quiet=workOf(live(),placements(live()));
+ assert.deepEqual([quiet.items,quiet.active,quiet.queued,quiet.watching],[[],0,0,[]]);assert.ok(quiet.blind.some(r=>r.id==='omlx'));
 });
