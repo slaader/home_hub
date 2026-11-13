@@ -207,6 +207,14 @@ test('the schedule: first check 2 to 5 minutes after start, then every interval;
  const last=c.t;await checker.stop();
  const next=await setup(t,{dir:stateDirectory});next.c.t=last+HOUR;next.checker.start();
  assert.equal(next.c.timers[0].ms,11*HOUR);await next.c.advance(10*HOUR);assert.equal(next.g.calls.length,0);
+ // … but a hub updated to an exact release newer than the one it last saw asks again within minutes, not hours
+ await next.checker.stop();
+ const updated=await setup(t,{dir:stateDirectory,version:V('1.2.0')});updated.c.t=last+HOUR;updated.checker.start();
+ assert.ok(updated.c.timers[0].ms>=UPDATE_TIMING.firstMinMs&&updated.c.timers[0].ms<=UPDATE_TIMING.firstMaxMs,'first check 2 to 5 min after start');
+ await updated.checker.stop();
+ // a development build of a newer version is a development build: it keeps the interval
+ const dev=await setup(t,{dir:stateDirectory,version:V('1.2.0',false)});dev.c.t=last+HOUR;dev.checker.start();
+ assert.equal(dev.c.timers[0].ms,11*HOUR);await dev.checker.stop();
  // a person's check moves the schedule to count from it
  const forced=await setup(t);forced.checker.start();forced.c.t+=MINUTE;
  assert.deepEqual(await forced.checker.checkNow(),{checked:true});assert.equal(forced.c.timers.length,1);assert.equal(forced.c.timers[0].ms,12*HOUR);

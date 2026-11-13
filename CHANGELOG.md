@@ -6,7 +6,7 @@ Home Hub core, newest first. One section per release; the section is the text of
 number promises is in `AGENTS.md` → Versioning. The top section is the release being prepared, `## Unreleased`
 until the release gives it its number: a change to the public surface adds its line there in the same commit.
 
-## Unreleased
+## 1.3.0
 
 Core is developed in its public repository: a change is an ordinary commit, checked for household details before
 every push, instead of a private tree published through an export.
@@ -39,6 +39,10 @@ All of these keep working through 1.x and are removed in 2.0.
 - `scripts/release.mjs` in a public tree scans every tracked file it publishes, `README.md` and `.gitignore` included
   (it left those to `npm test`, as an export writes its own), and refuses before it commits when git would write the
   release commit under an identity that breaks a leak rule.
+- **The update check after an update.** A hub that had checked recently waited out the rest of its interval after a
+  restart, also when it now runs an exact release newer than the one it last saw: right after an update the card said
+  "development build 1.2.0; the newest release is 1.1.0" for up to 12 hours. Such a hub now asks again 2 to 5 minutes
+  after it starts. A development build keeps its interval.
 
 ## 1.2.0
 

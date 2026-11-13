@@ -163,12 +163,14 @@ export function createUpdateChecker({stateDirectory,file=path.join(stateDirector
  }
  return {
   file,
-  /** Arms the first check. No request is made here. A hub that checked recently waits out the rest of its interval. */
+  /** Arms the first check. No request is made here. A hub that checked recently waits out the rest of its interval,
+   *  unless it now runs an exact release newer than the one it last saw: that record predates an update, and waiting
+   *  would show "development build; newest release is <older>" for up to a whole interval. */
   start(){
    if(started)return;started=true;
    const r=record();let delay=timing.firstMinMs+random()*(timing.firstMaxMs-timing.firstMinMs);
-   const last=time(r?.attemptedAt);
-   if(last!==null){const due=last+(r.failures>0?(timing.backoffMs[r.failures-1]??interval()):interval())-now();delay=Math.min(Math.max(delay,due),interval()+timing.jitterMs);}
+   const last=time(r?.attemptedAt),updated=Boolean(version?.exact&&r?.version&&compareVersions(version.version,r.version)>0);
+   if(last!==null&&!updated){const due=last+(r.failures>0?(timing.backoffMs[r.failures-1]??interval()):interval())-now();delay=Math.min(Math.max(delay,due),interval()+timing.jitterMs);}
    if(r?.notBefore)delay=Math.max(delay,Math.min(time(r.notBefore)-now(),timing.rateLimitMaxMs));
    arm(delay);
   },
