@@ -12,11 +12,14 @@
 // branch; CHANGELOG.md has a section for the version; a PATCH leaves the data epoch alone and a changed epoch
 // is explained under "### Data"; the leak scan is clean; and the tests pass on exactly what ships.
 //
-// Two kinds of tree (AGENTS.md → Core and overlay):
-//   public   the release commit is tagged and pushed as it is.
-//   private  (it has the household overlay) nothing of this history may be published. The release commit stays
-//            here; scripts/publish-public-branch.mjs commits its export onto the orphan branch `public`, and the
-//            tag goes on that commit. The tests run in the exported tree, because that is what ships.
+// Two kinds of tree (edition.json; AGENTS.md → Development):
+//   public   the dev repository. The release commit is tagged on the branch and pushed as it is, so every
+//            tracked file is scanned (README.md and .gitignore too) and so is the identity git writes the
+//            release commit with.
+//   private  (deprecated, removed in 2.0: a tree with the household overlay) nothing of this history may be
+//            published. The release commit stays here; scripts/publish-public-branch.mjs commits its export onto
+//            the orphan branch `public`, and the tag goes on that commit. The tests run in the exported tree,
+//            because that is what ships.
 // The tagger is a neutral identity, not your git identity: a tag object is published with its tagger's name
 // and e-mail address. Signing, when a key is configured, is by that key and does not depend on the tagger.
 import {execFileSync,spawnSync} from 'node:child_process';
@@ -24,7 +27,8 @@ import {readFileSync,writeFileSync,existsSync,mkdtempSync,rmSync} from 'node:fs'
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {repoRoot,scanLeaks,formatFindings} from './leak-scan.mjs';
+import {repoRoot,scanLeaks,scanText,exportFiles,formatFindings} from './leak-scan.mjs';
+import {NEUTRAL_IDENTITY} from './pre-push.mjs';
 import {exportPublic} from './export-public.mjs';
 import {publishPublicBranch} from './publish-public-branch.mjs';
 import {readEdition} from '../server/edition.mjs';
@@ -137,6 +141,11 @@ export function release({root=repoRoot,version,baseline=null,dryRun=false,sign=f
  if(on!==branch)refuse(`Releases are cut from ${branch}; this checkout is on ${on||'a detached HEAD'}.`);
  const dirty=git(['status','--porcelain']);
  if(dirty)refuse(`The working tree is not clean:\n${dirty.split('\n').slice(0,10).join('\n')}`);
+ // A public tree publishes the release commit as it is, under the identity git writes it with.
+ if(mode==='public')for(const who of ['GIT_AUTHOR_IDENT','GIT_COMMITTER_IDENT']){
+  const ident=(tryGit(['var',who])||'').replace(/ -?\d+ [+-]\d{4}$/,''),found=ident?scanText(who,ident):[];
+  if(!ident||found.length)refuse(`${ident?`The release commit would be published as "${ident}" (${found.map(f=>f.rule).join(', ')}).`:`git has no identity to write the release commit with (${who}).`} Use the neutral identity of this repository: git config user.name "${NEUTRAL_IDENTITY.name}" && git config user.email ${NEUTRAL_IDENTITY.email}`);
+ }
  const last=lastTag(),previous=last?last.slice(1):null;
  if(previous&&!(compareVersions(version,previous)>0))refuse(`${version} is not greater than the last release (${previous}).`);
  if(compareVersions(version,pkg.version)<0)refuse(`${version} is lower than package.json (${pkg.version}).`);
@@ -148,7 +157,8 @@ export function release({root=repoRoot,version,baseline=null,dryRun=false,sign=f
   if(kind==='patch')refuse(`The data epoch changed (${before} → ${epoch}) and ${version} is a PATCH. A change of on-disk format needs a MINOR release.`);
   if(!/^### Data\s*$/m.test(notes))refuse(`The data epoch changed (${before} → ${epoch}); the CHANGELOG section for ${version} needs a "### Data" part that says what and how to roll back.`);
  }
- const findings=scanLeaks(root);
+ // A public tree publishes every tracked file as it is; an export writes its own README.md and .gitignore.
+ const findings=scanLeaks(root,exportFiles(root,{generated:mode==='public'}));
  if(findings.length)refuse(`The leak scan found ${findings.length} household detail(s) in files that would be published:\n${formatFindings(findings.slice(0,20))}`);
  // What the public repository has (as last fetched) must be part of what we are about to put on top of.
  if(mode==='private'){

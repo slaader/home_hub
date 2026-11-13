@@ -94,6 +94,12 @@ test('it refuses: bad versions, a dirty tree, another branch, no changelog, the 
  git('checkout','-q','-b','feature');refused(()=>go({version:'1.0.1'}),/cut from main; this checkout is on feature/);
  assert.equal(go({version:'1.0.1',branch:'feature',dryRun:true}).tagged,false);
  git('checkout','-q','--detach');refused(()=>go({version:'1.0.1'}),/detached HEAD/);git('checkout','-q','main');
+ // a public tree publishes the release commit under the identity git writes it with
+ for(const [key,value] of [['GIT_AUTHOR_EMAIL',`${owner}@example.com`],['GIT_COMMITTER_NAME',`${owner} at home`]]){
+  const was=process.env[key];process.env[key]=value;
+  try{refused(()=>go({version:'1.0.1',dryRun:true}),/release commit would be published as .*\(owner-name\)\. Use the neutral identity of this repository: git config user\.name "Home Hub"/);}
+  finally{process.env[key]=was;}
+ }
  // failing suites put package.json back and leave no commit and no tag
  const head=git('rev-parse','HEAD');
  refused(()=>go({version:'1.0.1',suites:{...suites,tests:()=>false}}),/npm test failed/);
@@ -115,6 +121,10 @@ test('it refuses: bad versions, a dirty tree, another branch, no changelog, the 
  await commit('a leak',{'docs/notes.md':`ssh ${owner}@host\n`});
  refused(()=>go({version:'2.0.0'}),/leak scan found 1 household detail/);
  git('rm','-q','docs/notes.md');git('commit','-q','-m','no leak');
+ // a public tree publishes its README.md as it is (an export would have written its own)
+ await commit('a leak in the README',{'README.md':`# Hub of ${owner}\n`});
+ refused(()=>go({version:'2.0.0'}),/leak scan found 1 household detail.*\nREADME\.md:1  owner-name/);
+ git('rm','-q','README.md');git('commit','-q','-m','no README');
  assert.equal(go({version:'2.0.0',dryRun:true}).tagged,false);
  assert.ok(ran.every(r=>r[0]!=='tests'||r[2]!=='2.0.0'),'a dry run runs no suite');
  // outside a repository

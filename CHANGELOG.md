@@ -19,6 +19,12 @@ every push, instead of a private tree published through an export.
   tag's name, message and tagger. It refuses the push and names the commit, tag or file; only what the remote does
   not have yet is read. Enable it once per checkout: `git config core.hooksPath scripts/hooks`.
 
+### Fixed
+
+- `scripts/release.mjs` in a public tree scans every tracked file it publishes, `README.md` and `.gitignore` included
+  (it left those to `npm test`, as an export writes its own), and refuses before it commits when git would write the
+  release commit under an identity that breaks a leak rule.
+
 ## 1.2.0
 
 Updates are applied by one command with a way back, the household's data and plugins can live outside the code
