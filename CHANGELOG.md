@@ -6,6 +6,19 @@ Home Hub core, newest first. One section per release; the section is the text of
 promises is in `AGENTS.md` → Versioning. The top section is the release being prepared: a change to the public
 surface adds its line there in the same commit.
 
+## Unreleased
+
+Core is developed in its public repository: a change is an ordinary commit, checked for household details before
+every push, instead of a private tree published through an export.
+
+### Added
+
+- **Pre-push hook.** `scripts/hooks/pre-push` runs `scripts/pre-push.mjs`, the rules of `scripts/leak-scan.mjs` over
+  everything a push would publish: every file of each pushed tip, every file version the new commits bring (a value
+  added and taken out again is still published), those commits' messages, authors and committers, and each pushed
+  tag's name, message and tagger. It refuses the push and names the commit, tag or file; only what the remote does
+  not have yet is read. Enable it once per checkout: `git config core.hooksPath scripts/hooks`.
+
 ## 1.2.0
 
 Updates are applied by one command with a way back, the household's data and plugins can live outside the code

@@ -1,0 +1,6 @@
+#!/bin/sh
+# The leak scan before every push: scripts/pre-push.mjs (what it checks is written there).
+# Enable it once per checkout, worktrees included:
+#   git config core.hooksPath scripts/hooks
+# Without node on the PATH this fails, and so does the push: nothing is published unchecked.
+exec node "$(dirname "$0")/../pre-push.mjs" "$@"

@@ -1,6 +1,8 @@
 // Which files make up the public core, and the scan that keeps household details out of them.
 // Used by scripts/export-public.mjs (refuses to export on a finding) and tests/leak.test.mjs (npm test
-// fails on a finding), so both look at exactly the same files with exactly the same rules.
+// fails on a finding), so both look at exactly the same files with exactly the same rules; and by
+// scripts/pre-push.mjs (the pre-push hook), which applies the same rules to what a push would publish:
+// files, commit messages, authors, committers and tags.
 //   node scripts/leak-scan.mjs        list findings in the files an export would include (exit 1 if any)
 import {readFileSync,readdirSync,existsSync,statSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
@@ -66,6 +68,10 @@ const TEXT=/\.(mjs|js|ts|json|md|css|html|svg|sh|py|txt|webmanifest|yml|yaml|tom
 // Third-party files vendored as they were published (their licences name their authors).
 const VENDORED=/^public\/vendor\//;
 export const isScanned=file=>TEXT.test(file)&&!VENDORED.test(file);
+// How a file is searched: 'text' line by line, 'bytes' (every rule but e-mail), or 'skip' (vendored).
+export const scanMode=file=>VENDORED.test(file)?'skip':TEXT.test(file)?'text':'bytes';
+// Larger files are not searched (a model or an archive, never something written by hand).
+export const MAX_SCANNED_BYTES=16*1024*1024;
 
 // → [{file, line, rule, match}]
 export function scanText(file,text){
@@ -84,12 +90,18 @@ export function scanBinary(file,buffer){
   while((m=rule.pattern.exec(text))!==null){if(!rule.allow?.(m[0],text,m.index))out.push({file,line:0,rule:rule.id,match:m[0].replace(/[^\x20-\x7e]/g,'?').slice(0,80)});if(m[0]==='')rule.pattern.lastIndex++;}}
  return out;
 }
+// One file's content, searched the way every scan here searches it.
+export function scanContent(file,buffer){
+ const mode=scanMode(file);
+ if(mode==='skip'||buffer.length>MAX_SCANNED_BYTES)return [];
+ return mode==='text'?scanText(file,buffer.toString('utf8')):scanBinary(file,buffer);
+}
 export function scanLeaks(root=repoRoot,files=exportFiles(root)){
  const findings=[];
  for(const file of files){
-  if(VENDORED.test(file))continue;
-  const full=path.join(root,file);if(statSync(full).size>16*1024*1024)continue;
-  findings.push(...(isScanned(file)?scanText(file,readFileSync(full,'utf8')):scanBinary(file,readFileSync(full))));
+  if(scanMode(file)==='skip')continue;
+  const full=path.join(root,file);if(statSync(full).size>MAX_SCANNED_BYTES)continue;
+  findings.push(...scanContent(file,readFileSync(full)));
  }
  return findings;
 }
