@@ -59,7 +59,8 @@ stops working at once.
 
 ## 3. Add your machines
 
-Machines come from the site configuration, `local/site.json`.
+Machines come from the site configuration, `local/site.json` (until 2.0; an instance directory keeps it apart from
+the code as `config/site.json`: [storage.md](storage.md)).
 
 ```sh
 mkdir -p local && cp config/site.example.json local/site.json
@@ -175,7 +176,7 @@ To update: `git pull`, then restart. Sign-ins survive the restart.
 | A page says "Administrators only" | You are signed in as a viewer |
 | A banner says the hub is not responding | The process stopped, or the proxy cannot reach it. The page redraws when it is back |
 | The agent gets `SCOPE_REQUIRED` | Its service account lacks the scope the message names |
-| The footer says `0 plugins` and you expected yours | `local/plugins/<id>/index.mjs` is missing or the directory name starts with `_` |
+| The footer says `0 plugins` and you expected yours | `<id>/index.mjs` is missing from the plugin directory (`HOME_HUB_PLUGINS_DIR`, the instance's plugin sources, or `local/plugins/`), or the directory name starts with `_` |
 
 The footer of every page shows the version and the number of plugins; the version's tooltip has the running commit.
 Include those three when you report a problem.

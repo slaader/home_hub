@@ -3,36 +3,45 @@
 Node 22+ ES-modules backend (`server/*.mjs`) + vanilla-JS UI (`public/`) + an MCP endpoint.
 **Zero third-party npm dependencies** — that is a rule, not an accident. Do not `npm install` to solve a problem.
 
-If `local/AGENTS.md` exists, read it too: it describes the deployment this checkout is.
+This repository is core, and it is public: every commit and tag pushed here is published (Development, below).
+A household's plugins and configuration live in repositories and directories of their own; when the work is about
+them, read that repository's `AGENTS.md`.
 
-## Core and overlay
+## Core and plugins
 
-This repository is two things kept apart on purpose:
+Two things kept apart on purpose:
 
-- **Core** — everything outside `local/`. Generic: it knows no household. Sign-in, users, service accounts,
+- **Core** — this repository. Generic: it knows no household. Sign-in, users, service accounts,
   scopes and API keys, the version, the update check and the update command, the overview with the Thermo telemetry client, the inventory map and services catalog,
   the tracker, review, search, the SSH-key and versions collectors, the router adapter, the Git LFS view (git hosts over their API and git), the integrations page
   (what the hub reads from outside, the switch that turns each off, and every machine with what is set up for it), the MCP endpoint.
-- **Overlay** — `local/`. One household's configuration (`local/site.json`), its plugins
-  (`local/plugins/<id>/`), pictures, deployment recipes and runbooks. In the private repository it is tracked;
-  a public export leaves it out. A public checkout has no `local/` until its owner creates one.
+- **Plugins and configuration** — one household's, outside this repository. Plugins are `plugins/<id>/` (with
+  `plugin.json` and `index.mjs`) in a **plugin source**, a directory with `plugins/` and a `package.json`, usually a
+  repository of its own; the hub finds them through `HOME_HUB_HOME/instance.json → sources.plugins` or
+  `HOME_HUB_PLUGINS_DIR` (`docs/plugins.md` → Where plugins are). The site file, the software watch list and the
+  pictures are in the instance's `config/` (`HOME_HUB_HOME`, `HOME_HUB_CONFIG_DIR`); data and secrets in its
+  `data/` and `private/` (`docs/storage.md`).
 
-`edition.json` says which tree this is (`private` or `public`; `server/edition.mjs`, `HOME_HUB_EDITION` overrides
-it in tests). Do not branch on the edition to change behaviour: what differs between households belongs in
-`local/site.json`, what only one household has belongs in a plugin.
+The in-tree overlay `local/` (`local/site.json`, `local/plugins/<id>/`) is still the default when none of those
+variables is set, and `npm test` still runs its tests, but it is **deprecated and goes in 2.0**: build nothing new
+on it, and never commit it here (`.gitignore` leaves it out). `edition.json` (`server/edition.mjs`) is deprecated
+too: it says `public`, and nothing new may read it or branch on it. What differs between households belongs in
+`site.json`, what only one household has belongs in a plugin.
 
 Rules that keep the split honest:
 
-- **Core never imports from `local/`.** A plugin reaches core through the module registry only.
+- **Core never imports from a plugin.** A plugin reaches core through the module registry, and imports core only
+  by name (`home-hub/plugin-api`, `home-hub/testing`).
 - **A plugin registers; it does not edit core tables.** Scopes, routes, MCP tools, pollers, assets, integrations
   and sidebar entries are declared in the plugin's `index.mjs` (`server/plugins.mjs` is the contract, `docs/plugins.md` the
   guide). Never add a plugin's route to `server/core/`, its scope to `server/scopes.mjs`, its tool to
   `server/mcp.mjs` or its page to `public/app.js`.
-- **No household values in core**: no real names, addresses, host names, user names or home paths. Use the
-  placeholders (`example.lan`, `10.0.0.x`, `alice`). `tests/leak.test.mjs` scans the files an export would
-  include and fails `npm test` on a finding; `node scripts/leak-scan.mjs` lists them.
+- **No household values in core**, not in a file, a commit message, a commit identity or a tag: no real names,
+  addresses, host names, user names or home paths. Use the placeholders (`example.lan`, `10.0.0.x`, `alice`).
+  `tests/leak.test.mjs` scans the tracked files and fails `npm test` on a finding; `node scripts/leak-scan.mjs`
+  lists them; the pre-push hook refuses a push that would publish one (Development).
 - **Machines, networks, names and time zone come from `server/site-config.mjs`**, never from a constant.
-  A missing `local/site.json` must leave an empty, working hub.
+  A missing site file must leave an empty, working hub.
 
 ## Verification tiers
 
@@ -40,44 +49,40 @@ Rules that keep the split honest:
 |---|---|---|
 | **S — small** | Copy, styling, a README/SPEC line, a doc-only change | `npm test` |
 | **M — medium** | One module or endpoint changes, no contract change | `npm test` |
-| **L — large** | Auth, tokens/scopes, MCP write path, the module contract, site config, knowledge/inventory schema, a collector that touches other hosts, anything that changes `docs/API.md`, the version and release tooling (`server/version.mjs`, `scripts/release.mjs`), the update check, the update command (`scripts/update.mjs`, `server/update-apply.mjs`, `server/update-config.mjs`), where things are (`server/paths.mjs`), `plugin.json` and the plugin API exports (`server/plugin-api.mjs`, `tests/plugin-testing.mjs`, `server/semver.mjs`), the host-agent installer (`scripts/install-host-agent.mjs`, `server/agent-closure.mjs`) | `npm test` + the python suites + a live preview smoke test |
+| **L — large** | Auth, tokens/scopes, MCP write path, the module contract, site config, knowledge/inventory schema, a collector that touches other hosts, anything that changes `docs/API.md`, the version and release tooling (`server/version.mjs`, `scripts/release.mjs`), the update check, the update command (`scripts/update.mjs`, `server/update-apply.mjs`, `server/update-config.mjs`), where things are (`server/paths.mjs`), `plugin.json` and the plugin API exports (`server/plugin-api.mjs`, `tests/plugin-testing.mjs`, `server/semver.mjs`), the host-agent installer (`scripts/install-host-agent.mjs`, `server/agent-closure.mjs`), the leak scan and the pre-push hook (`scripts/leak-scan.mjs`, `scripts/pre-push.mjs`, `scripts/hooks/`) | `npm test` + the python suites + a live preview smoke test |
 
 `npm test` runs `scripts/run-tests.mjs`: the core tests (`tests/*.test.mjs`) on a generic fixture site
-(`tests/fixtures/site.json`) with no plugins, then, when `local/` exists, the overlay's tests
-(`local/plugins/*/tests/*.test.mjs`, `local/tests/*.test.mjs`) with that site and its plugins. It takes under
-ten seconds. **There is no reason to run a subset on this repo** — do the whole thing every time, always.
-
-The run ends with one line per half and a total, and exits non-zero when either half failed. In a tree with
-an overlay it looks like this (the `overlay` numbers are that household's):
+(`tests/fixtures/site.json`) with no plugins. It takes under fifteen seconds. **There is no reason to run a subset
+on this repo** — do the whole thing every time, always. It ends with a summary and exits non-zero on a failure:
 
 ```
-core     tests 643  pass 642  fail 0  skipped 1
-overlay  tests 78  pass 78  fail 0
-total    tests 721  pass 720  fail 0
+core     tests 653  pass 653  fail 0
+total    tests 653  pass 653  fail 0
 ```
 
-- **Core: 643 tests in 88 files (2026-11-12), and none may fail, on any machine.** In a tree that has
-  `local/`, one is reported as skipped: `public edition: no overlay in the tree…` checks an export, and it
-  runs there, so an export passes 643 of 643 with no `overlay` line.
-- **Overlay: whatever the household added.** Its count, and which of its tests need files that are not in
-  git (data, generated media, a runtime on another machine), are written down in `local/AGENTS.md`. A failing
-  overlay test that is not on that list is a real failure.
+- **Core: 653 tests in 89 files (2026-11-13). None may fail and none is skipped, on any machine.** One of them,
+  `public edition: no overlay in the tree…`, fails in a checkout that has `local/site.json` or `local/plugins/`:
+  develop core without them.
+- **Plugins test themselves.** A plugin source runs its tests against this core with
+  `node scripts/run-tests.mjs --plugins <source> [--site <file>]` (`docs/plugins.md` → Tests); its counts, and
+  which of its tests need files that are not in git, are written down in that source's `AGENTS.md`. A checkout that
+  still has the deprecated `local/` gets a second run, `overlay`, with that site and its plugins.
 
 ```bash
-npm test                                     # core, then the overlay when there is one
+npm test                                     # the core tests
 npm test -- tests/security.test.mjs          # one file, while iterating only (the runner sets the right site)
 python3 tests/router_unifi_test.py           # the UniFi collector (10 tests), separately
 LOCAL_PREVIEW=1 PORT=8891 AUTH_FILE=/abs/path/test-auth.json DATA_DIR=/abs/scratch/data node server/index.mjs
 ```
 
 Core tests must pass on any machine: they use the fixture site, placeholder addresses and no network. A test
-that needs a household's own data or machines is an overlay test.
+that needs a household's own data or machines belongs in that household's plugin source.
 
 ## Versioning: semver, released from tags
 
 Core is versioned with semver. `package.json → version` is the source of truth (`server/version.mjs` reads it);
 the footer, `GET /api/ui/manifest`, the MCP `serverInfo`, the tool `hub_version`, the start-up line and
-`<state>/run.json` show it. Releases are annotated tags `vX.Y.Z` with a GitHub Release each; `CHANGELOG.md` has
+`<state>/run.json` show it. Releases are annotated tags `vX.Y.Z` on `main` with a GitHub Release each; `CHANGELOG.md` has
 one section per version, and that section is the text of the Release. A checkout that is not on the tag of its
 version is a development build and says so (`1.1.0+dev`).
 
@@ -103,8 +108,11 @@ Rules:
   and tags. `--dry-run` only checks; `--notes` prints the Release text; `--baseline <commit>` tags something
   that is already published. **It never pushes**: it prints the push and `gh release create` commands, and
   running them is the owner's decision.
-- In a tree with an overlay (private history) the tag goes on the commit of the public export, on the orphan
-  branch, never on a commit of this history; the script does that itself. The tagger is a neutral identity.
+- The release commit (`Release vX.Y.Z`) and the tag go on `main` of this repository, and the push the script
+  prints (`git push origin main refs/tags/vX.Y.Z`) goes through the pre-push hook like any other. The tagger is a
+  neutral identity (`Home Hub release`); the release commit has the repository's (Development), and the script
+  refuses before committing when git would write it under one that breaks a leak rule. Its private mode, for a
+  tree whose `edition.json` says `private` (the tag on a public export, on an orphan branch), is deprecated.
 - Tags are SSH-signed when `git config user.signingkey` is set (`--sign` insists, `--unsigned` declines without
   the warning). The public key belongs in `config/release-signers`; the script prints how to set it up.
 - Every change that touches the public surface adds a line to the top section of `CHANGELOG.md` in the same commit.
@@ -142,11 +150,40 @@ Rules:
   empty state, not-installed notice) instead of one-off markup.
 - No lint, formatter, typecheck or CI exists. Do not add one for a doc change.
 
+## Development
+
+This repository is where core is developed. `main` here is canonical: a change is an ordinary commit, and
+releases are tags on `main`. There is no private tree any more, and the export that published one is deprecated.
+A private mirror for work in progress is fine: same history, and pushes to it go through the same hook. The hook
+runs on the machine that pushes, so it protects only a checkout that has it enabled.
+
+Once per checkout (the settings are the checkout's own, `git config` without `--global`; worktrees share them):
+
+```bash
+git config core.hooksPath scripts/hooks          # the pre-push hook: scripts/pre-push.mjs
+git config user.name "Home Hub"                  # the neutral identity: every commit is published with it
+git config user.email dev@home-hub.invalid
+```
+
+- **The hook** applies the rules of `scripts/leak-scan.mjs` to what a push would publish: every file of each
+  pushed tip, every file version the new commits bring (taking a value out in a later commit does not help: the
+  earlier one is published too), those commits' messages, authors and committers, and each pushed tag's name,
+  message and tagger. It refuses the push and names the commit, tag or file. Fix the cause and rewrite the
+  commits that carry it; **never push with `--no-verify`**.
+- **No e-mail address outside the placeholder domains** in a commit, so no `Co-Authored-By:` or `Signed-off-by:`
+  trailer with a real address: only `example.com|org|net|lan`, `.test`, `.invalid`, `.localhost` and OpenSSH's
+  type names pass, and the hook refuses anything else.
+- The hook reads only what the remote does not have yet, from that remote's tracking refs. A new, empty remote (a
+  mirror) has nothing, so a first push there checks all of history, including commits from before the hook. Seed
+  such a mirror from this repository on the server side (a mirror or a migration), fetch it, then push to it.
+
 ## Worktrees and large files
 
 Do feature work in a worktree off `origin/main`; remove it once merged. A worktree changes nothing about
-deployment. Never run a live instance from a worktree.
+deployment. Never run a live instance from a worktree. The hook and the identity above cover every worktree of
+the checkout.
 
 - `node_modules` is empty by design (no third-party deps), so worktrees are effectively free here.
-- **No LFS, and don't add it.** A site's large pictures belong in its overlay (`local/images/`), compressed.
+- **No LFS, and don't add it.** A site's large pictures belong in its own configuration (`config/images/` of the
+  instance), compressed, never in core.
 - Generated media (benchmark images, audio) stays untracked.

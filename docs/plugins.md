@@ -5,10 +5,11 @@ Home Hub is a generic core plus whatever one household adds. The additions come 
 - **`site.json`** — facts about the site: its name, network, machines. Core reads it.
 - **plugins** — features only this household has, each a directory with `plugin.json` and `index.mjs`. Core loads them.
 
-Both live in the overlay directory `local/` of the core checkout (`local/site.json`, `local/plugins/<id>/`), or
-apart from the code: the site file in an instance's `config/` (`HOME_HUB_HOME`, `docs/storage.md`) and the plugins
-in plugin sources of their own ([Where plugins are](#where-plugins-are)). Core never imports from a plugin; a
-plugin imports core only by name ([Importing core](#importing-core)). A hub without either works: it is empty and generic.
+Both live apart from the code: the site file in an instance's `config/` (`HOME_HUB_HOME`, `docs/storage.md`) and
+the plugins in plugin sources of their own, usually a private repository ([Where plugins are](#where-plugins-are)).
+The overlay directory `local/` of the core checkout (`local/site.json`, `local/plugins/<id>/`) still works as the
+default, deprecated until 2.0 removes it. Core never imports from a plugin; a plugin imports core only by name
+([Importing core](#importing-core)). A hub without either works: it is empty and generic.
 
 ```mermaid
 flowchart LR
@@ -18,7 +19,7 @@ flowchart LR
     C[server/core/*.mjs<br>core modules]
     S[server/site-config.mjs]
   end
-  subgraph overlay["Overlay: local/ (private)"]
+  subgraph household["The household's (private): instance config/, plugin sources"]
     J[site.json]
     X[plugins/&lt;id&gt;/index.mjs]
   end
@@ -579,12 +580,11 @@ Build text-safe DOM only: `el()` puts strings into text nodes and attributes. Ne
 
 ### Tests
 
-Put them in `<plugin>/tests/*.test.mjs`, and tests that span plugins in the source's `tests/*.test.mjs`. For
-`local/`, `npm test` runs them after the core tests, with your `site.json` and all your plugins loaded. A test
+Put them in `<plugin>/tests/*.test.mjs`, and tests that span plugins in the source's `tests/*.test.mjs`. A test
 imports what it needs from `home-hub/testing`: it builds a hub with `createHandler` and passes fakes through its
 options (they arrive as `hub.options`), or uses the ready helper `hub(t, options)`.
 
-A plugin source elsewhere (a directory with `plugins/` and a `package.json`) runs its tests with core's runner:
+A plugin source (a directory with `plugins/` and a `package.json`) runs its tests with core's runner:
 
 ```bash
 node <core>/scripts/run-tests.mjs --plugins . [--plugins <another source>] [--site tests/fixtures/site.json]
@@ -595,28 +595,45 @@ source's plugins loaded, on `--site` (default: the source's `tests/fixtures/site
 front-end hook and throwaway secret key as `npm test`, and prints one summary line named after the source's
 `package.json`. Core's own tests are not part of that run. The plugins see the core the link points to
 (`node scripts/plugins.mjs link`), so testing against another core is a matter of pointing the link at it.
+For the deprecated in-tree `local/`, `npm test` in the core checkout runs them after the core tests, with
+`local/site.json` and every plugin in `local/plugins/` loaded.
 
 `hub.version` is the release that is running: `{version, dataEpoch, commit, exact, label}` (`server/version.mjs`).
 `exact` is `true` on the release tag of `version`, `false` on any other git checkout (`label` is then
 `1.1.0+dev (4172c37)`), and `null` where there is no git checkout to tell.
 Under the test runner, front-end modules can be imported in Node with the same URL-style imports.
 
-## Editions and the public export
+## Keeping household details out of core
 
-`edition.json` at the repository root says `private` (the tree with an overlay) or `public` (an export).
-`server/edition.mjs` exposes `readEdition()` and `isPublicRelease()`; `HOME_HUB_EDITION` overrides the file in
-tests. The server prints the edition and the number of plugins when it starts. Behaviour does not branch on the
-edition: a public tree is simply one without `local/`.
+Core is developed in its public repository, so whatever is committed there is published, and plugins and site
+files stay in repositories of their own. Three checks keep a household's details out of core, all with the same
+rules (`scripts/leak-scan.mjs`):
 
 ```bash
-node scripts/leak-scan.mjs                    # list household details in the files an export would include
-node scripts/export-public.mjs <outDir>       # copy the core tree, write edition public and the public README
-node scripts/publish-public-branch.mjs        # commit that export onto the local orphan branch "public"
+node scripts/leak-scan.mjs                    # list household details in the tracked files
+npm test                                      # tests/leak.test.mjs: the same scan, and the tree has no local/
+git config core.hooksPath scripts/hooks       # once per checkout: the pre-push hook (scripts/pre-push.mjs)
 ```
 
-The export copies tracked files outside `local/`, `private/`, `data/`, `state/`, `router-private/` and
-`deploy/`. Its README is the repository's `README.md` without the sections between `<!-- private:begin -->`
-and `<!-- private:end -->` (a README that does not carry `<!-- home-hub:public-readme -->` is not used at all,
-and a short generic one is written instead). It refuses, with a non-zero exit code, when the scan finds the owner's name, the home subnet, a home
-path, the site name, the home domain or an e-mail address outside the placeholder domains.
-`tests/leak.test.mjs` runs the same scan in `npm test`. Neither script pushes anything.
+The rules find the owner's name, the home subnet, a home path, the site name (except in the one public repository
+slug of `package.json → homeHub.updates.repo`), the home domain and any e-mail address outside the placeholder
+domains. The hook applies them to everything a push would publish: every file of each pushed tip, every file
+version the new commits bring, those commits' messages, authors and committers, and each pushed tag's name, message
+and tagger. It refuses the push, names the commit, tag or file, and reads only what the remote does not have yet.
+`AGENTS.md` → Development has the rest: the neutral commit identity, and seeding a new mirror.
+
+### Editions and the export (deprecated)
+
+Until 1.2 core was developed in a private tree that carried the household overlay and was published as an export.
+That machinery is still here for a tree that has an overlay, and goes in 2.0:
+
+- `edition.json` at the repository root says `private` (the tree with an overlay) or `public`.
+  `server/edition.mjs` exposes `readEdition()` and `isPublicRelease()`; `HOME_HUB_EDITION` overrides the file in
+  tests. Behaviour does not branch on it, and every tree is now `public`.
+- `node scripts/export-public.mjs <outDir>` copies the tracked files outside `local/`, `private/`, `data/`,
+  `state/`, `router-private/` and `deploy/`, writes edition `public` and a README: the repository's `README.md`
+  without the sections between `<!-- private:begin -->` and `<!-- private:end -->` (a README that does not carry
+  `<!-- home-hub:public-readme -->` is not used at all, and a short generic one is written instead). It refuses,
+  with a non-zero exit code, on a finding of the scan.
+- `node scripts/publish-public-branch.mjs` commits that export onto the local orphan branch `public`, under a
+  neutral identity; `scripts/release.mjs` in a private tree tags that commit. Neither pushes anything.

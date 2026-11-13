@@ -22,8 +22,8 @@ Core features:
   with decisions; full-text search over both.
 - **MCP endpoint** — the same data and writes for agents, limited by the key's scopes.
 
-Everything else is a plugin (`docs/plugins.md`): a household adds its own features and its own configuration
-in `local/` without changing core.
+Everything else is a plugin (`docs/plugins.md`): a household adds its own features in a plugin source and its
+own configuration in a site file, both outside the core checkout, without changing core.
 
 ## Structure
 
@@ -35,9 +35,9 @@ in `local/` without changing core.
 | `server/site-config.mjs` | The site configuration, validated |
 | `server/*-store.mjs`, `server/db.mjs` | State: SQLite (`state/hub.db`) and JSON files (`docs/storage.md`) |
 | `public/` | The UI: `app.js` (shell), one module per page, `ui.js` and `tokens.css` (shared pieces) |
-| `scripts/` | Collectors, the inventory checker and editor, the export |
+| `scripts/` | Collectors, the inventory checker and editor, setup, release, update, the leak scan; `scripts/hooks/` the pre-push hook |
 | `tests/` | Core tests; `tests/fixtures/site.json` is the generic site they run on |
-| `local/` | The overlay: `site.json`, `plugins/`, pictures. Not part of a public export |
+| `local/` | The in-tree overlay (`site.json`, `plugins/`, pictures), deprecated until 2.0. Never committed here |
 
 Commands: `node server/index.mjs`, `npm test`, `node scripts/collect-systems.mjs`,
 `node scripts/collect-security.mjs`, `node scripts/check-knowledge.mjs`.

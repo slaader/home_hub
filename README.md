@@ -11,7 +11,7 @@ API and MCP endpoint, add machines and their runtime stacks, keep tickets and pu
 up the rest. Scoped service accounts decide what access it gets.
 
 One Node process, zero third-party npm dependencies, a vanilla-JavaScript UI, and files you can back up.
-A fresh public edition starts empty, with no household configuration or plugins.
+A fresh checkout starts empty, with no household configuration or plugins.
 
 ## Screenshots
 
@@ -119,7 +119,7 @@ models, video and audio.
 | Project tracker, review, full-text search | Works | Nothing |
 | MCP endpoint and HTTP API | Works | A service-account key |
 | Light and dark theme, English and Czech | Works | Nothing |
-| Your own pages, routes and MCP tools | — | A plugin under `local/plugins/` |
+| Your own pages, routes and MCP tools | — | A plugin ([docs/plugins.md](docs/plugins.md)) |
 
 Nothing in the list needs an npm package or a cloud service.
 
@@ -132,6 +132,8 @@ mkdir -p local && cp config/site.example.json local/site.json
 ```
 
 Edit it and restart. Every field is optional, and a wrong one stops the server with a message that names it.
+`local/` is the default until 2.0, which drops it: an instance directory (`HOME_HUB_HOME`, its `config/site.json`;
+[docs/storage.md](docs/storage.md)) keeps configuration, data and secrets apart from the code instead.
 
 | Field | What it sets |
 |---|---|
@@ -193,8 +195,9 @@ python3 scripts/collect-router-unifi.py # client census from a UniFi gateway
 
 `scripts/systems/install-launchd.sh` schedules them on macOS; `examples/systemd/` has the same for Linux.
 
-What only your home has goes into a **plugin**: `local/plugins/<id>/index.mjs` registers routes, scopes, MCP tools,
-pages and sidebar entries through the same registry the core uses, and draws with the same UI pieces. The contract
+What only your home has goes into a **plugin**: `<id>/index.mjs` in a plugin directory of your own
+(`HOME_HUB_PLUGINS_DIR`, an instance's plugin sources, or `local/plugins/` until 2.0) registers routes, scopes, MCP
+tools, pages and sidebar entries through the same registry the core uses, and draws with the same UI pieces. The contract
 is in [docs/plugins.md](docs/plugins.md); `tests/fixtures/plugins/demo/` is a complete small example.
 
 ## Security model
@@ -298,13 +301,23 @@ repository (`repo`, for a fork), takes pre-releases (`channel: "prerelease"`) or
 | [docs/features.md](docs/features.md) | Every part of the hub in detail: machines, inventory, tracker, access, telemetry, LLM runtimes, collectors, security |
 | [docs/docker.md](docs/docker.md) | Docker in full |
 | [docs/updating.md](docs/updating.md) | The update command: preflight, apply, rollback, the data epoch, rehearsing a rollback |
-| [docs/plugins.md](docs/plugins.md) | Site configuration, the plugin contract, the public export |
+| [docs/plugins.md](docs/plugins.md) | Site configuration, the plugin contract, keeping household details out of core |
 | [docs/API.md](docs/API.md) | The HTTP API, the UI manifest and the MCP tools |
 | [docs/review.md](docs/review.md), [docs/storage.md](docs/storage.md), [docs/design.md](docs/design.md) | Review sets and uploads; where state lives; design tokens and UI components |
 | [SPEC.md](SPEC.md), [AGENTS.md](AGENTS.md) | What it is, and the rules for changing it |
 
 ## Development
 
-`npm test` runs every test in under ten seconds: the core on a generic fixture site, then your overlay's tests
-when `local/` exists. No dependencies, no build step, no bundler: the browser loads `public/` as it is. UI text is
-Czech in the code and translated in `public/i18n-en-*.js`; a test fails when a string has no English entry.
+`npm test` runs every core test in under fifteen seconds, on a generic fixture site; a plugin source runs its own
+with `node scripts/run-tests.mjs --plugins <source>`. No dependencies, no build step, no bundler: the browser loads
+`public/` as it is. UI text is Czech in the code and translated in `public/i18n-en-*.js`; a test fails when a string
+has no English entry.
+
+Core is developed in this repository, and what is pushed here is public. Before your first push, enable the
+pre-push hook, which refuses a push that would publish household details in a file, a commit message, a commit
+identity or a tag, and give the checkout a neutral identity ([AGENTS.md](AGENTS.md) → Development):
+
+```sh
+git config core.hooksPath scripts/hooks
+git config user.name "Home Hub" && git config user.email dev@home-hub.invalid
+```
