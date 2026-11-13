@@ -1,3 +1,5 @@
+// Deprecated, removed in 2.0 with edition.json: every tree is the public tree now (AGENTS.md → Development).
+// Nothing new may read the edition. (server/paths.mjs takes repoRoot from here; that moves when this file goes.)
 // Which tree this is. The private checkout carries the household overlay under local/ and says
 // {"edition":"private"} in edition.json; scripts/export-public.mjs writes {"edition":"public"} into the
 // exported tree. HOME_HUB_EDITION overrides the file (tests). A tree without a marker counts as public,

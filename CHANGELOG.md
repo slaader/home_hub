@@ -2,9 +2,9 @@
 
 Home Hub core, newest first. One section per release; the section is the text of that release on GitHub
 (`node scripts/release.mjs <version> --notes` prints it). Parts, in this order, empty ones left out:
-**Added**, **Changed**, **Fixed**, **Plugin contract**, **Data**, **Upgrade notes**. What the version number
-promises is in `AGENTS.md` → Versioning. The top section is the release being prepared: a change to the public
-surface adds its line there in the same commit.
+**Added**, **Changed**, **Deprecated**, **Fixed**, **Plugin contract**, **Data**, **Upgrade notes**. What the version
+number promises is in `AGENTS.md` → Versioning. The top section is the release being prepared, `## Unreleased`
+until the release gives it its number: a change to the public surface adds its line there in the same commit.
 
 ## Unreleased
 
@@ -18,6 +18,21 @@ every push, instead of a private tree published through an export.
   added and taken out again is still published), those commits' messages, authors and committers, and each pushed
   tag's name, message and tagger. It refuses the push and names the commit, tag or file; only what the remote does
   not have yet is read. Enable it once per checkout: `git config core.hooksPath scripts/hooks`.
+
+### Deprecated
+
+All of these keep working through 1.x and are removed in 2.0.
+
+- **The export**: `scripts/export-public.mjs`, `scripts/publish-public-branch.mjs` and `npm run export:public`, and the
+  private mode of `scripts/release.mjs` that publishes through them. Core is developed in the public repository, so
+  nothing is exported any more. Run by hand, the two scripts say so.
+- **The in-tree overlay `local/` as the default** for the site configuration (`local/site.json`,
+  `local/software-watch.json`, `local/images/`) and the plugins (`local/plugins/`). Keep them outside the code: an
+  instance directory (`HOME_HUB_HOME`: `config/`, and `instance.json → sources.plugins` for plugin sources), or
+  `HOME_HUB_CONFIG_DIR` and `HOME_HUB_PLUGINS_DIR`.
+- **`edition.json`**, `HOME_HUB_EDITION` and `server/edition.mjs` (`readEdition`, `isPublicRelease`; `readEdition` is
+  also exported by `home-hub/testing`). Every tree is the public tree: the file stays `{"edition":"public"}` in 1.x
+  and nothing new reads it.
 
 ### Fixed
 

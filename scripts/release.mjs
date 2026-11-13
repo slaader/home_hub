@@ -35,7 +35,7 @@ import {readEdition} from '../server/edition.mjs';
 import {compareVersions} from '../server/versions.mjs';
 import {SEMVER,validRepo} from '../server/version.mjs';
 
-export const CHANGELOG_HEADINGS=Object.freeze(['Added','Changed','Fixed','Plugin contract','Data','Upgrade notes']);
+export const CHANGELOG_HEADINGS=Object.freeze(['Added','Changed','Deprecated','Fixed','Plugin contract','Data','Upgrade notes']);
 const TAGGER={name:'Home Hub release',email:'release@home-hub.invalid'};
 const refuse=message=>{throw Object.assign(new Error(message),{refused:true});};
 

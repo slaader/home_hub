@@ -17,6 +17,7 @@
 // | HOME_HUB_PRIVATE_DIR | <home>/private       | <root>/private                          |
 // | AUTH_FILE            | <private>/auth.json  | <root>/private/auth.json                |
 //
+// The two <root>/local defaults are the in-tree overlay: deprecated, removed in 2.0 (CHANGELOG.md → Deprecated).
 // A variable that is set always wins over the default derived from another one. With none of them set every
 // path is exactly what it was before this module existed. DATA_DIR, STATE_DIR and AUTH_FILE are returned as
 // given (relative values stay relative to the working directory, as they always were); every other value is absolute.

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Deprecated, removed in 2.0: core is developed in the public repository, which needs no export
+// (AGENTS.md → Development). It still works for a tree that has the household overlay.
 // Writes the public core of this repository into a directory:
 //   node scripts/export-public.mjs <outDir> [--force]
 // It copies the tracked files outside the overlay, state and deployment directories (the list is
@@ -107,6 +109,7 @@ export function exportPublic(outDir,{root=repoRoot,force=false,log=()=>{}}={}){
 
 if(process.argv[1]===fileURLToPath(import.meta.url)){
  const args=process.argv.slice(2),force=args.includes('--force'),target=args.find(a=>!a.startsWith('--'));
+ console.error('Deprecated: scripts/export-public.mjs is removed in Home Hub 2.0. Core is developed in the public repository (AGENTS.md → Development).');
  if(!target){console.error('Usage: node scripts/export-public.mjs <outDir> [--force]');process.exit(2);}
  try{const r=exportPublic(target,{force,log:console.log});console.log(`Public edition written (${r.files} files${r.commit?`, from ${r.commit}`:''}). Nothing was pushed.`);}
  catch(e){console.error(e.message);process.exit(1);}

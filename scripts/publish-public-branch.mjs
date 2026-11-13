@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Deprecated, removed in 2.0, with scripts/export-public.mjs: core is developed in the public repository.
 // Commits a fresh public export onto the local branch `public`:
 //   node scripts/publish-public-branch.mjs [--branch public] [--author-name N] [--author-email E]
 // - The branch is an ORPHAN: its first commit has no parent, and each later export is one commit on top of
@@ -45,6 +46,7 @@ export function publishPublicBranch({root=repoRoot,branch='public',authorName='H
 
 if(process.argv[1]===fileURLToPath(import.meta.url)){
  const args=process.argv.slice(2);
+ console.error('Deprecated: scripts/publish-public-branch.mjs is removed in Home Hub 2.0. Core is developed in the public repository (AGENTS.md → Development).');
  try{publishPublicBranch({branch:option(args,'--branch','public'),authorName:option(args,'--author-name',process.env.PUBLIC_AUTHOR_NAME||'Home Hub export'),authorEmail:option(args,'--author-email',process.env.PUBLIC_AUTHOR_EMAIL||'export@home-hub.invalid'),log:console.log});}
  catch(e){console.error(e.message);process.exit(1);}
 }
