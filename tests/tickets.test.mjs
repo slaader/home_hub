@@ -482,3 +482,123 @@ test('tickets UI: the assignee field suggests people, text has a preview, histor
  const cs=trackerView({canWrite:false},'items','HH-1');document.body.append(cs);await flush();
  assert.ok(cs.textContent.includes('Historie změn')&&!cs.textContent.includes('6 Jan 2026'),'another language, another date format');assert.match(cs.textContent,/6\. .*2026/);
 });
+
+// Files: the new-item dialog collects them and uploads them once the item exists; the item's page shows them
+// under the description and as chips in the text. (The chip editor itself needs a real browser; here the
+// textarea is the editor and holds the ![name] tokens.)
+const PNG_BYTES=Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,1,2,3]);
+const picture=(name='image.png')=>new File([PNG_BYTES],name,{type:'image/png'});
+const withClass=(root,name)=>nodes(root,n=>(n.attrs.class||'').split(/\s+/).includes(name));
+test('tickets UI: a new item takes pasted and dropped files, shows them, and uploads them once it exists',async t=>{
+ dom(t);const {s}=await store(t);const calls=[];
+ globalThis.fetch=async(url,options={})=>{
+  if(options.method==='POST'){const made=await s.create(JSON.parse(options.body),'ui');calls.push(['POST',url,made.description]);return Response.json(made,{status:201});}
+  if(options.method==='PUT'){
+   const name=new URL(url,'http://hub.test').searchParams.get('name');calls.push(['PUT',url,options.body.size]);
+   if(name.startsWith('broken'))return Response.json({error:{message:'Soubor je příliš velký (nejvýš 100 MB).'}},{status:413});
+   return Response.json(await s.attach('HH-1',{sha256:'a'.repeat(64),size:options.body.size,type:'image/png',name},'ui'),{status:201});
+  }
+  return Response.json(url==='/api/tickets/people'?{people:[]}:url.startsWith('/api/tickets/HH-')?await s.get('HH-1'):await s.list());
+ };
+ const root=trackerView({canWrite:true},'items');document.body.append(root);await flush();
+ nodes(root,n=>n.tag==='button'&&n.textContent==='+ New item')[0].listeners.click();await flush();
+ const dialog=nodes(document.body,n=>n.tag==='dialog')[0],area=byName(dialog,'description'),title=byName(dialog,'title');
+ const tiles=()=>withClass(dialog,'tk-tile-name').map(n=>n.textContent),status=()=>nodes(dialog,n=>n.attrs.role==='status')[0];
+ const paste=(target,files,types=['Files'])=>{let taken=false;dialog.listeners.paste({clipboardData:{files,types},target,preventDefault(){taken=true;}});return taken;};
+ assert.equal(nodes(dialog,n=>n.tag==='hr').length,1,'a divider after the fields');assert.ok(dialog.textContent.includes('Attachments (0)'));assert.deepEqual(tiles(),[]);
+ // A screenshot pasted into the description: a tile, and its token where the caret is.
+ area.value='See  for the glitch';area.selectionStart=area.selectionEnd=4;area.focus();
+ assert.equal(paste(area,[picture()]),true);assert.equal(area.value,'See ![image.png]  for the glitch');assert.deepEqual(tiles(),['image.png']);
+ // Pasted anywhere else it is attached without a place in the text; every pasted picture is "image.png", so the second gets its own name.
+ assert.equal(paste(title,[picture()]),true);assert.equal(area.value,'See ![image.png]  for the glitch');assert.deepEqual(tiles(),['image.png','image-2.png']);
+ // Text from an office application stays a paste of text.
+ assert.equal(paste(area,[picture()],['text/plain','text/html','Files']),false);assert.equal(paste(area,[],['text/plain']),false);assert.deepEqual(tiles(),['image.png','image-2.png']);
+ // Dropped files; an empty one is refused with a reason, and a drag of text is not a file drop.
+ const drop=(files,types=['Files'])=>{let taken=false;dialog.listeners.drop({target:dialog,dataTransfer:{types,files},preventDefault(){taken=true;}});return taken;};
+ assert.equal(drop([new File(['oops'],'broken [1].txt'),new File([],'empty.bin'),new File(['RIFF'],'beep.wav',{type:'audio/wav'})]),true);
+ assert.deepEqual(tiles(),['image.png','image-2.png','broken (1).txt','beep.wav']);assert.ok(status().textContent.includes('empty.bin: the file is empty.'));
+ assert.equal(drop([],['text/plain']),false);
+ assert.ok(dialog.textContent.includes('Attachments (4)'));
+ assert.equal(withClass(dialog,'tk-tile').map(n=>n.attrs.class).join(),'tk-tile image,tk-tile image,tk-tile text,tk-tile audio');
+ // A tile opens its file in the viewer (a second dialog, on top), × takes the file away again, and with it its token.
+ withClass(dialog,'tk-tile-open')[0].listeners.click();
+ const viewer=nodes(document.body,n=>n.tag==='dialog'&&n.attrs.class.includes('tk-lightbox'))[0];assert.match(nodes(viewer,n=>n.tag==='img')[0].attrs.src,/^blob:/);
+ buttonText(viewer,'Close').listeners.click();assert.equal(nodes(document.body,n=>n.tag==='dialog').length,1);
+ withClass(dialog,'tk-tile-x')[1].listeners.click({currentTarget:{}});assert.deepEqual(tiles(),['image.png','broken (1).txt','beep.wav']);
+ area.value+=' ![beep.wav] ';withClass(dialog,'tk-tile-x')[2].listeners.click({currentTarget:{}});assert.deepEqual(tiles(),['image.png','broken (1).txt']);assert.ok(!area.value.includes('beep.wav'));
+ // Create: the item first, then each file to it under the name its token carries; what failed is said on the item's page.
+ const fields={project:{value:'home-hub'},title:{value:'With files'},description:area,type:{value:'bug'},priority:{value:'normal'},release:{value:''},assignee:{value:''},labels:{value:''},querySelector:()=>({disabled:false})};
+ await nodes(dialog,n=>n.tag==='form')[0].listeners.submit({preventDefault(){},currentTarget:fields});await flush();
+ assert.deepEqual(calls,[['POST','/api/tickets','See ![image.png]  for the glitch'],['PUT','/api/tickets/HH-1/attachments?name=image.png',PNG_BYTES.length],['PUT','/api/tickets/HH-1/attachments?name=broken%20(1).txt',4]]);
+ assert.equal(location.hash,'#items/HH-1');assert.equal(nodes(document.body,n=>n.tag==='dialog').length,0);
+ // A view of the item that never reached the screen (the user had already moved on) does not use the notice up.
+ trackerView({canWrite:true},'items','HH-1');await flush();
+ const page=trackerView({canWrite:true},'items','HH-1');document.body.append(page);await flush();
+ const said=nodes(page,n=>n.attrs.role==='status')[0];assert.match(said.textContent,/these attachments did not upload: broken \(1\)\.txt \(The file is too large \(100 MB at most\)\.\)/);assert.ok(said.classList.contains('error'));
+ assert.deepEqual(withClass(page,'tk-tile-name').map(n=>n.textContent),['image.png']);assert.equal(withClass(page,'tk-fchip')[0].attrs['data-file'],'image.png','the token is the file\'s chip now');
+ // Said once: the next visit to the item does not repeat it.
+ const again=trackerView({canWrite:true},'items','HH-1');document.body.append(again);await flush();assert.equal(nodes(again,n=>n.attrs.role==='status')[0].textContent,'');
+});
+
+test('tickets UI: an item shows its files under the description; ![name] is a chip; files come and go on the page',async t=>{
+ dom(t);const {s}=await store(t);
+ const made=await s.create({project:'home-hub',title:'Files',description:'Before ![shot.png] then ![gone.png] and ![never.png].'},'alex');
+ const file=(name,type)=>({sha256:(name.length%10+'').repeat(64),size:2048,type,name});
+ await s.attach(made.id,file('shot.png','image/png'),'alex');await s.attach(made.id,file('clip.mp4','video/mp4'),'alex');
+ const extra=await s.attach(made.id,file('gone.png','image/png'),'alex');await s.detach({id:made.id,attachment:extra.attachments.at(-1).id},'alex');
+ await s.comment({id:made.id,text:'Watch ![clip.mp4]'},'alex');
+ const calls=[];globalThis.fetch=async(url,options={})=>{
+  if(options.method==='PUT'){const name=new URL(url,'http://hub.test').searchParams.get('name');calls.push(['PUT',name]);if(name==='refused.png')return Response.json({error:{message:'Byl dosažen limit počtu záznamů.'}},{status:409});
+   return Response.json(await s.attach(made.id,{sha256:'b'.repeat(64),size:options.body.size,type:'image/png',name},'ui'),{status:201});}
+  if(options.method==='POST'){const body=JSON.parse(options.body);calls.push(['POST',url]);return Response.json(url.endsWith('/delete')?(await s.detach(body,'ui')).ticket:await s.update(body,'ui'));}
+  return Response.json(url==='/api/tickets/people'?{people:[]}:url.startsWith('/api/tickets/HH-')?await s.get(made.id):await s.list());
+ };
+ const root=trackerView({canWrite:true},'items',made.id);document.body.append(root);await flush();
+ const card=()=>withClass(root,'tk-desc')[0],chips=n=>withClass(n,'tk-fchip').map(c=>[c.attrs['data-file'],c.attrs.class,c.attrs.role||'']),names=()=>withClass(root,'tk-tile-name').map(n=>n.textContent);
+ // The description card: the text, a divider, then the files as tiles with × each.
+ assert.deepEqual(card().children.map(n=>n.tag),['h3','div','hr','div']);assert.ok(card().textContent.includes('Attachments (2)'));assert.deepEqual(names(),['shot.png','clip.mp4']);
+ assert.equal(withClass(card(),'tk-tile-x').length,2);assert.ok(buttonText(card(),'+ Add file'));
+ assert.equal(nodes(card(),n=>n.tag==='img'&&n.attrs.src?.startsWith(`/api/tickets/${made.id}/attachments/`)).length,2,'the tile and the chip of the picture');
+ // In the text: a file's chip, a struck-through one for a file that was taken away, and plain text for a name the item never had.
+ assert.deepEqual(chips(card()),[['shot.png','tk-fchip','button'],['gone.png','tk-fchip gone','']]);assert.ok(card().textContent.includes('![never.png]'));
+ assert.deepEqual(chips(withClass(root,'tk-comment')[0]),[['clip.mp4','tk-fchip','button']],'comments too');
+ // A chip and a tile open the viewer on that file.
+ withClass(card(),'tk-fchip')[0].listeners.click({preventDefault(){}});
+ let viewer=nodes(document.body,n=>n.tag==='dialog')[0];assert.ok(nodes(viewer,n=>n.tag==='img')[0].attrs.src.includes('/attachments/'));assert.match(viewer.textContent,/shot\.png · 2 kB · alex · just now · 1\/2/,'the file, its size, who attached it and when');
+ buttonText(viewer,'Close').listeners.click();
+ withClass(card(),'tk-tile-open')[1].listeners.click();viewer=nodes(document.body,n=>n.tag==='dialog')[0];
+ assert.equal(nodes(viewer,n=>n.tag==='video').length,1);assert.deepEqual(nodes(viewer,n=>n.tag==='a').map(a=>a.textContent),['Download']);buttonText(viewer,'Close').listeners.click();
+ assert.equal(nodes(document.body,n=>n.tag==='dialog').length,0);
+ // Files dropped on the card go up one by one; a refused one says why and the next one still goes.
+ root.listeners.drop({target:card(),dataTransfer:{types:['Files'],files:[picture('refused.png'),picture('shot.png')]},preventDefault(){}});await flush();await flush();
+ assert.deepEqual(calls,[['PUT','refused.png'],['PUT','shot-2.png']],'a second shot.png gets a name of its own');assert.deepEqual(names(),['shot.png','clip.mp4','shot-2.png']);
+ const told=()=>nodes(root,n=>n.attrs.role==='status')[0];
+ assert.equal(told().textContent,'refused.png: The record limit has been reached.','the later file that was saved does not cover it');assert.ok(told().classList.contains('error'));
+ // × asks first, then removes the file; its chip in the text now says it is gone.
+ const asked=[];globalThis.confirm=q=>{asked.push(q);return asked.length>1;};t.after(()=>{delete globalThis.confirm;});
+ const x=()=>withClass(card(),'tk-tile-x')[0];x().listeners.click({currentTarget:x()});await flush();assert.deepEqual(names(),['shot.png','clip.mp4','shot-2.png'],'kept when the answer is no');
+ await x().listeners.click({currentTarget:x()});await flush();assert.deepEqual(asked,['Remove the attachment shot.png?','Remove the attachment shot.png?']);
+ assert.deepEqual(names(),['clip.mp4','shot-2.png']);assert.deepEqual(chips(card()).map(c=>c[1]),['tk-fchip gone','tk-fchip gone']);
+ // While editing, the form holds the description and the files: the text field keeps the tokens.
+ buttonText(root,'Edit').listeners.click();
+ const form=nodes(root,n=>n.tag==='form'&&n.textContent.startsWith('Edit'))[0];assert.equal(withClass(root,'tk-desc').length,0);
+ assert.equal(nodes(form,n=>n.tag==='hr').length,1);assert.deepEqual(withClass(form,'tk-tile-name').map(n=>n.textContent),['clip.mp4','shot-2.png']);
+ assert.equal(byName(root,'description').value,'Before ![shot.png] then ![gone.png] and ![never.png].');
+ // A file that finishes uploading re-draws the page: the keyboard stays in the field it was in, with what was typed there.
+ byName(root,'labels').value='typing';byName(root,'labels').focus();
+ root.listeners.drop({target:root,dataTransfer:{types:['Files'],files:[picture('while-typing.png')]},preventDefault(){}});await flush();await flush();
+ assert.deepEqual(withClass(root,'tk-tile-name').map(n=>n.textContent),['clip.mp4','shot-2.png','while-typing.png']);
+ assert.equal(document.activeElement,byName(root,'labels'));assert.equal(byName(root,'labels').value,'typing');
+ // Files handed over keep going up after the page is left; one that fails then is said on the next visit.
+ calls.length=0;root.listeners.drop({target:root,dataTransfer:{types:['Files'],files:[picture('one.png'),picture('refused.png'),picture('two.png')]},preventDefault(){}});
+ root.remove();await flush();await flush();await flush();
+ assert.deepEqual(calls,[['PUT','one.png'],['PUT','refused.png'],['PUT','two.png']]);assert.deepEqual((await s.get(made.id)).attachments.map(a=>a.name).slice(-2),['one.png','two.png']);
+ const back=trackerView({canWrite:true},'items',made.id);document.body.append(back);await flush();
+ assert.equal(nodes(back,n=>n.attrs.role==='status')[0].textContent,'refused.png: The record limit has been reached.');back.remove();
+ // A reader sees the files but cannot add or remove one; an item without files shows no empty section.
+ const reader=trackerView({canWrite:false},'items',made.id);document.body.append(reader);await flush();
+ assert.deepEqual(withClass(reader,'tk-tile-name').map(n=>n.textContent),['clip.mp4','shot-2.png','while-typing.png','one.png','two.png']);assert.equal(withClass(reader,'tk-tile-x').length,0);assert.equal(buttonText(reader,'+ Add file'),undefined);assert.ok(!reader.textContent.includes('Paste from the clipboard'));
+ const bare=await s.create({project:'home-hub',title:'No files'},'alex');globalThis.fetch=async url=>Response.json(url==='/api/tickets/people'?{people:[]}:url.startsWith('/api/tickets/HH-')?await s.get(bare.id):await s.list());
+ const empty=trackerView({canWrite:false},'items',bare.id);document.body.append(empty);await flush();
+ assert.equal(nodes(empty,n=>n.tag==='hr').length,0);assert.ok(!empty.textContent.includes('Attachments'));
+});

@@ -56,11 +56,11 @@ Rules that keep the split honest:
 on this repo** — do the whole thing every time, always. It ends with a summary and exits non-zero on a failure:
 
 ```
-core     tests 653  pass 653  fail 0
-total    tests 653  pass 653  fail 0
+core     tests 667  pass 667  fail 0
+total    tests 667  pass 667  fail 0
 ```
 
-- **Core: 653 tests in 89 files (2026-11-13). None may fail and none is skipped, on any machine.** One of them,
+- **Core: 667 tests in 90 files (2026-11-13). None may fail and none is skipped, on any machine.** One of them,
   `public edition: no overlay in the tree…`, fails in a checkout that has `local/site.json` or `local/plugins/`:
   develop core without them.
 - **Plugins test themselves.** A plugin source runs its tests against this core with

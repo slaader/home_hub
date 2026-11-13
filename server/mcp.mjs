@@ -86,7 +86,7 @@ export const MCP_TOOLS=Object.freeze([
    name:{type:'string',minLength:1,maxLength:80},description:{type:'string',maxLength:500},type:{type:['string','null'],enum:[...PROJECT_TYPES,null],description:'app, game or other; decides which kind of review variants a set opens on.'},rev:{type:'integer',minimum:1}},required:['id'],additionalProperties:false},
   annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:false,openWorldHint:false}},
  {name:'ticket_attachment_get',scope:'read',title:'Tickets: read an attachment',
-  description:'Read a file attached to a ticket (ids come from ticket_get → attachments). Images up to 5 MB come back as an image, plain-text files up to 256 kB as text; anything else returns only its metadata and download path.',
+  description:'Read a file attached to a ticket (ids come from ticket_get → attachments). Images up to 5 MB come back as an image, plain-text files up to 256 kB as text; anything else returns only its metadata and download path. In a ticket description or comment, ![name] points at the attachment with that name.',
   inputSchema:{type:'object',properties:{id:{type:'string',pattern:TICKET_ID.source,description:'Ticket id, e.g. APP-12.'},attachment:{type:'string',pattern:'^[0-9a-f-]{36}$'}},required:['id','attachment'],additionalProperties:false},
   annotations:{readOnlyHint:true,openWorldHint:false}},
  {name:'search',scope:'read',title:'Home Hub: full-text search',

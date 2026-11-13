@@ -38,3 +38,19 @@ test('markdown: text stays inert',()=>{
  const link=all(markdown('see https://example.test/a?b=1.'),n=>n.tag==='a')[0];
  assert.equal(link.attrs.href,'https://example.test/a?b=1');assert.equal(link.attrs.rel,'noopener noreferrer');
 });
+
+test('markdown: ![name] is a file of the ticket when the caller knows one of that name, and text otherwise',()=>{
+ const asked=[],files=name=>{asked.push(name);if(name==='never.png')return null;const chip=new N('span');chip.attrs['data-file']=name;return chip;};
+ const md=markdown('See ![shot 1.png] and **![clip.mp4]**, not ![never.png], not ![a picture](https://example.test/a.png), not `![code.png]`.\n\n```\n![fenced.png]\n```',{files});
+ assert.deepEqual(all(md,n=>n.attrs['data-file']).map(n=>n.attrs['data-file']),['shot 1.png','clip.mp4']);
+ assert.equal(all(md,n=>n.tag==='strong')[0].children[0].attrs['data-file'],'clip.mp4','inside bold too');
+ assert.deepEqual(asked,['shot 1.png','clip.mp4','never.png'],'a Markdown image, inline code and a code fence never ask');
+ assert.ok(md.textContent.includes('![never.png]')&&md.textContent.includes('![a picture]('),'what is not a file stays as written');
+ assert.equal(all(md,n=>n.tag==='code')[0].textContent,'![code.png]');
+ // Without the caller's files nothing changes: a release note or a search snippet keeps the text.
+ const plain=markdown('See ![shot 1.png]');assert.equal(plain.textContent,'See ![shot 1.png]');assert.equal(all(plain,n=>n.attrs['data-file']).length,0);
+ assert.equal(markdown('![a\nb.png]',{files}).textContent,'![ab.png]','a name does not span lines');
+ // Brackets that name no file are read as they always were: a ticket id or a link inside them still links.
+ const other=markdown('![HH-12] and ![see https://example.test/x]',{files:()=>null,keys:['HH']});
+ assert.deepEqual(all(other,n=>n.tag==='a').map(a=>a.attrs.href),['#items/HH-12','https://example.test/x']);assert.equal(other.textContent,'![HH-12] and ![see https://example.test/x]');
+});

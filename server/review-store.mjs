@@ -3,7 +3,7 @@
 // per item) is one row per set in state/hub.db (server/db.mjs; an old state/review/review.json is imported once);
 // files are content-addressed blobs in state/review/blobs/.
 // Writes to the index go through one queue and one transaction (with the search index); sets and decisions carry `rev`.
-// Uploads arrive in ordered chunks (each request stays under the server's 10 s request timeout).
+// Uploads arrive in ordered chunks (small requests: a chunk that fails is sent again, not the whole file).
 // Errors are thrown as Error('invalid' | 'not-found' | 'conflict' | 'limit' | 'too-large').
 // See docs/review.md.
 import {mkdir,readFile,writeFile,rename,rm,stat,open,readdir} from 'node:fs/promises';

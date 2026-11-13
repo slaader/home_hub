@@ -73,6 +73,10 @@ inventory, and the first write creates it.
 - **Tracker** (`#projects`, `#items`, `#releases`): projects with a ticket prefix, releases, and tickets with
   comments, attachments, labels and a change history, as a table or a board. A change takes the `rev` of what
   was read.
+  Files go on a ticket while it is written or later: by button, by drop, or pasted (Cmd/Ctrl+V), up to 100 MB
+  each. A screenshot pasted into the description or a comment stays in the text as a chip (`![name]`); under the
+  description the files are tiles with a preview, and a click opens one: a picture, a player for audio and
+  video, text, or the download.
 - **Review** (`#review`): an agent publishes variants (HTML mockups, images, 3D models, video and audio clips) for a person to
   compare side by side, pin comments on and decide; the next round answers the comments.
   [docs/review.md](review.md) has the details.

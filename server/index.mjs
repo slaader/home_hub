@@ -47,7 +47,11 @@ export const HUB_VERSION=readVersion(root);
 // Review's 3D viewer (<model-viewer>, vendored) puts one fixed <style> block into its shadow DOM. The page CSP allows
 // exactly that block by its hash instead of 'unsafe-inline'; GLB textures are decoded from blob: URLs. docs/review.md.
 export const MODEL_VIEWER_STYLE_HASH=(()=>{try{const m=/<style>([\s\S]*?)<\/style>/.exec(readFileSync(path.join(root,'public','vendor','model-viewer.min.js'),'utf8'));return m?`'sha256-${createHash('sha256').update(m[1]).digest('base64')}'`:'';}catch{return '';}})();
-export const PAGE_CSP=`default-src 'self'; script-src 'self'; style-src 'self'${MODEL_VIEWER_STYLE_HASH?' '+MODEL_VIEWER_STYLE_HASH:''}; img-src 'self' blob:; connect-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`;
+export const PAGE_CSP=`default-src 'self'; script-src 'self'; style-src 'self'${MODEL_VIEWER_STYLE_HASH?' '+MODEL_VIEWER_STYLE_HASH:''}; img-src 'self' blob:; media-src 'self' blob:; connect-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`;
+
+// How long a request may take to arrive: any request, and one that streams a file (a ticket attachment of up to
+// 100 MB, a review chunk) into a route marked `raw`.
+export const REQUEST_DEADLINE_MS=10_000,UPLOAD_TIMEOUT_MS=20*60_000;
 
 // Core modules, in set-up order (a later one may use the state of an earlier one).
 export const CORE_MODULES=Object.freeze([sessionModule,shellModule,accessModule,homeModule,runtimesModule,inventoryModule,trackerModule,reviewModule,securityModule,routerModule,integrationsModule,modelsModule,backupsModule,gitLfsModule,updatesModule].map(m=>defineModule(m,{core:true})));
@@ -122,7 +126,12 @@ export function createHandler(options) {
   const home=states.get('home'),tracker=states.get('tracker'),inventory=states.get('inventory');
   const mcp=createMcp({version:version.version,tools:registry.tools,instructions:registry.instructions,ctx:{home:()=>home.payload(),search:q=>db.search(q),tickets:tracker.tickets,ticketFiles:tracker.ticketFiles,review:states.get('review').review,
    inventory:{read:inventory.read,put:inventory.put},log:entry=>accessStore.logApi(entry),moduleContext:id=>({state:states.get(id),hub})}});
+  // A request has ten seconds to arrive whole, answered or not: a refusal that went out at once does not let the
+  // rest of the request trickle in for longer. Only a raw upload may take longer: a file streamed by its route,
+  // which is reached after the sign-in, origin and scope checks (the server's requestTimeout bounds that one).
+  const arrival=options.requestDeadlineMs??REQUEST_DEADLINE_MS;
   const handler=async (req,res) => {
+    const slow=setTimeout(()=>{if(!req.complete)(req.socket||req).destroy();},arrival);slow.unref();req.once('close',()=>clearTimeout(slow));
     res.setHeader('Content-Security-Policy',PAGE_CSP);
     res.setHeader('X-Frame-Options','DENY');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
     res.setHeader('Permissions-Policy','camera=(), microphone=(), geolocation=()');res.setHeader('Cache-Control','no-store');
@@ -171,6 +180,7 @@ export function createHandler(options) {
         if(!signedIn){req.resume();return error(401,'AUTH_REQUIRED','Please sign in.');}
         if(!canWrite||(browserOnly&&principal.authKind==='api-key')){req.resume();return error(403,'READ_ONLY',route.denied||'This account or API key has read-only access.');}
         if(lacksScope){req.resume();return scopeRefused();}
+        clearTimeout(slow);
         return await route.handler(c);
       }
       if(req.method==='POST') {
@@ -237,7 +247,9 @@ if(process.argv[1]===fileURLToPath(import.meta.url)){
   const handler=createHandler({directory,credentials,authFile,origin,secure:!preview});
   handler.start();
   const server=(preview||process.env.HTTP_BEHIND_PROXY==='1')?http.createServer(handler):https.createServer({key:await readFile(process.env.TLS_KEY||privateFile('server.key')),cert:await readFile(process.env.TLS_CERT||privateFile('server.crt')),minVersion:'TLSv1.2'},handler);
-  server.requestTimeout=10000;server.headersTimeout=10000;
+  // The headers have ten seconds; the rest of a request has them too (createHandler → REQUEST_DEADLINE_MS), except
+  // an upload, which gets what a large file needs on a slow line.
+  server.requestTimeout=UPLOAD_TIMEOUT_MS;server.headersTimeout=REQUEST_DEADLINE_MS;
   const plugins=startupRegistry.modules.filter(m=>!m.core);
   server.listen(port,process.env.BIND_HOST||(preview?'127.0.0.1':'0.0.0.0'),()=>{
    console.info(startupLine({version:HUB_VERSION,edition:readEdition(),plugins,port}));

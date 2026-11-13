@@ -7,7 +7,7 @@ This document covers the core. A plugin documents its own routes (see `docs/plug
 ## Reaching it
 
 - Home Hub is meant for a home network: put it behind a reverse proxy that only answers your LAN or VPN.
-- Every request has a 10-second server timeout. POST bodies are limited to 16 KB (64 KB for review publish and feedback).
+- Every request has ten seconds to arrive. The exception is a raw `PUT` upload (a ticket attachment, a review chunk, a device picture, a plugin's `raw` route) once its sign-in, origin and scope checks have passed: 20 minutes at most. POST bodies are limited to 16 KB (64 KB for review publish and feedback).
 - Responses are `Cache-Control: no-store`.
 ## Authentication
 
@@ -710,16 +710,17 @@ MCP `tickets_list` uses `query` for text search and an integer `limit` of 1–20
 
 `message` in a tracker, review or search error is Czech source text for a browser session or a device token (the web UI translates it through its dictionary) and English for an API key.
 
-Attachments (stored in `state/tickets/attachments/<sha256>`, at most 20 per ticket and 20 MB per file, 2 GB in total):
+Attachments (stored in `state/tickets/attachments/<sha256>`, at most 20 per ticket and 100 MB per file, 2 GB in total):
 
-- `PUT /api/tickets/<ID>/attachments?name=<file name>` with the raw file as `application/octet-stream` → `201` ticket. `tickets:write` for API keys; sessions need the same origin.
-- `GET /api/tickets/<ID>/attachments/<attachment id>[?download=1]` → the file. The type is sniffed from the bytes: PNG/JPEG/GIF/WebP and plain text are shown inline, everything else (SVG and HTML included) is a download or plain text. Every response is `sandbox`ed and `nosniff`.
+- `PUT /api/tickets/<ID>/attachments?name=<file name>` with the raw file as `application/octet-stream` → `201` ticket. `tickets:write` for API keys; sessions need the same origin. The file is streamed and, like every raw upload, has up to 20 minutes to arrive. A ticket that already has 20 files answers `409` before anything is stored. A name the ticket already has (in any case) is stored with `-2`, `-3`, … before its extension, so a name is one file: read the stored name in the answer.
+- `GET /api/tickets/<ID>/attachments/<attachment id>[?download=1]` → the file. The type is decided from the bytes; the client's `Content-Type` is never used, and the file name only settles what the bytes leave open (whether a file is text, sound or picture in an Ogg, WebM, Matroska or MP4 container, a bare MP3 or AAC frame). PNG/JPEG/GIF/WebP, plain text, audio (MP3, WAV, FLAC, Ogg, AAC, M4A, WebM, Matroska) and video (MP4, QuickTime, WebM, Matroska, Ogg, AVI, 3GP) are served inline under that type, everything else (SVG and HTML included) is a download or plain text. One byte range per request (`Range: bytes=a-b`, `a-` or `-n`) → `206` with `Content-Range`, which is what a player seeks with; any other `Range` → `416`. Every response is `sandbox`ed and `nosniff`.
 - `POST /api/tickets/attachments/delete` `{id, attachment}` → ticket. The file is removed when no ticket uses it any more.
 - `GET /api/tickets/<ID>` lists `attachments: [{id, name, type, size, sha256, by, at}]`; the list view has `attachments: <count>`.
+- In a `description` or a comment, `![name]` points at the ticket's attachment of that name (not `![alt](url)`, which stays text). The web UI shows it as a chip that opens the file; a name the ticket has no file for stays as written, and one whose file was removed is shown struck through. The API stores and returns the text as it is: read the file itself with the id from `attachments`.
 
 MCP tools (service-account key): `tickets_list`, `ticket_search`, `ticket_get`, `ticket_attachment_get` (`read`; images up to 5 MB come back as an image, text up to 256 kB as text); `ticket_create`, `ticket_update`, `ticket_comment`, `release_save`, `project_save` (`tickets:write`).
 
-The web UI (`#projects`, `#projects/<id>`, `#items`, `#items/<ID>`, `#releases`) is in the reader's language (English unless the site sets `defaultLanguage`), with dates in the site's time zone. An empty tracker shows how to start: create a project, or copy the prompt for a coding agent (`project_save`, then `ticket_create`, scope `tickets:write`) with the MCP connection snippet. Keys on the lists: `/` filter, `n` new item, `j` / `k` move, `Enter` open, `v` table or board; on an item `c` focuses the comment box.
+The web UI (`#projects`, `#projects/<id>`, `#items`, `#items/<ID>`, `#releases`) is in the reader's language (English unless the site sets `defaultLanguage`), with dates in the site's time zone. An empty tracker shows how to start: create a project, or copy the prompt for a coding agent (`project_save`, then `ticket_create`, scope `tickets:write`) with the MCP connection snippet. Keys on the lists: `/` filter, `n` new item, `j` / `k` move, `Enter` open, `v` table or board; on an item `c` focuses the comment box. A new item takes files while it is written (button, drop, or paste with Cmd/Ctrl+V; a paste into the description leaves the file's chip at the caret) and uploads them once the item exists; an item's page lists its files under the description as tiles and opens one in a viewer (picture, audio or video player, text; anything else is a download).
 
 An agent that should file tickets needs `tickets:write`: a custom selection, the Editor preset or full access (see Access → service accounts).
 

@@ -118,7 +118,7 @@ mark the item `aligned` when they are the same shot; a few seconds is enough, sl
 - **Pins.** In comment mode a click pauses the clips and pins the comment to that time and point
   (`{kind:'frame', t, x, y}`). A pin is drawn while the clip is within a quarter of a second of its time; a click on
   the comment in the thread seeks every clip there.
-- The page policy needs nothing new for this: `media-src` falls back to `default-src 'self'`.
+- The page policy allows it: `media-src 'self' blob:` (`blob:` is for the tracker's preview of a file that is not uploaded yet).
 
 ## Audio (phase 3)
 

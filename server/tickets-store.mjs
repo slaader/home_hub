@@ -16,7 +16,9 @@ export const PROJECT_TYPES=Object.freeze(['app','game','other']);
 export const CLOSED=Object.freeze(['done','cancelled']);
 export const TICKET_ID=/^[A-Z][A-Z0-9]{1,9}-[1-9][0-9]{0,5}$/;
 const PROJECT_ID=/^[a-z][a-z0-9-]{1,39}$/,PROJECT_KEY=/^[A-Z][A-Z0-9]{1,9}$/,VERSION=/^(?!none$)[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$/,LABEL=/^[a-z0-9][a-z0-9-]{0,29}$/,DAY=/^\d{4}-\d{2}-\d{2}$/;
-const LIMITS={projects:50,releases:500,tickets:5000,comments:200,history:200,labels:10,refs:20,attachments:20};
+// How many files one ticket holds. The upload route asks before it stores a file (server/core/tracker.mjs).
+export const TICKET_ATTACHMENTS=20;
+const LIMITS={projects:50,releases:500,tickets:5000,comments:200,history:200,labels:10,refs:20,attachments:TICKET_ATTACHMENTS};
 const fail=code=>{throw new Error(code);};
 const plain=x=>x&&typeof x==='object'&&!Array.isArray(x);
 const onlyKeys=(x,keys)=>plain(x)&&Object.keys(x).every(k=>keys.includes(k));
@@ -134,15 +136,19 @@ export function createTicketStore(root,{db=openDb(path.join(root,'hub.db')),seed
   return [...seen.values()].sort((a,b)=>b.active-a.active||b.assigned-a.assigned||a.name.localeCompare(b.name,'en'));
  }
  // Attachments: the file itself lives in ticket-files (content-addressed); the ticket keeps the metadata.
- // Like comments they need no rev; adding or removing one is recorded in the history.
+ // Like comments they need no rev; adding or removing one is recorded in the history. A name is one file of the
+ // ticket (a text points at a file as ![name]): a name the ticket already has, in any case, gets -2, -3, …
+ // before its extension.
  async function attachment(id,attachmentId){const t=await get(id);return t.attachments.find(a=>a.id===attachmentId)||fail('not-found');}
  async function attach(id,file,by){
   if(!plain(file)||typeof file.sha256!=='string'||!/^[a-f0-9]{64}$/.test(file.sha256)||!Number.isSafeInteger(file.size)||typeof file.type!=='string')fail('invalid');
   const name=text(file.name,120);
   return write((data,now)=>{
    const t=ticketOf(data,id);t.attachments=t.attachments||[];if(t.attachments.length>=LIMITS.attachments)fail('limit');
-   t.attachments.push({id:randomUUID(),name,type:file.type,size:file.size,sha256:file.sha256,by,at:now});
-   t.history.push({at:now,by,field:'attachment',from:null,to:name});t.history=t.history.slice(-LIMITS.history);t.updatedAt=now;return {...t};
+   const used=new Set(t.attachments.map(a=>a.name.toLowerCase())),dot=name.lastIndexOf('.'),ext=dot>0&&name.length-dot<=12?name.slice(dot):'',stem=ext?name.slice(0,dot):name;
+   let own=name;for(let i=2;used.has(own.toLowerCase());i++)own=`${stem.slice(0,120-ext.length-String(i).length-1)}-${i}${ext}`;
+   t.attachments.push({id:randomUUID(),name:own,type:file.type,size:file.size,sha256:file.sha256,by,at:now});
+   t.history.push({at:now,by,field:'attachment',from:null,to:own});t.history=t.history.slice(-LIMITS.history);t.updatedAt=now;return {...t};
   });
  }
  // Returns the ticket and whether any ticket still references the removed file.

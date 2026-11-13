@@ -5,16 +5,20 @@
 //   Blocks: paragraphs (single newlines kept), # headings, - / * / • lists, 1. / 1) lists,
 //           ``` code fences, > quotes, a short line ending in ":" right before a list becomes a label.
 //   Inline: **bold**, *italic*, `code`, http(s) links, absolute paths (/tmp/…, ~/…) and ENV_NAMES as code,
-//           ticket ids.
+//           ticket ids, and ![name] for a file of the ticket: the caller's `files(name)` returns the node to
+//           show for it (a chip), or null when the ticket has no such file and the text stays as written.
 import {el} from './views.js';
+
+// A file of the ticket, by name. Not a Markdown image: "![alt](url)" is left alone.
+export const FILE_TOKEN=/!\[([^\[\]\n]{1,120})\](?!\()/;
 
 const BULLET=/^\s*[-*•]\s+(.*)$/,NUMBER=/^\s*(\d{1,3})[.)]\s+(.*)$/,HEADING=/^(#{1,4})\s+(.*)$/,FENCE=/^\s*```/,QUOTE=/^\s*>\s?(.*)$/;
 const isList=line=>BULLET.test(line)||NUMBER.test(line);
 
-export function markdown(text,{keys=[],cls='tk-md'}={}){
+export function markdown(text,{keys=[],cls='tk-md',files=null}={}){
  const lines=String(text??'').replace(/\r\n?/g,'\n').split('\n'),out=[];
  const ids=keys.length?new RegExp(`\\b(?:${keys.map(k=>k.replace(/[^A-Z0-9]/g,'')).filter(Boolean).join('|')})-[1-9][0-9]{0,5}\\b`):null;
- const span=s=>inline(s,ids);
+ const span=s=>inline(s,ids,files);
  for(let i=0;i<lines.length;){
   const line=lines[i];
   if(!line.trim()){i++;continue;}
@@ -63,16 +67,21 @@ const RULES=[
  ['const',/(?<![\w$])[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+(?:\/[A-Z0-9_]+)*(?:_\*)?(?![\w$])/],
  ['path',/(?<![\w/~.])(?:~\/|\/(?:tmp|Users|opt|etc|var|Library|private|Volumes)\/)[^\s,;:'"`()<>]*[^\s,;:'"`()<>.]/],
 ];
-function inline(text,ids){
- const out=[];let rest=String(text);
+function inline(text,ids,files){
+ const out=[],rules=[...RULES,...(files?[['file',FILE_TOKEN]]:[]),...(ids?[['ticket',ids]]:[])];let rest=String(text);
  while(rest){
   let best=null;
-  for(const [kind,re] of ids?[...RULES,['ticket',ids]]:RULES){const m=rest.match(re);if(m&&(!best||m.index<best.m.index))best={kind,m};}
+  for(const [kind,re] of rules){const m=rest.match(re);if(m&&(!best||m.index<best.m.index))best={kind,m};}
   if(!best){out.push(rest);break;}
   const {kind,m}=best;if(m.index)out.push(rest.slice(0,m.index));
   if(kind==='code'||kind==='path'||kind==='const')out.push(el('code',{class:'tk-md-code'},kind==='code'?m[1]:m[0]));
-  else if(kind==='bold')out.push(el('strong',{},inline(m[1],ids)));
-  else if(kind==='italic')out.push(el('em',{},inline(m[1],ids)));
+  else if(kind==='bold')out.push(el('strong',{},inline(m[1],ids,files)));
+  else if(kind==='italic')out.push(el('em',{},inline(m[1],ids,files)));
+  else if(kind==='file'){
+   // Not a file of this ticket: only the "![" is passed over, so what stands in the brackets is read as before.
+   const node=files(m[1]);if(!node){out.push('![');rest=rest.slice(m.index+2);continue;}
+   out.push(node);
+  }
   else if(kind==='link')out.push(el('a',{href:m[0],target:'_blank',rel:'noopener noreferrer',class:'sys-link'},m[0]));
   else out.push(el('a',{href:'#items/'+m[0],class:'tk-md-ticket'},m[0]));
   rest=rest.slice(m.index+m[0].length);

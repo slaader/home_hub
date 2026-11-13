@@ -6,6 +6,60 @@ Home Hub core, newest first. One section per release; the section is the text of
 number promises is in `AGENTS.md` → Versioning. The top section is the release being prepared, `## Unreleased`
 until the release gives it its number: a change to the public surface adds its line there in the same commit.
 
+## 1.4.0
+
+Files on a ticket from the moment it is written: paste a screenshot into a new item, see it in the text and under
+it, and open any file, audio and video included, where it is.
+
+### Added
+
+- **Files in the new-item dialog.** Paste (Cmd/Ctrl+V), drop or pick files while the item is written; they are
+  uploaded right after it is created. A file that fails to upload is named on the item's page.
+- **File chips in text.** `![name]` in a description or a comment points at the ticket's attachment of that name
+  and is shown as a chip (icon, name, size) that opens the file. A paste or a drop into the description or the
+  comment box leaves the chip where the caret is, and the field shows chips while it is edited (a browser without
+  `contenteditable="plaintext-only"` keeps the plain text field with the tokens). A file that was removed is shown
+  struck through; a name the ticket never had stays as written, and `![alt](url)` is not touched. The field with
+  chips keeps its own undo and redo (Cmd/Ctrl+Z, Shift+Cmd/Ctrl+Z, Ctrl+Y); the browser's Edit menu does not
+  reach every step of it.
+- **Files under the description.** After the fields, under a divider: the attachments as tiles with a preview,
+  on the item's page, in its edit form and in the new-item dialog. This replaces the separate attachments card.
+  Files dropped anywhere on an item's page are attached, and an upload goes on when the page is left; what did
+  not upload is said when all files are through, or on the next visit of the item.
+- **A viewer for every file.** A click on a tile or a chip opens the file in a dialog: a picture, a player for
+  audio and video, the first 256 kB of a text file, or what the file is and its download. The arrow keys step
+  through the files of the ticket.
+- **Audio and video attachments.** `GET /api/tickets/<ID>/attachments/<id>` serves MP3, WAV, FLAC, Ogg, AAC, M4A,
+  MP4, QuickTime, WebM, Matroska, AVI and 3GP under their own type (decided from the bytes, as before), and
+  answers one byte range per request with `206`, so a player can seek. A format the browser cannot play (AVI)
+  says so in the viewer and stays a download.
+
+### Changed
+
+- **An attachment may be 100 MB** (it was 20 MB); 20 per ticket and 2 GB in total stay.
+- **Request deadlines.** Every request still has ten seconds to arrive, now counted per request by the hub; one
+  that is too slow is cut off without an answer (it used to get a `408`). A raw `PUT` upload (a ticket attachment,
+  a review chunk, a device picture) is exempt once its sign-in, origin and scope checks have passed, and has up to
+  20 minutes: a large file on a slow line used to be cut off.
+- The page policy gains `media-src 'self' blob:`, for the preview of an audio or video file that is not uploaded yet.
+- **A file name is one file of a ticket.** An attachment whose name the ticket already has (in any case) is
+  stored as `name-2.ext`, `name-3.ext`, …, whoever uploads it; the answer carries the stored name. A pasted
+  picture is `image.png`, the next one `image-2.png` (it was `paste-<time>.png`).
+- Who attached a file, and when, is in the tile's tooltip and in the viewer; the list under each file is gone
+  with the attachments card.
+
+### Fixed
+
+- An upload to a ticket that already has 20 files is refused before the file is stored. The file used to stay on
+  the disk, counted in the 2 GB total, with no ticket pointing at it.
+- Temp files of uploads that a restart interrupted are removed at the next upload; they counted in the total too.
+- The comment form's button is disabled while the comment is sent (the preview link was, by mistake).
+
+### Plugin contract
+
+- A route marked `raw` has up to 20 minutes to receive its upload, after the sign-in, origin and scope checks,
+  instead of the ten seconds of any other request.
+
 ## 1.3.0
 
 Core is developed in its public repository: a change is an ordinary commit, checked for household details before

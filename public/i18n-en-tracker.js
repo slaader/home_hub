@@ -1,4 +1,4 @@
-// English for the Project Tracker and the search page (tracker-view.js, search-view.js) and for the Czech
+// English for the Project Tracker and the search page (tracker-view.js, tracker-attach.js, search-view.js) and for the Czech
 // strings server/core/tracker.mjs sends (error messages, API reference rows). Keys are the exact Czech source
 // strings passed to t() / tp(). Reused from other parts and not redefined: Hotovo, Jiné, Načítám…, Zkusit znovu,
 // Projekty, Releasy, Hledat, Hledání, Název, Stav, Typ, Popis, Verze, Upravit, Uložit, Zrušit, Požadavek selhal.
@@ -80,15 +80,25 @@ export default {
  'Komentáře ({n})':'Comments ({n})',
  'Zatím bez komentářů.':'No comments yet.',
  'Přidat komentář':'Add comment',
- '{name}: soubor je větší než 20 MB.':'{name}: the file is larger than 20 MB.',
+ '{name}: soubor je větší než 100 MB.':'{name}: the file is larger than 100 MB.',
+ '{name}: soubor je prázdný.':'{name}: the file is empty.',
+ 'Položka může mít nejvýš {n} příloh.':'An item can have at most {n} attachments.',
  'Nahrávám {name}…':'Uploading {name}…','soubor':'file',
  'Nahrání se nepovedlo.':'The upload failed.',
  'Zobrazit {name}':'View {name}',
  'Přílohy ({n})':'Attachments ({n})',
  '+ Přidat soubor':'+ Add file',
  'Odebrat {name}':'Remove {name}','Odebrat přílohu':'Remove attachment','Odebrat přílohu {name}?':'Remove the attachment {name}?',
- 'Přetáhni sem soubor, vlož obrázek ze schránky (Cmd/Ctrl+V) nebo použij tlačítko. Nejvýš 20 MB na soubor.':'Drop a file here, paste a picture from the clipboard (Cmd/Ctrl+V) or use the button. At most 20 MB per file.',
- 'Bez příloh.':'No attachments.',
+ 'Vlož ze schránky (Cmd/Ctrl+V), přetáhni sem soubory nebo použij tlačítko. Nejvýš 100 MB na soubor.':'Paste from the clipboard (Cmd/Ctrl+V), drop files here or use the button. At most 100 MB per file.',
+ 'Tyto přílohy se nenahrály: {list}':'These attachments did not upload: {list}',
+ 'Nahrávám přílohu {i} z {n}: {name}…':'Uploading attachment {i} of {n}: {name}…',
+ 'Položka je založená, ale tyto přílohy se nenahrály: {list}':'The item was created, but these attachments did not upload: {list}',
+ 'Příloha {name} už u položky není.':'The attachment {name} is no longer on this item.',
+ 'Stáhnout':'Download',
+ 'Tenhle formát prohlížeč nepřehraje. Soubor si stáhni.':'The browser cannot play this format. Download the file.',
+ 'Tenhle soubor náhled nemá.':'This file has no preview.',
+ 'Tenhle soubor náhled nemá. Stáhni si ho.':'This file has no preview. Download it.',
+ 'Soubor se nepodařilo načíst.':'The file could not be loaded.',
  'Bez popisu.':'No description.',
  'Údaje':'Details','Nahlásil':'Reporter','Odkazy':'Links','Založeno':'Created','Uzavřeno':'Closed','Revize':'Revision',
  'Příloha':'Attachment',
@@ -159,14 +169,14 @@ export default {
  // shared with the review list and the search hits
  'archiv':'archive','čeká na agenta':'waiting for the agent','hotovo':'done','rozhodnuto {done}/{total}':'decided {done}/{total}',
  // server/core/tracker.mjs: error messages
- 'Soubor je příliš velký (nejvýš 20 MB).':'The file is too large (20 MB at most).',
+ 'Soubor je příliš velký (nejvýš 100 MB).':'The file is too large (100 MB at most).',
  'Neplatné hledání (nejvýš 200 znaků, kind ticket|review, limit 1–100).':'Invalid search (200 characters at most, kind ticket|review, limit 1–100).',
  'Hledání teď nejde.':'Search is unavailable right now.',
  // server/core/tracker.mjs: API reference rows
  'Fulltext v ticketech (i komentáře) se stejnými filtry jako seznam.':'Full-text search in tickets (comments included) with the same filters as the list.',
  'Jména pro pole Řeší: účty, servisní účty a lidé z ticketů.':'Names for the assignee field: accounts, service accounts and people on tickets.',
- 'Příloha ticketu: soubor jako application/octet-stream, nejvýš 20 MB.':'A ticket attachment: the file as application/octet-stream, 20 MB at most.',
- 'Soubor přílohy; obrázky a text přímo, ostatní ke stažení.':'The attachment file; pictures and text inline, anything else as a download.',
+ 'Příloha ticketu: soubor jako application/octet-stream, nejvýš 100 MB.':'A ticket attachment: the file as application/octet-stream, 100 MB at most.',
+ 'Soubor přílohy; obrázky, text, zvuk a video přímo (i po částech přes Range), ostatní ke stažení.':'The attachment file; pictures, text, audio and video inline (in parts too, with Range), anything else as a download.',
  'Fulltext přes tickety a review; slova jako předpony, bez diakritiky.':'Full-text search over tickets and review sets; words match as prefixes, accents ignored.',
  'Zahodit neuložené úpravy?':'Discard the unsaved edits?',
  'Zrušit úpravy':'Cancel editing',

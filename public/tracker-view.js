@@ -2,8 +2,9 @@
 //   #projects        projects overview: health ring, activity, next release, create / edit a project
 //   #projects/<id>   one project: health, activity, next release and a board of its items
 //   #items           items (tickets) with project chips and quick filters, as a table or a board
-//   #items/<ID>      one item, read view first: description, attachments, comments, history; "Edit" (or e)
-//                    swaps the description for the edit form, so every field is on the page once
+//   #items/<ID>      one item, read view first: description with its files under it, comments, history; "Edit"
+//                    (or e) swaps the description for the edit form, so every field is on the page once. Files
+//                    come in by button, drop or paste (tracker-attach.js); ![name] in a text is a file's chip
 //   #releases        releases per project as a timeline with progress, countdown and their items
 // Reads need any sign-in; writes need canWrite (the server checks again, API keys need tickets:write).
 // Every edit sends the rev it read; a 409 means someone else changed it — reload and redo.
@@ -13,6 +14,7 @@
 import {el,onLeave} from './views.js';
 import {onSessionReset,authGuard} from './session-cache.js';
 import {markdown} from './tracker-md.js';
+import {FILE_MAX,FILES_MAX,fileToken,attachmentName,savedFile,pendingFile,releaseFile,pastedFiles,fileChip,fileStrip,openViewer,chipEditor} from './tracker-attach.js';
 import {timeZone} from './site.js';
 import {t,tp,locale} from './i18n.js';
 import {pageHeader,emptyState,provenanceBadge} from './ui.js';
@@ -73,18 +75,20 @@ async function api(url,body){
 }
 // Filters survive navigation between list and detail within one page load.
 const defaults={project:'',status:'active',type:'',priority:'',release:'',assignee:'',label:'',q:''},filters={...defaults};
-const prefs={view:'table',focusComment:false};
+// notices: what is left to say on an item's page the next time it is shown (files that did not upload), by item id.
+const prefs={view:'table',focusComment:false,notices:new Map()};
+const leaveNotice=(id,text)=>prefs.notices.set(id,[prefs.notices.get(id),text].filter(Boolean).join(' '));
 try{if(globalThis.localStorage?.getItem('tk-view')==='board')prefs.view='board';}catch{}
 let sessionEpoch=0;const draws=new WeakMap(),dialogs=new Set();
-onSessionReset(()=>{sessionEpoch++;Object.assign(filters,defaults);for(const d of dialogs)d.close();});
+onSessionReset(()=>{sessionEpoch++;Object.assign(filters,defaults);prefs.focusComment=false;prefs.notices.clear();sendings.clear();for(const d of dialogs)d.close();});
 // Only the latest load for this view and sign-in may replace its contents.
 async function load(wrap,request){
  const epoch=sessionEpoch,n=(draws.get(wrap)||0)+1;draws.set(wrap,n);
  const current=()=>epoch===sessionEpoch&&draws.get(wrap)===n;
  try{const data=await request;return current()?data:null;}catch(e){if(current())throw e;return null;}
 }
-function showDialog(dialog){
- dialogs.add(dialog);dialog.addEventListener('close',()=>{dialogs.delete(dialog);dialog.remove();});
+function showDialog(dialog,onClose){
+ dialogs.add(dialog);dialog.addEventListener('close',()=>{dialogs.delete(dialog);dialog.remove();onClose?.();});
  document.body.append(dialog);dialog.showModal();
 }
 const status=()=>el('p',{class:'acc-status',role:'status'});
@@ -256,15 +260,21 @@ function boardCard(tk,{canWrite,msg,redraw,projects,showProject}){
 }
 
 // Markdown text with a preview: the textarea stays the field; "Náhled" swaps it for the rendered text.
-function mdEditor(area,keys){
+// With `files` ({resolve(name) → file | null, onOpen(file), label}) the field shows the ![name] of the ticket's
+// files as chips while it is edited, and so does the preview (tracker-attach.js → chipEditor).
+const chipsOf=files=>files?name=>{const item=files.resolve(name);return item?fileChip(item,{onOpen:files.onOpen}):null;}:null;
+function mdEditor(area,keys,files=null){
+ const editor=files?chipEditor(area,files):null,field=editor?.node||area;
  const preview=el('div',{class:'tk-md-preview',hidden:''}),toggle=el('button',{type:'button',class:'tk-md-toggle','aria-pressed':'false',onclick:()=>{
    const on=toggle.getAttribute('aria-pressed')!=='true';
    // An empty field stays editable: there is nothing to preview, and a hidden required field cannot be submitted.
-   if(on&&!area.value.trim()){area.focus();return;}
+   if(on&&!area.value.trim()){field.focus();return;}
    toggle.setAttribute('aria-pressed',String(on));toggle.textContent=on?t('Upravit text'):t('Náhled');
-   if(on)preview.replaceChildren(markdown(area.value,{keys}));
-   preview.hidden=!on;area.hidden=on;if(!on)area.focus();}},t('Náhled'));
- return {node:el('div',{class:'tk-md-edit'},area,preview),toggle};
+   if(on)preview.replaceChildren(markdown(area.value,{keys,files:chipsOf(files)}));
+   preview.hidden=!on;field.hidden=on;if(!on)field.focus();}},t('Náhled'));
+ // redraw(): the preview again, when what its chips stand for has changed while it is shown.
+ const redraw=()=>{if(toggle.getAttribute('aria-pressed')==='true')preview.replaceChildren(markdown(area.value,{keys,files:chipsOf(files)}));};
+ return {node:el('div',{class:'tk-md-edit'},area,field===area?null:field,preview),toggle,editor,redraw};
 }
 const mdHint=toggle=>el('div',{class:'tk-md-hint'},el('span',{},t('Formátování: **tučně**, `kód`, - seznam, 1. kroky, APP-12 = odkaz')),toggle||null);
 const splitList=v=>v.split(/[,\n]/).map(s=>s.trim()).filter(Boolean);
@@ -278,6 +288,23 @@ function assigneeInput(value,people,user){
   mine:user&&value!==user?el('button',{type:'button',class:'tk-inline-btn',onclick:()=>{input.value=user;input.focus();}},t('Přiřadit mně')):null};
 }
 
+// Files: what is wrong with one before it is sent (the server checks again), the upload itself, a place to drop them.
+const fileProblem=(file,count)=>count>=FILES_MAX?t('Položka může mít nejvýš {n} příloh.',{n:FILES_MAX})
+ :file.size>FILE_MAX?t('{name}: soubor je větší než 100 MB.',{name:file.name||t('soubor')}):!file.size?t('{name}: soubor je prázdný.',{name:file.name||t('soubor')}):'';
+async function uploadFile(id,name,file){
+ const lost=authGuard(),r=await fetch(`/api/tickets/${encodeURIComponent(id)}/attachments?name=${encodeURIComponent(name)}`,{method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:file});lost(r);
+ const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.error?.message?t(data.error.message):t('Nahrání se nepovedlo.'));return data;
+}
+// Only a drag of files counts: text, and the cards of the board, pass through. onFiles(files, event).
+function dropTarget(node,onFiles){
+ const files=e=>[...(e.dataTransfer?.types||[])].includes('Files');
+ node.addEventListener('dragover',e=>{if(!files(e))return;e.preventDefault();node.classList.add('tk-drop');});
+ node.addEventListener('dragleave',e=>{if(!e.relatedTarget||!node.contains(e.relatedTarget))node.classList.remove('tk-drop');});
+ node.addEventListener('drop',e=>{node.classList.remove('tk-drop');if(!files(e))return;e.preventDefault();onFiles([...e.dataTransfer.files],e);});
+ return node;
+}
+const attachHint=()=>el('p',{class:'tk-attach-hint'},t('Vlož ze schránky (Cmd/Ctrl+V), přetáhni sem soubory nebo použij tlačítko. Nejvýš 100 MB na soubor.'));
+
 // New ticket dialog ------------------------------------------------------------------------------
 async function newTicket(projects,preset,ctx={}){
  const epoch=sessionEpoch;
@@ -287,18 +314,53 @@ async function newTicket(projects,preset,ctx={}){
  const release=el('select',{name:'release'});
  const fillReleases=()=>release.replaceChildren(...options((releasesData.releases||[]).filter(r=>r.project===project.value&&r.status==='planned').map(r=>[r.version,r.version]),'',t('Bez releasu')));
  project.addEventListener('change',fillReleases);fillReleases();
- const description=mdEditor(el('textarea',{name:'description',rows:'7',maxlength:'12000',placeholder:t('Co a proč. U chyby kroky k reprodukci, u funkce kritéria přijetí.')}),keys);
  const assignee=assigneeInput('',peopleNames(peopleData),ctx.user);
- const form=el('form',{class:'tk-form',onsubmit:async e=>{e.preventDefault();const f=e.currentTarget,b=f.querySelector('button[type=submit]');b.disabled=true;
+ // Files wait here until the item exists; they are uploaded right after it is created. A paste into the
+ // description also leaves a chip where the caret is.
+ const pending=[],view=item=>{const i=pending.indexOf(item);if(i>=0)openViewer(pending,i,showDialog);};let busy=false;
+ const description=mdEditor(el('textarea',{name:'description',rows:'7',maxlength:'12000',placeholder:t('Co a proč. U chyby kroky k reprodukci, u funkce kritéria přijetí.')}),keys,
+  {resolve:name=>pending.find(p=>p.name===name)||null,onOpen:view,label:t('Popis')});
+ const picker=el('input',{type:'file',multiple:'',hidden:'','aria-label':t('+ Přidat soubor'),onchange:e=>{const list=[...e.target.files];e.target.value='';add(list);}});
+ const filesBox=el('div',{class:'tk-attach'});
+ const drawFiles=()=>show(filesBox,
+  el('div',{class:'tk-attach-head'},el('h4',{},t('Přílohy ({n})',{n:pending.length})),el('button',{type:'button',class:'acc-btn small',onclick:()=>picker.click()},t('+ Přidat soubor'))),
+  pending.length?fileStrip(pending,{onOpen:i=>view(pending[i]),onRemove:remove}):null,attachHint());
+ const remove=item=>{if(busy||!pending.includes(item))return;pending.splice(pending.indexOf(item),1);releaseFile(item);description.editor.drop(item.name);description.redraw();drawFiles();};
+ const add=(list,inline=false)=>{
+  if(busy)return;msg.textContent='';msg.classList.remove('error');
+  for(const file of list){
+   const problem=fileProblem(file,pending.length);if(problem){fail(msg,new Error(problem));continue;}
+   const item=pendingFile(file,attachmentName(file,pending.map(p=>p.name)));pending.push(item);
+   if(inline)description.editor.insert(item.name);
+  }
+  drawFiles();
+ };
+ // While the item is created and its files go up there is nothing to cancel: the button says so by being off.
+ const cancel=el('button',{type:'button',class:'acc-btn',onclick:()=>{if(!busy)dialog.close();}},t('Zrušit'));
+ const form=el('form',{class:'tk-form',onsubmit:async e=>{e.preventDefault();if(busy)return;const f=e.currentTarget,b=f.querySelector('button[type=submit]');busy=true;b.disabled=true;cancel.disabled=true;
    try{const made=await api('/api/tickets',{project:f.project.value,title:f.title.value,description:f.description.value,type:f.type.value,priority:f.priority.value,release:f.release.value||null,assignee:f.assignee.value.trim()||null,labels:splitList(f.labels.value)});
-    dialog.close();location.hash='#items/'+made.id;}catch(err){fail(msg,err);}finally{b.disabled=false;}}},
+    // The item exists from here on. A file that does not upload is reported on its page; the dialog does not stay for it.
+    const failed=[];
+    for(const [i,item] of [...pending].entries()){
+     if(epoch!==sessionEpoch)return;
+     msg.classList.remove('error');msg.textContent=t('Nahrávám přílohu {i} z {n}: {name}…',{i:i+1,n:pending.length,name:item.name});
+     try{await uploadFile(made.id,item.name,item.file);}catch(err){failed.push(`${item.name} (${err.message})`);}
+    }
+    if(epoch!==sessionEpoch)return;
+    if(failed.length)leaveNotice(made.id,t('Položka je založená, ale tyto přílohy se nenahrály: {list}',{list:failed.join(', ')}));
+    busy=false;dialog.close();location.hash='#items/'+made.id;}catch(err){fail(msg,err);}finally{busy=false;b.disabled=false;cancel.disabled=false;}}},
   el('div',{class:'tk-grid3'},field(t('Projekt'),project),field(t('Typ'),el('select',{name:'type'},options(TYPES(),'feature'))),field(t('Priorita'),el('select',{name:'priority'},options(PRIORITIES(),'normal')))),
   field(t('Název položky'),el('input',{name:'title',required:'',maxlength:'200',autocomplete:'off'})),
   field(t('Popis'),description.node),mdHint(description.toggle),
   el('div',{class:'tk-grid3'},field('Release',release),field(t('Řeší'),assignee.input,assignee.list),field(t('Štítky'),el('input',{name:'labels',placeholder:'ui, api, docs'}))),
-  msg,el('div',{class:'acc-actions'},el('button',{type:'button',class:'acc-btn',onclick:()=>dialog.close()},t('Zrušit')),el('button',{type:'submit',class:'acc-btn primary'},t('Založit položku'))));
- const dialog=el('dialog',{class:'acc-dialog wide tk-dialog','aria-label':t('Nová položka')},el('h3',{},t('Nová položka')),form);
- showDialog(dialog);form.title.focus();
+  el('hr',{class:'tk-divider'}),filesBox,picker,
+  msg,el('div',{class:'acc-actions'},cancel,el('button',{type:'submit',class:'acc-btn primary'},t('Založit položku'))));
+ const dialog=el('dialog',{class:'acc-dialog wide tk-dialog','aria-label':t('Nová položka'),
+   onpaste:e=>{const list=pastedFiles(e);if(!list.length)return;e.preventDefault();add(list,description.editor.has(e.target));},
+   // While the item is being created and its files go up, Esc does not close the dialog under them.
+   oncancel:e=>{if(busy)e.preventDefault();}},el('h3',{},t('Nová položka')),form);
+ dropTarget(dialog,(list,e)=>add(list,description.editor.has(e.target)));drawFiles();
+ showDialog(dialog,()=>pending.forEach(releaseFile));form.title.focus();
 }
 
 // Detail ----------------------------------------------------------------------------------------
@@ -335,37 +397,52 @@ export function backPath(tk,projects,origin=originHash){
 }
 async function ticketPage(wrap,ctx){
  const result=await load(wrap,Promise.all([api('/api/tickets/'+encodeURIComponent(ctx.id)),api('/api/tickets?limit=1'),api('/api/tickets/people').catch(()=>null)]));if(!result)return;
- const [tk,meta,people]=result;renderTicket(wrap,{...ctx,meta,people:peopleNames(people)},tk,{fields:{},comment:''});
+ // What is left to say about files that did not reach this item (from the new-item dialog, or from an upload that
+ // ended after its page was left) is said here, once.
+ // It waits for a page of that item that is on the screen: a view the user already left does not use it up.
+ const [tk,meta,people]=result,mine=wrap.isConnected&&prefs.notices.has(tk.id),notice=mine?{notice:prefs.notices.get(tk.id),noticeError:true}:{};if(mine)prefs.notices.delete(tk.id);
+ renderTicket(wrap,{...ctx,meta,people:peopleNames(people)},tk,{fields:{},comment:'',...notice});
 }
 // Unsaved input on a ticket page: the comment box and every edit-form field that differs from what was rendered,
-// and whether the edit form is open. A write re-renders from the ticket the server returned (no second request
-// that could fail), carrying these over.
-const pages=new WeakMap(),pastes=new WeakMap();
+// whether the edit form is open, and which field the keyboard is in (and where). A write re-renders from
+// the ticket the server returned (no second request that could fail), carrying these over.
+const pages=new WeakMap(),pastes=new WeakMap(),drops=new WeakSet();
+// By item id: the files on their way up (name → file), and the page that shows the item now. An upload outlives
+// the page that started it, and a later visit of the item has to know its files and hear how it ended.
+const sendings=new Map(),views=new Map();
+const viewOf=id=>{const wrap=views.get(id)?.deref();return wrap?.isConnected?wrap:null;};
 function drafts(wrap){
  const page=pages.get(wrap);if(!page)return {fields:{},comment:'',editing:false};
- return {comment:page.comment?.value||'',editing:page.editing===true,fields:Object.fromEntries(Object.entries(page.inputs).filter(([k,input])=>input.value!==page.initial[k]).map(([k,input])=>[k,input.value]))};
+ const active=document.activeElement,focusIn=Object.keys(page.editors).find(k=>page.editors[k].has(active))||null;
+ const focusInput=focusIn?null:Object.keys(page.inputs).find(k=>page.inputs[k]===active)||null;let caret=null;
+ try{caret=focusIn?page.editors[focusIn].caret():focusInput&&typeof active.selectionStart==='number'?active.selectionStart:null;}catch{}
+ // The text fields keep their undo steps and the one in use its scroll position across the re-render.
+ const histories=Object.fromEntries(Object.entries(page.editors).map(([k,editor])=>[k,editor.history()])),scroll=focusIn?page.editors[focusIn].node.scrollTop??null:null;
+ return {comment:page.comment?.value||'',editing:page.editing===true,focusIn,focusInput,caret,histories,scroll,
+  fields:Object.fromEntries(Object.entries(page.inputs).filter(([k,input])=>input.value!==page.initial[k]).map(([k,input])=>[k,input.value]))};
 }
-const fileSize=n=>n<1024?`${n} B`:n<1048576?`${Math.round(n/1024)} kB`:`${(n/1048576).toFixed(1)} MB`;
-// Pictures of a ticket in one dialog: arrows (and the arrow keys) step through them, a click outside closes it.
-function lightbox(images,index,urlOf){
- const img=el('img',{class:'tk-lightbox-img',alt:''}),caption=el('figcaption',{}),open=el('a',{class:'acc-btn small',target:'_blank',rel:'noopener'},t('Otevřít v nové kartě'));
- const go=i=>{index=(i+images.length)%images.length;const a=images[index];img.setAttribute('src',urlOf(a));img.setAttribute('alt',a.name);caption.textContent=images.length>1?`${a.name} · ${index+1}/${images.length}`:a.name;open.setAttribute('href',urlOf(a));};
- const step=(d,text,icon)=>images.length>1?el('button',{type:'button',class:'tk-lightbox-nav','aria-label':text,title:text,onclick:()=>go(index+d)},icon):null;
- const dialog=el('dialog',{class:'tk-dialog tk-lightbox','aria-label':t('Náhled přílohy'),onclick:e=>{if(e.target===dialog)dialog.close();},onkeydown:e=>{if(e.key==='ArrowRight')go(index+1);else if(e.key==='ArrowLeft')go(index-1);}},
-  el('figure',{},img,caption),el('div',{class:'tk-lightbox-bar'},step(-1,t('Předchozí'),'←'),step(1,t('Další'),'→'),open,el('button',{type:'button',class:'acc-btn small',onclick:()=>dialog.close()},t('Zavřít'))));
- go(index);showDialog(dialog);
+// Shows the ticket a write returned on the item's page `wrap`, with the unsaved input carried over; `adjust` drops
+// from it what the write just saved. Another write may have re-rendered meanwhile: never an older ticket than
+// the one on the page.
+function redraw(wrap,updated,adjust=()=>{}){
+ const page=pages.get(wrap);if(!page)return;
+ const next=drafts(wrap);adjust(next);next.notice=t('Uloženo.');
+ inPlace(()=>renderTicket(wrap,page.ctx,updated.updatedAt>=page.ticket.updatedAt?updated:page.ticket,next));
+}
+// A page drawn again under the reader (a file of theirs finished uploading) stays where it was scrolled to.
+function inPlace(draw){
+ const y=globalThis.scrollY;draw();
+ if(Number.isFinite(y)&&typeof globalThis.scrollTo==='function'&&globalThis.scrollY!==y)globalThis.scrollTo(globalThis.scrollX||0,y);
 }
 function renderTicket(wrap,ctx,tk,keep){
  const {canWrite,meta,user}=ctx,project=meta.projects.find(p=>p.id===tk.project),msg=status(),keys=meta.projects.map(p=>p.key);
- if(keep.notice)msg.textContent=keep.notice;
- // Runs a write; on success re-renders with the returned ticket, dropping the drafts the write just saved.
+ if(keep.notice){msg.textContent=keep.notice;if(keep.noticeError)msg.classList.add('error');}
+ const rerender=(updated,adjust)=>redraw(wrap,updated,adjust);
  const write=async(button,request,saved)=>{
   if(button)button.disabled=true;const epoch=sessionEpoch;let updated;
   try{updated=await request();}catch(e){if(wrap.isConnected){fail(msg,e);if(button)button.disabled=false;}return;}
   if(epoch!==sessionEpoch||!wrap.isConnected)return;
-  // Another write may have re-rendered meanwhile: still drop what this one saved, but never show an older ticket.
-  const shown=pages.get(wrap)?.ticket||tk,next=drafts(wrap);saved(next);next.notice=t('Uloženo.');
-  renderTicket(wrap,ctx,updated.updatedAt>=shown.updatedAt?updated:shown,next);
+  rerender(updated,saved);
  };
  // A save from the edit form closes it (back to the read view); any other write leaves it as it is.
  const save=(change,button,fromEdit=false)=>write(button,()=>api('/api/tickets/update',{id:tk.id,rev:tk.rev,...change}),next=>{if(fromEdit){next.fields={};next.editing=false;}else for(const k of Object.keys(change))delete next.fields[k];});
@@ -387,44 +464,90 @@ function renderTicket(wrap,ctx,tk,keep){
   if(editButton)quick.push(editButton);
  }
  const fact=(k,v)=>[el('dt',{},k),el('dd',{},v)];
+ // Files: the saved ones, the ones on their way up (a chip can already name them), and the names of files that
+ // were taken away again, so that a ![name] left in a text says so instead of turning back into its token.
+ const files=(tk.attachments||[]).map(a=>({...savedFile(tk.id,a),note:`${a.by} · ${ago(a.at)}`}));views.set(tk.id,new WeakRef(wrap));
+ const removed=new Set(tk.history.filter(h=>h.field==='attachment'&&h.to===null).map(h=>h.from));
+ const resolve=name=>files.find(f=>f.name===name)||sendings.get(tk.id)?.get(name)||(removed.has(name)?{name,gone:true}:null);
+ const view=item=>{const i=files.indexOf(item);if(i>=0)openViewer(files,i,showDialog);};
+ const inText={resolve,onOpen:view},chips=chipsOf(inText);
  const commentBox=canWrite?el('textarea',{name:'text',rows:'3',required:'',maxlength:'8000',placeholder:t('Komentář, postup, commit…'),'aria-label':t('Nový komentář'),'aria-keyshortcuts':'c'}):null;
  if(commentBox)commentBox.value=keep.comment||'';
- const commentEditor=commentBox?mdEditor(commentBox,keys):null;
- const edit=editing?editForm(tk,meta,save,ctx,closeEdit):null;
- if(edit)for(const [k,v] of Object.entries(keep.fields||{}))if(edit.inputs[k])edit.inputs[k].value=v;
- pages.set(wrap,{ticket:tk,comment:commentBox,editing,inputs:edit?.inputs||{},initial:edit?.initial||{}});
+ const commentEditor=commentBox?mdEditor(commentBox,keys,{...inText,history:keep.histories?.comment}):null;
+ // Upload with the button, by dropping files on the page, or by pasting (Cmd/Ctrl+V) anywhere on it. A paste or a
+ // drop into the description or the comment also leaves the files' chips in that text, at the caret: at once and
+ // side by side, in the draft the next render keeps; a failed upload takes its chip out again. The files then go
+ // up one by one. That outlives the renders its own writes cause, and the page itself: every file that was
+ // handed over goes up even when the user moves on (only the end of the session stops it). So it works on the
+ // page that shows the item when a file is through (this one, or one of a later visit), never on what was there
+ // when it started.
+ const upload=async(list,target=null)=>{
+  const epoch=sessionEpoch,page=()=>{const w=viewOf(tk.id);return w?pages.get(w):null;},failed=[],queue=[];
+  const note=(text,error=false)=>{const m=page()?.msg;if(m){m.textContent=text;m.classList.toggle('error',error);}};
+  let sending=sendings.get(tk.id);if(!sending)sendings.set(tk.id,sending=new Map());
+  const taken=[...((pages.get(wrap)?.ticket||tk).attachments||[]).map(a=>a.name),...sending.keys()];
+  for(const file of list){
+   const problem=fileProblem(file,taken.length);if(problem){failed.push(problem);continue;}
+   const name=attachmentName(file,taken),item=pendingFile(file,name);taken.push(name);sending.set(name,item);queue.push({file,name,item});
+   if(target)page()?.editors[target]?.insert(name);
+  }
+  const over=entry=>{if(sending.get(entry.name)===entry.item)sending.delete(entry.name);releaseFile(entry.item);};
+  for(const [i,entry] of queue.entries()){
+   if(epoch!==sessionEpoch){queue.slice(i).forEach(over);return;}
+   note(t('Nahrávám {name}…',{name:entry.name}));
+   let updated=null,error=null;
+   try{updated=await uploadFile(tk.id,entry.name,entry.file);}catch(e){error=e;}
+   if(sending.get(entry.name)===entry.item)sending.delete(entry.name);
+   if(epoch!==sessionEpoch){queue.slice(i).forEach(over);return;}
+   const shown=viewOf(tk.id),now=shown&&pages.get(shown);
+   if(error){
+    failed.push(`${entry.name}: ${error.message}`);
+    // The text may have been saved with the token meanwhile: draw the page again, so that no chip stands for a file that is not there.
+    if(now){if(target)now.editors[target]?.drop(entry.name);inPlace(()=>renderTicket(shown,now.ctx,now.ticket,drafts(shown)));}
+   }else if(now){
+    // The server has the last word on the name (it changes one the ticket already has); the chip follows it.
+    const stored=updated.attachments?.at(-1)?.name,follow=text=>typeof text==='string'&&stored&&stored!==entry.name?text.split(fileToken(entry.name)).join(fileToken(stored)):text;
+    redraw(shown,updated,next=>{next.comment=follow(next.comment);if('description'in next.fields)next.fields.description=follow(next.fields.description);});
+   }
+   releaseFile(entry.item);
+  }
+  if(!sending.size&&sendings.get(tk.id)===sending)sendings.delete(tk.id);
+  // What did not go up is said at the end, where a later file's "saved" cannot cover it; when no page shows the item, its next visit says it.
+  if(!failed.length||epoch!==sessionEpoch)return;
+  const text=failed.length===1?failed[0]:t('Tyto přílohy se nenahrály: {list}',{list:failed.join('; ')});
+  if(page())note(text,true);else leaveNotice(tk.id,text);
+ };
+ const picker=canWrite?el('input',{type:'file',multiple:'',hidden:'','aria-label':t('+ Přidat soubor'),onchange:e=>{const list=[...e.target.files];e.target.value='';upload(list);}}):null;
+ const removeFile=(item,button)=>{if(!confirm(t('Odebrat přílohu {name}?',{name:item.name})))return;write(button,()=>api('/api/tickets/attachments/delete',{id:tk.id,attachment:item.id}),()=>{});};
+ // After the fields, under a divider: the files as tiles. A reader sees it only when there is a file to see.
+ const attach=files.length||canWrite?[el('hr',{class:'tk-divider'}),el('div',{class:'tk-attach'},
+  el('div',{class:'tk-attach-head'},el('h4',{},t('Přílohy ({n})',{n:files.length})),canWrite?el('button',{type:'button',class:'acc-btn small',onclick:()=>picker.click()},t('+ Přidat soubor')):null,picker),
+  files.length?fileStrip(files,{onOpen:i=>openViewer(files,i,showDialog),onRemove:canWrite?removeFile:null}):null,canWrite?attachHint():null)]:null;
+ const edit=editing?editForm(tk,meta,save,ctx,closeEdit,{draft:keep.fields||{},files:{...inText,history:keep.histories?.description},attach}):null;
+ // While editing, the form takes the place of the rendered description: the text is never shown twice.
+ const main=edit?edit.form:el('section',{class:'acc-card tk-desc'},el('h3',{},t('Popis')),tk.description?markdown(tk.description,{keys,files:chips}):el('p',{class:'acc-dim'},t('Bez popisu.')),attach);
+ const editors=Object.fromEntries(Object.entries({comment:commentEditor?.editor,description:edit?.editor}).filter(([,editor])=>editor));
+ pages.set(wrap,{ticket:tk,ctx,comment:commentBox,editing,inputs:edit?.inputs||{},initial:edit?.initial||{},editors,msg,upload});
+ // Files dropped anywhere on the page are attached (a file dropped beside a drop target would replace the page
+ // with itself); dropped on the description editor or the comment box they also get their chip there. The
+ // listeners are the page's, set once; they hand over to the upload of the latest render.
+ const field=node=>{const now=pages.get(wrap)?.editors||{};return Object.keys(now).find(k=>now[k].has(node))||null;};
+ if(canWrite&&!drops.has(wrap)){drops.add(wrap);dropTarget(wrap,(list,e)=>pages.get(wrap)?.upload(list,field(e.target)));}
  const comments=el('section',{class:'acc-card'},el('h3',{},t('Komentáře ({n})',{n:tk.comments.length})),
   tk.comments.length?el('ol',{class:'tk-comments'},tk.comments.map(c=>el('li',{class:'tk-comment'},
    el('div',{class:'tk-comment-head'},el('span',{class:'tk-avatar','aria-hidden':'true'},initials(c.by)||'?'),el('b',{},c.by),el('span',{class:'tk-dim',title:when(c.at)},ago(c.at))),
-   markdown(c.text,{keys})))):el('p',{class:'acc-dim'},t('Zatím bez komentářů.')),
-  canWrite?el('form',{class:'tk-form',onsubmit:e=>{e.preventDefault();const f=e.currentTarget,text=f.text.value;
-    return write(f.querySelector('button'),()=>api('/api/tickets/comment',{id:tk.id,text}),next=>{if(next.comment===text)next.comment='';});}},
+   markdown(c.text,{keys,files:chips})))):el('p',{class:'acc-dim'},t('Zatím bez komentářů.')),
+  // The comment box is required, but as a hidden field behind the chip editor the browser cannot say so: an empty one just gets the caret.
+  canWrite?el('form',{class:'tk-form',onsubmit:e=>{e.preventDefault();const f=e.currentTarget,text=f.text.value;if(!text.trim()){editors.comment.focusAt(null);return;}
+    return write(f.querySelector('button[type=submit]'),()=>api('/api/tickets/comment',{id:tk.id,text}),next=>{if(next.comment===text)next.comment='';});}},
    commentEditor.node,el('div',{class:'acc-actions tk-comment-actions'},mdHint(commentEditor.toggle),el('button',{type:'submit',class:'acc-btn'},t('Přidat komentář')))):null);
- // Attachments: upload with the button, by dropping files on the section or pasting (Cmd+V) anywhere on the page.
- const files=tk.attachments||[],fileUrl=a=>`/api/tickets/${encodeURIComponent(tk.id)}/attachments/${a.id}`,images=files.filter(a=>a.type.startsWith('image/'));
- const upload=async list=>{
-  for(const file of list){
-   if(file.size>20*1024*1024){fail(msg,new Error(t('{name}: soubor je větší než 20 MB.',{name:file.name})));continue;}
-   msg.classList.remove('error');msg.textContent=t('Nahrávám {name}…',{name:file.name||t('soubor')});
-   const name=file.name&&file.name!=='image.png'?file.name:`paste-${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.${(file.type.split('/')[1]||'bin').replace('jpeg','jpg')}`;
-   await write(null,async()=>{const lost=authGuard(),r=await fetch(`/api/tickets/${encodeURIComponent(tk.id)}/attachments?name=${encodeURIComponent(name)}`,{method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:file});lost(r);
-    const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.error?.message?t(data.error.message):t('Nahrání se nepovedlo.'));return data;},()=>{});
-  }
- };
- const picker=canWrite?el('input',{type:'file',multiple:'',hidden:'',onchange:e=>{const list=[...e.target.files];e.target.value='';upload(list);}}):null;
- const thumb=a=>a.type.startsWith('image/')
-  ?el('a',{href:fileUrl(a),target:'_blank',rel:'noopener',class:'tk-file-thumb','aria-label':t('Zobrazit {name}',{name:a.name}),onclick:e=>{e.preventDefault();lightbox(images,images.indexOf(a),fileUrl);}},el('img',{src:fileUrl(a),alt:a.name,loading:'lazy'}))
-  :el('a',{href:fileUrl(a)+(a.type==='text/plain'?'':'?download=1'),target:'_blank',rel:'noopener',class:'tk-file-thumb tk-file-icon','aria-hidden':'true',tabindex:'-1'},a.type==='application/pdf'?'PDF':a.type==='text/plain'?'TXT':'⬇');
- const attachments=el('section',{class:'acc-card tk-files-card',
-   ondragover:e=>{if(!canWrite)return;e.preventDefault();e.currentTarget.classList.add('tk-drop');},ondragleave:e=>e.currentTarget.classList.remove('tk-drop'),
-   ondrop:e=>{if(!canWrite)return;e.preventDefault();e.currentTarget.classList.remove('tk-drop');upload([...e.dataTransfer.files]);}},
-  el('div',{class:'tk-files-head'},el('h3',{},t('Přílohy ({n})',{n:files.length})),canWrite?el('button',{type:'button',class:'acc-btn small',onclick:()=>picker.click()},t('+ Přidat soubor')):null,picker),
-  files.length?el('ul',{class:'tk-files'},files.map(a=>el('li',{class:`tk-file${a.type.startsWith('image/')?' tk-file-image':''}`},thumb(a),
-   el('div',{class:'tk-file-meta'},el('a',{href:fileUrl(a)+(a.type.startsWith('image/')||a.type==='text/plain'?'':'?download=1'),target:'_blank',rel:'noopener',class:'tk-file-name',title:a.name},a.name),el('span',{class:'tk-dim'},`${fileSize(a.size)} · ${a.by} · ${ago(a.at)}`)),
-   canWrite?el('button',{type:'button',class:'acc-btn small tk-file-del','aria-label':t('Odebrat {name}',{name:a.name}),title:t('Odebrat přílohu'),onclick:e=>{if(!confirm(t('Odebrat přílohu {name}?',{name:a.name})))return;write(e.currentTarget,()=>api('/api/tickets/attachments/delete',{id:tk.id,attachment:a.id}),()=>{});}},'×'):null))):null,
-  canWrite?el('p',{class:'tk-dropzone'},t('Přetáhni sem soubor, vlož obrázek ze schránky (Cmd/Ctrl+V) nebo použij tlačítko. Nejvýš 20 MB na soubor.')):files.length?null:el('p',{class:'acc-dim'},t('Bez příloh.')));
  if(canWrite&&typeof addEventListener==='function'){const old=pastes.get(wrap);if(old)removeEventListener('paste',old);
-  const onPaste=e=>{if(!wrap.isConnected){removeEventListener('paste',onPaste);return;}const list=[...(e.clipboardData?.files||[])];if(!list.length)return;e.preventDefault();upload(list);};
+  const onPaste=e=>{
+   if(!wrap.isConnected){removeEventListener('paste',onPaste);return;}
+   if(e.defaultPrevented||document.querySelector('dialog[open]'))return;
+   const list=pastedFiles(e);if(!list.length)return;e.preventDefault();
+   upload(list,field(e.target));
+  };
   pastes.set(wrap,onPaste);addEventListener('paste',onPaste);onLeave(()=>removeEventListener('paste',onPaste));}
  const assignMe=canWrite&&user&&tk.assignee!==user&&!CLOSED.includes(tk.status)?el('button',{type:'button',class:'tk-inline-btn',onclick:e=>save({assignee:user},e.currentTarget)},t('Vezmu si to')):null;
  show(wrap,
@@ -437,18 +560,21 @@ function renderTicket(wrap,ctx,tk,keep){
    el('div',{class:'tk-quick'},quick)),
   msg,
   el('div',{class:'tk-detail'},
-   // While editing, the form takes the place of the rendered description: the text is never shown twice.
-   el('div',{class:'acc-stack'},edit?edit.form:el('section',{class:'acc-card'},el('h3',{},t('Popis')),tk.description?markdown(tk.description,{keys}):el('p',{class:'acc-dim'},t('Bez popisu.'))),attachments,comments,timeline(tk)),
+   el('div',{class:'acc-stack'},main,comments,timeline(tk)),
    el('div',{class:'acc-stack'},
     el('section',{class:'acc-card'},el('h3',{},t('Údaje')),el('dl',{class:'acc-dl'},
      fact('Release',tk.release?el('a',{class:'sys-link',href:'#releases',onclick:()=>{filters.project=tk.project;}},tk.release):'—'),fact(t('Řeší'),el('span',{class:'tk-fact-row'},tk.assignee?[el('span',{class:'tk-avatar','aria-hidden':'true'},initials(tk.assignee)),tk.assignee]:'—',assignMe)),fact(t('Nahlásil'),tk.reporter||'—'),
      fact(t('Odkazy'),tk.refs.length?el('div',{class:'tk-refs'},tk.refs.map(r=>/^https?:\/\//.test(r)?el('a',{href:r,target:'_blank',rel:'noopener noreferrer',class:'sys-link'},r):TICKETISH.test(r)?el('a',{href:'#items/'+r,class:'sys-link'},r):el('code',{},r))):'—'),
      fact(t('Založeno'),when(tk.createdAt)),fact(t('Změněno'),when(tk.updatedAt)),...(tk.closedAt?fact(t('Uzavřeno'),when(tk.closedAt)):[]),fact(t('Revize'),String(tk.rev)))))));
- shortcuts(wrap,{c:()=>commentBox?void commentBox.focus():false,e:openEdit});
- if(prefs.focusComment){prefs.focusComment=false;commentBox?.focus();}
+ shortcuts(wrap,{c:()=>editors.comment?void editors.comment.focusAt(null):false,e:openEdit});
+ if(prefs.focusComment){prefs.focusComment=false;editors.comment?.focusAt(null);}
  // Opening the form puts the keyboard in its first field; closing it puts it back on the button that opened it.
+ // A write that re-drew the page while the keyboard was in a field (a file that finished uploading, say) puts it
+ // back there, or the next keys would go to the page's shortcuts.
  if(keep.focus==='title')edit?.inputs.title?.focus();
  else if(keep.focus==='edit')editButton?.focus();
+ else if(keep.focusIn&&editors[keep.focusIn]){editors[keep.focusIn].focusAt(keep.caret);if(keep.scroll!=null)editors[keep.focusIn].node.scrollTop=keep.scroll;}
+ else if(keep.focusInput&&edit?.inputs[keep.focusInput]){const input=edit.inputs[keep.focusInput];input.focus();if(keep.caret!=null)try{input.setSelectionRange(keep.caret,keep.caret);}catch{}}
 }
 const TICKETISH=/^[A-Z][A-Z0-9]{1,9}-[1-9][0-9]{0,5}$/;
 const FIELD_NAMES=()=>({attachment:t('Příloha'),created:t('Založeno'),title:t('Název položky'),description:t('Popis'),type:t('Typ'),status:t('Stav'),priority:t('Priorita'),release:'Release',assignee:t('Řeší'),labels:t('Štítky'),refs:t('Odkazy')});
@@ -470,13 +596,18 @@ function timeline(tk){
  return el('section',{class:'acc-card'},el('h3',{},t('Historie změn ({n})',{n:events.length})),el('ol',{class:'tk-events'},events.slice(0,EVENTS_SHOWN).map(row)),
   older.length?el('details',{class:'tk-events-more'},el('summary',{},tp(older.length,'{n} starší změna|{n} starší změny|{n} starších změn')),el('ol',{class:'tk-events'},older.map(row))):null);
 }
-// The edit form of one ticket: every editable field once, description included. onCancel closes it.
-function editForm(tk,meta,save,ctx={},onCancel){
+// The edit form of one ticket: every editable field once, description included. onCancel closes it. `draft` is
+// the unsaved input of an earlier render; `files` lets the description show the ticket's files as chips, and
+// `attach` (the divider and the files) goes after the fields.
+function editForm(tk,meta,save,ctx={},onCancel,{draft={},files=null,attach=null}={}){
  const inputs={},field=(text,input,...more)=>{if(input.getAttribute('name'))inputs[input.getAttribute('name')]=input;return el('label',{},text,input,...more);};
  const releases=meta.releases.filter(r=>r.project===tk.project&&(r.status==='planned'||r.version===tk.release)).map(r=>[r.version,r.status==='released'?t('{version} (vydáno)',{version:r.version}):r.version]);
  const assignee=assigneeInput(tk.assignee,ctx.people||[],ctx.user);
+ // "Unchanged" is what the field makes of the saved text (its line ends); the draft goes in after that, and
+ // before the editor draws the text.
  const description=el('textarea',{name:'description',rows:'8',maxlength:'12000'});description.value=tk.description;
- const editor=mdEditor(description,meta.projects.map(p=>p.key));inputs.description=description;
+ const saved=description.value;if(typeof draft.description==='string')description.value=draft.description;
+ const editor=mdEditor(description,meta.projects.map(p=>p.key),files&&{...files,label:t('Popis')});inputs.description=description;
  const form=el('form',{class:'acc-card tk-form tk-edit','aria-label':t('Upravit položku {id}',{id:tk.id}),onsubmit:e=>{e.preventDefault();const f=e.currentTarget;
    const values={title:f.title.value.trim(),description:f.description.value.trim(),type:f.type.value,status:f.status.value,priority:f.priority.value,release:f.release.value||null,assignee:f.assignee.value.trim()||null,labels:[...new Set(splitList(f.labels.value).map(v=>v.toLowerCase()))],refs:[...new Set(f.refs.value.split(/\r?\n/).map(v=>v.trim()).filter(Boolean))]};
    const changed=Object.fromEntries(Object.entries(values).filter(([k,v])=>JSON.stringify(v)!==JSON.stringify(tk[k])));
@@ -489,8 +620,11 @@ function editForm(tk,meta,save,ctx={},onCancel){
   field(t('Štítky (čárkou)'),el('input',{name:'labels',value:tk.labels.join(', ')})),
   field(t('Odkazy (commit, PR, položka; každý na vlastní řádek)'),(()=>{const a=el('textarea',{name:'refs',rows:'2'});a.value=tk.refs.join('\n');return a;})()),
   el('label',{},t('Popis'),editor.node),mdHint(editor.toggle),
+  attach,
   el('div',{class:'acc-actions'},onCancel?el('button',{type:'button',class:'acc-btn',onclick:onCancel},t('Zrušit úpravy')):null,el('button',{type:'submit',class:'acc-btn primary'},t('Uložit změny'))));
- return {form,inputs,initial:Object.fromEntries(Object.entries(inputs).map(([k,input])=>[k,input.value]))};
+ const initial={...Object.fromEntries(Object.entries(inputs).map(([k,input])=>[k,input.value])),description:saved};
+ for(const [k,v] of Object.entries(draft))if(k!=='description'&&inputs[k])inputs[k].value=v;
+ return {form,inputs,initial,editor:editor.editor};
 }
 
 // Releases --------------------------------------------------------------------------------------

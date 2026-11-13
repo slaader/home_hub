@@ -303,7 +303,7 @@ everyone: a key, a person (through their role) and a device.
 | `head` | `false` | Also answer HEAD (GET routes) |
 | `bodyLimit` | `16384` | Largest POST body in bytes |
 | `parse` | `true` | Parse the POST body as JSON |
-| `raw`, `contentType`, `denied` | — | A PUT upload: the handler reads `req` itself; `contentType` is required exactly; `denied` replaces the read-only message |
+| `raw`, `contentType`, `denied` | — | A PUT upload: the handler reads `req` itself; `contentType` is required exactly; `denied` replaces the read-only message. Once the sign-in, origin and scope checks have passed, the upload has up to 20 minutes to arrive instead of the ten seconds of any other request |
 | `error` | — | `(error, context) => [status, code, message]` for errors the handler throws |
 
 ### Provenance

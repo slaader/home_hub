@@ -38,9 +38,9 @@ a.tk-pill{text-decoration:none}
 .tk-quick{display:flex;gap:4px;flex-wrap:wrap}
 .tk-back{font:12px var(--mono);color:var(--dim);text-decoration:none}
 .tk-detail{display:grid;grid-template-columns:minmax(0,3fr) minmax(300px,2fr);gap:14px;align-items:start}
-@media(max-width:1000px){.tk-detail{grid-template-columns:1fr}}
+@media(max-width:1000px){.tk-detail{grid-template-columns:minmax(0,1fr)}}
 .tk-text{white-space:pre-wrap;word-break:break-word;line-height:1.5;margin:0;font-size:13.5px}
-.tk-comments{list-style:none;margin:0 0 14px;padding:0;display:grid;gap:12px}
+.tk-comments{list-style:none;margin:0 0 14px;padding:0;display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
 .tk-refs{display:flex;flex-direction:column;gap:3px;word-break:break-all}
 .tk-project-name{font:650 17px var(--sans);margin:10px 0 0}
 .tk-release-form{grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) auto}
@@ -201,19 +201,6 @@ ol.tk-md-list li::marker{color:var(--accent);font:600 12.5px var(--mono)}
 .tk-comment-head .tk-avatar{margin-left:0;width:24px;height:24px}
 .tk-md-hint{font:10.5px var(--mono);color:var(--faint);margin-top:-4px}
 .tk-comment-actions{align-items:center}.tk-comment-actions .tk-md-hint{margin:0 auto 0 0}
-/* Ticket attachments: thumbnails for images, a type badge for other files; the card is also a drop zone. */
-.tk-files-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
-.tk-files-head h3{margin:0}
-.tk-files-card.tk-drop{outline:2px dashed var(--accent);outline-offset:-6px}
-.tk-files{list-style:none;margin:10px 0 0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
-.tk-file{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px}
-.tk-file-thumb{width:56px;height:42px;border-radius:6px;overflow:hidden;background:var(--panel3);display:grid;place-items:center;text-decoration:none}
-.tk-file-thumb img{width:100%;height:100%;object-fit:cover;display:block}
-.tk-file-icon{font:600 11px var(--mono);color:var(--dim)}
-.tk-file-meta{display:flex;flex-direction:column;min-width:0;font-size:12px}
-.tk-file-name{color:var(--txt);font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:none}
-.tk-file-name:hover{color:var(--accent)}
-
 /* Release progress: the bar and its percentage on one line */
 .tk-progress{display:flex;align-items:center;gap:var(--space-3)}
 .tk-progress .tk-bar{flex:1}
@@ -272,12 +259,55 @@ tr.tk-cursor td:first-child{box-shadow:inset 3px 0 0 var(--color-accent)}
 .tk-event-meta{margin-top:2px;font:var(--text-xs) var(--font-mono)}
 .tk-events-more{margin-top:var(--space-3)}
 .tk-events-more summary{cursor:pointer;font:var(--text-xs) var(--font-mono);color:var(--color-text-dim);margin-bottom:var(--space-3)}
-/* Attachments: picture tiles, the drop hint, the viewer */
-.tk-file-image{grid-template-columns:minmax(0,1fr) auto}
-.tk-file-image .tk-file-thumb{grid-column:1/-1;width:100%;height:132px}
-.tk-file-thumb{cursor:zoom-in}.tk-file-icon{cursor:pointer}
-.tk-dropzone{margin:var(--space-3) 0 0;padding:var(--space-3);border:1px dashed var(--color-border-strong);border-radius:var(--radius-m);text-align:center;font-size:var(--text-xs);line-height:var(--leading-body);color:var(--color-text-faint)}
-.tk-files-card.tk-drop .tk-dropzone{border-color:var(--color-accent);color:var(--color-text)}
+/* Files of a ticket (tracker-attach.js): under a divider after the fields, as tiles with a preview; the card, the
+   edit form and the new-item dialog take dropped files */
+.tk-divider{border:0;border-top:1px solid var(--color-border);margin:var(--space-3) 0;width:100%}
+.tk-attach{display:flex;flex-direction:column;gap:var(--space-2);min-width:0}
+.tk-attach-head{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3)}
+.tk-attach-head h4{margin:0;font:var(--text-xs) var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--color-text-faint)}
+.tk-attach-hint{margin:0;font-size:var(--text-xs);line-height:var(--leading-body);color:var(--color-text-faint)}
+:is(.tk,.tk-dialog).tk-drop{outline:2px dashed var(--color-accent);outline-offset:-6px}
+.tk-tiles{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:var(--space-3)}
+.tk-tile{position:relative;width:112px;display:flex;flex-direction:column;gap:var(--space-1);min-width:0}
+.tk-tile-open{appearance:none;display:grid;place-items:center;width:112px;height:84px;padding:0;overflow:hidden;cursor:zoom-in;color:var(--color-text-dim);
+ background:var(--color-surface-raised);border:1px solid var(--color-border-strong);border-radius:var(--radius-m)}
+.tk-tile-open:hover{border-color:var(--color-accent)}
+.tk-tile-open img{width:100%;height:100%;object-fit:cover;display:block}
+.tk-tile:not(.image) .tk-tile-open{cursor:pointer}
+.tk-tile-badge{display:flex;flex-direction:column;align-items:center;gap:2px;font:var(--weight-medium) var(--text-xs) var(--font-mono);letter-spacing:.08em}
+.tk-tile-glyph{font-size:22px;line-height:1;color:var(--color-accent)}
+.tk-tile-name{font-size:var(--text-xs);color:var(--color-text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tk-tile-x{appearance:none;position:absolute;top:4px;right:4px;width:24px;height:24px;padding:0;display:grid;place-items:center;cursor:pointer;font-size:15px;line-height:1;
+ color:var(--color-text);background:color-mix(in srgb,var(--color-surface) 78%,transparent);border:1px solid var(--color-border-strong);border-radius:var(--radius-s)}
+.tk-tile-x:hover{color:var(--color-bad);border-color:currentColor}
+.tk-tile-x:disabled{opacity:.4;cursor:default}
+@media(pointer:coarse){.tk-tile-x{width:32px;height:32px}}
+/* ![name] in a text: a small icon, the name, the size */
+.tk-fchip{display:inline-flex;align-items:center;gap:.4em;max-width:calc(100% - .2em);vertical-align:baseline;padding:0 .5em 0 .3em;margin:0 .1em;white-space:nowrap;
+ font:var(--weight-medium) .92em var(--font-sans);letter-spacing:0;text-transform:none;color:var(--color-text);
+ background:var(--color-surface-raised);border:1px solid var(--color-border-strong);border-radius:var(--radius-s);user-select:none;-webkit-user-select:none}
+.tk-fchip[role=button]{cursor:pointer}
+.tk-fchip[role=button]:hover,.tk-fchip-in:hover{border-color:var(--color-accent)}
+.tk-fchip-thumb{width:1.15em;height:1.15em;border-radius:3px;object-fit:cover;display:block;flex:none}
+.tk-fchip-glyph{color:var(--color-accent);font-size:.95em;line-height:1;flex:none}
+.tk-fchip-name{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.tk-fchip-size{font:.8em var(--font-mono);color:var(--color-text-faint);flex:none}
+.tk-fchip.gone{color:var(--color-text-faint);border-style:dashed}
+.tk-fchip.gone .tk-fchip-name,input.tk-fchip-in.gone{text-decoration:line-through}
+.tk-fchip.gone .tk-fchip-glyph{color:inherit}
+/* The text field that shows them while it is edited: looks and grows like the textarea it stands in for. In it a
+   chip is an <input type="button"> (one character to the browser's editing); the form's own input rules are undone */
+.tk-rich{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 11px;color:var(--txt);font:13px/1.45 var(--sans);letter-spacing:0;text-transform:none;
+ min-width:0;width:100%;box-sizing:border-box;max-height:60vh;overflow:auto;resize:vertical;white-space:pre-wrap;overflow-wrap:anywhere;cursor:text}
+.tk-rich:focus{outline:none;border-color:var(--accent)}
+.tk .tk-rich:focus-visible{outline:2px solid var(--color-focus);outline-offset:2px}
+.tk-rich.empty::before{content:attr(data-placeholder);color:var(--faint);pointer-events:none}
+.tk-rich input.tk-fchip-in{appearance:none;-webkit-appearance:none;display:inline-block;width:auto;min-width:0;box-sizing:border-box;padding:0 .5em;margin:0 .1em;overflow:hidden;text-overflow:ellipsis;cursor:pointer;
+ font:var(--weight-medium) .92em/1.35 var(--font-sans);color:var(--color-text);background:var(--color-surface-raised);border:1px solid var(--color-border-strong);border-radius:var(--radius-s);vertical-align:baseline}
+.tk-rich input.tk-fchip-in.thumb{padding-left:1.75em;background-repeat:no-repeat;background-position:.3em center;background-size:1.15em 1.15em}
+.tk-rich input.tk-fchip-in.gone{color:var(--color-text-faint);border-style:dashed}
+.tk-rich input.tk-fchip-in:focus{outline:none;border-color:var(--color-accent)}
+/* The viewer: a picture, a player, text, or what a file is when it has no preview */
 .tk-lightbox{max-width:min(96vw,1400px);max-height:94vh;padding:var(--space-3);border:1px solid var(--color-border-strong);border-radius:var(--radius-l);background:var(--color-surface);color:var(--color-text);box-shadow:var(--shadow-raised)}
 .tk-lightbox::backdrop{background:rgb(0 0 0/.82)}
 .tk-lightbox figure{margin:0;display:flex;flex-direction:column;align-items:center;gap:var(--space-2)}
@@ -285,6 +315,14 @@ tr.tk-cursor td:first-child{box-shadow:inset 3px 0 0 var(--color-accent)}
 .tk-lightbox figcaption{font:var(--text-xs) var(--font-mono);color:var(--color-text-dim);overflow-wrap:anywhere;text-align:center}
 .tk-lightbox-bar{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:var(--space-2);margin-top:var(--space-3)}
 .tk-lightbox-nav{width:36px;height:32px;border-radius:var(--radius-s);border:1px solid var(--color-border-strong);background:var(--color-surface-raised);color:var(--color-text);cursor:pointer;font-size:var(--text-m)}
+.tk-viewer-stage{display:grid;place-items:center;min-width:min(60vw,320px);max-width:100%}
+.tk-viewer-links{display:contents}
+.tk-viewer-video{display:block;max-width:100%;max-height:76vh;border-radius:var(--radius-s);background:#000}
+.tk-viewer-audio{width:min(80vw,460px)}
+.tk-viewer-text{margin:0;width:min(88vw,980px);max-height:76vh;overflow:auto;padding:var(--space-3);white-space:pre-wrap;overflow-wrap:anywhere;text-align:left;
+ font:var(--text-xs)/1.5 var(--font-mono);color:var(--color-text);background:var(--color-surface-raised);border:1px solid var(--color-border);border-radius:var(--radius-m)}
+.tk-viewer-file{display:flex;flex-direction:column;align-items:center;gap:var(--space-3);padding:var(--space-6) var(--space-5);text-align:center;overflow-wrap:anywhere}
+.tk-viewer-glyph{font-size:44px;line-height:1;color:var(--color-accent)}
 /* Phone width: the table keeps id, title, status and the last change */
 @media(max-width:700px){
  .tk-table :is(th,td):is(:nth-child(3),:nth-child(5),:nth-child(6),:nth-child(7),:nth-child(9)){display:none}
@@ -293,7 +331,6 @@ tr.tk-cursor td:first-child{box-shadow:inset 3px 0 0 var(--color-accent)}
  .tk-filters input[type=search]{grid-column:1/-1}
  .tk-release-form{grid-template-columns:1fr}
  .tk-head .tk-quick .acc-btn,.tk-form .acc-actions .acc-btn{min-height:40px}
- .tk-files{grid-template-columns:1fr}
  .tk-detail{gap:var(--space-3)}
 }
 
